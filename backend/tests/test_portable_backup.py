@@ -1,7 +1,7 @@
 import sqlite3
 from sqlalchemy import delete, select, func
 
-from app.db import Session, Review
+from app.db import Session, Review, Job
 
 
 PASSWORD='portable-backup-password-123'
@@ -46,3 +46,13 @@ def test_portable_restore_rejects_wrong_password(client,seeded):
     restored=client.post('/portable/restore',data={'password':'wrong-password-123'},files={'file':('shop.wbai',exported.content,'application/octet-stream')})
     assert restored.status_code==400
     assert 'Неверный пароль' in restored.json()['detail']
+
+
+def test_portable_restore_waits_for_active_jobs(client,seeded):
+    exported=client.post('/portable/export',json={'password':PASSWORD})
+    with Session() as db:
+        db.add(Job(id='active-during-restore',kind='reviews',status='queued'))
+        db.commit()
+    restored=client.post('/portable/restore',data={'password':PASSWORD},files={'file':('shop.wbai',exported.content,'application/octet-stream')})
+    assert restored.status_code==400
+    assert 'очереди' in restored.json()['detail']

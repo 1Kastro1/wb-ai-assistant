@@ -2,6 +2,7 @@ import secrets
 import time
 import hashlib
 import asyncio
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,7 +17,7 @@ from argon2.exceptions import VerificationError, InvalidHashError
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select, delete, text, func
 from .db import *
-from .config import ORIGIN, DATA, MODEL, REAL_PUBLISH
+from .config import ORIGIN, DATA, DATABASE, MODEL, REAL_PUBLISH
 from .security import digest, encrypt_secret, guard
 from .integrations import ollama, wb, wb_token
 from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action
@@ -60,6 +61,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title='WB AI Assistant', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.state.maintenance = False
 def allowed_origin(origin):
     return origin == ORIGIN
 
@@ -70,6 +72,8 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost
 
 @app.middleware('http')
 async def boundary(request, call_next):
+    if app.state.maintenance and request.url.path != '/portable/restore':
+        return JSONResponse({'detail': 'Выполняется восстановление данных. Повторите запрос после завершения.'}, 503)
     origin = request.headers.get('origin')
     if origin and not allowed_origin(origin):
         return JSONResponse({'detail': 'Недопустимый Origin'}, 403)
@@ -208,6 +212,25 @@ def security(auth: AUTH, db: DB):
     return {'privacy_mode': 'LOCAL_FIRST', 'safe_mode': setting(db, 'safe_mode', False), 'test_mode': setting(db, 'test_mode', True), 'cloud_ai': False, 'web_research': True, 'search_provider': setting(db, 'search_provider', 'duckduckgo'), 'search_configured': bool(db.get(Account, 'search:tavily')), 'telemetry': False, 'database': 'LOCAL', 'token': 'ENCRYPTED (Windows DPAPI)' if db.get(Account, active) else 'NOT_CONNECTED', 'active_store': active, 'backend': '127.0.0.1', 'model': MODEL, 'real_publish_enabled': REAL_PUBLISH, 'audit': [public(a) for a in audit], 'backups': sorted(p.name for p in (DATA / 'backups').glob('*.db'))[-10:]}
 
 
+@app.get('/system/status')
+def system_status(auth: AUTH, db: DB):
+    schedule = setting(db, 'automation_schedule', {})
+    latest = {}
+    for kind in ('reviews', 'products', 'drafts'):
+        job = db.scalar(select(Job).where(Job.kind == kind, Job.status == 'completed').order_by(Job.created_at.desc()))
+        latest[kind] = public(job) if job else None
+    backups = sorted((DATA / 'backups').glob('*.db'), key=lambda path: path.stat().st_mtime, reverse=True)[:10]
+    return {
+        'database_mb': round(DATABASE.stat().st_size / 1024 / 1024, 1) if DATABASE.exists() else 0,
+        'automation_enabled': bool(schedule.get('enabled')),
+        'auto_replies_enabled': bool(schedule.get('enabled') and schedule.get('drafts_enabled')),
+        'scheduler': setting(db, 'scheduler_status', {'state': 'waiting'}),
+        'latest': latest,
+        'active_jobs': db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['queued', 'running']))) or 0,
+        'backups': [{'name': path.name, 'size_mb': round(path.stat().st_size / 1024 / 1024, 1), 'created_at': datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()} for path in backups],
+    }
+
+
 class Modes(Payload):
     safe_mode: bool
     test_mode: bool
@@ -265,6 +288,7 @@ class ScheduleInput(Payload):
     auto_propose: bool = False
     min_quality: int = Field(default=96, ge=70, le=100)
     max_proposals: int = Field(default=100, ge=1, le=100)
+    drafts_days: int = Field(default=7, ge=1, le=90)
 
 
 @app.post('/settings/wb-token')
@@ -327,7 +351,7 @@ def activate_store(store_id: str, auth: AUTH, db: DB):
 
 @app.get('/settings/schedule')
 def schedule_get(auth: AUTH, db: DB):
-    defaults = {'enabled': False, 'reviews_hours': 3, 'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False, 'min_quality': 96, 'max_proposals': 100}
+    defaults = {'enabled': False, 'reviews_hours': 3, 'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False, 'min_quality': 96, 'max_proposals': 100, 'drafts_days': 7}
     return {**defaults, **setting(db, 'automation_schedule', {})}
 
 
@@ -335,6 +359,8 @@ def schedule_get(auth: AUTH, db: DB):
 def schedule_set(body: ScheduleInput, auth: AUTH, db: DB):
     current = setting(db, 'automation_schedule', {})
     value = {**current, **body.model_dump()}
+    if value.get('drafts_enabled'):
+        value['drafts_since'] = (datetime.now(timezone.utc) - timedelta(days=int(value.get('drafts_days', 7)))).isoformat()
     set_setting(db, 'automation_schedule', value)
     db.commit()
     return value
@@ -367,12 +393,13 @@ def get_auto_replies_status(auth: AUTH, db: DB):
 @app.post('/auto-replies/start')
 async def start_auto_replies(background: BackgroundTasks, auth: AUTH, db: DB):
     schedule = schedule_get(auth, db)
-    schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time()})
+    since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
+    schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time(), 'drafts_since': since})
     set_setting(db, 'automation_schedule', schedule)
     job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
     if not job:
         active = setting(db, 'active_store', 'owner')
-        job = Job(id=str(uuid4()), kind='drafts', priority=50, result={'account_id': active, 'message': 'Автоответы запущены: подготавливаем новые черновики'})
+        job = Job(id=str(uuid4()), kind='drafts', priority=50, result={'account_id': active, 'since': since, 'message': 'Автоответы запущены: подготавливаем новые отзывы'})
         db.add(job)
     db.commit()
     result = auto_replies_status(db)
@@ -406,10 +433,11 @@ async def ollama_status(auth: AUTH):
 
 sync_lock = asyncio.Lock()
 job_dispatch_lock = asyncio.Lock()
+maintenance_lock = asyncio.Lock()
 
 
 async def run_sync_job(job_id):
-    async with sync_lock:
+    async with sync_lock, maintenance_lock:
         with Session() as db:
             job = db.get(Job, job_id)
             if not job or job.cancel_requested:
@@ -430,24 +458,32 @@ async def run_sync_job(job_id):
                 return job.cancel_requested
             try:
                 if kind == 'drafts':
+                    since = (job.result or {}).get('since', '')
+                    conditions = [
+                        Review.wb_account_id == account_id,
+                        Review.is_answered == False,
+                        Review.status != 'publishing',
+                        Draft.id.is_(None),
+                    ]
+                    if since:
+                        conditions.append(Review.created_at >= since)
                     ids = list(db.scalars(
                         select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(
-                            Review.wb_account_id == account_id,
-                            Review.is_answered == False,
-                            Review.status != 'publishing',
-                            Draft.id.is_(None),
+                            *conditions,
                         ).order_by(Review.created_at.desc(), Review.id)
                     ))
-                    total, processed, failed = len(ids), 0, 0
+                    total, processed, failed, failures = len(ids), 0, 0, []
                     for index, review_id in enumerate(ids, 1):
                         if cancelled():
                             raise asyncio.CancelledError
                         try:
                             await generate_draft(db, review_id)
                             processed += 1
-                        except Exception:
+                        except Exception as error:
                             db.rollback()
                             failed += 1
+                            if len(failures) < 20:
+                                failures.append({'review_id': review_id, 'reason': (str(error) or type(error).__name__)[:300]})
                         update_progress(round(index / max(1, total) * 100))
                     schedule = setting(db, 'automation_schedule', {})
                     proposal_id = None
@@ -473,6 +509,8 @@ async def run_sync_job(job_id):
                         'failed': failed,
                         'total': total,
                         'account_id': account_id,
+                        'since': since,
+                        'failures': failures,
                         'message': f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
                         'proposal_id': proposal_id,
                     }
@@ -488,21 +526,21 @@ async def run_sync_job(job_id):
                     job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id}
                     schedule = setting(db, 'automation_schedule', {})
                     if kind == 'reviews' and schedule.get('enabled') and schedule.get('drafts_enabled') and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
+                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
                         schedule['last_drafts'] = time.time()
                         set_setting(db, 'automation_schedule', schedule)
             except asyncio.CancelledError:
                 db.rollback()
                 job = db.get(Job, job_id)
-                job.status, job.result = 'cancelled', {'message': 'Задание отменено', 'account_id': account_id}
-            except Exception:
+                job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'account_id': account_id}
+            except Exception as error:
                 db.rollback()
                 job = db.get(Job, job_id)
                 if job.attempts < job.max_attempts and not job.cancel_requested:
-                    job.status, job.result = 'queued', {'message': 'Повтор после ошибки', 'account_id': account_id}
+                    job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
                 else:
                     message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind == 'drafts' else 'Синхронизация не завершена. Проверьте токен, доступ WB и журнал соединений.'
-                    job.status, job.result = 'failed', {'message':message, 'account_id': account_id}
+                    job.status, job.result = 'failed', {'message':message, 'account_id': account_id, 'error_type': type(error).__name__}
             db.commit()
 
 
@@ -540,17 +578,24 @@ async def scheduler_loop():
                     last = float(schedule.get('last_drafts', 0))
                     hours = max(1, int(schedule.get('drafts_hours', 6)))
                     if current - last >= hours * 3600 and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': active, 'scheduled': True, 'message': 'Плановая подготовка автоответов'}))
+                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': active, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Плановая подготовка автоответов'}))
                         schedule['last_drafts'] = current
                 if current - float(schedule.get('last_backup', 0)) >= max(1, int(schedule.get('backup_hours', 24))) * 3600:
-                    backup()
+                    async with maintenance_lock:
+                        await asyncio.to_thread(backup)
                     schedule['last_backup'] = current
+                set_setting(db, 'scheduler_status', {'state': 'ok', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': ''})
                 set_setting(db, 'automation_schedule', schedule)
                 db.commit()
             asyncio.create_task(run_job_queue())
-        except Exception:
-            # Scheduler failures are visible through job status; they must not stop the app.
-            pass
+        except Exception as error:
+            # Keep the scheduler alive and expose a safe diagnostic in the interface.
+            try:
+                with Session() as db:
+                    set_setting(db, 'scheduler_status', {'state': 'error', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': type(error).__name__})
+                    db.commit()
+            except Exception:
+                pass
 
 
 @app.post('/jobs/sync/{kind}')
@@ -992,8 +1037,16 @@ async def portable_import(auth: AUTH, password: str = Form(...), file: UploadFil
                 if size > 1024 * 1024 * 1024:
                     raise ValueError('Резервная копия слишком большая')
                 output.write(chunk)
-        async with portable_lock:
-            return await asyncio.to_thread(portable_restore, upload, password)
+        with Session() as db:
+            active_jobs = db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['queued', 'running']))) or 0
+        if active_jobs:
+            raise ValueError('Сначала дождитесь завершения или отмените задания в очереди')
+        async with portable_lock, maintenance_lock:
+            app.state.maintenance = True
+            try:
+                return await asyncio.to_thread(portable_restore, upload, password)
+            finally:
+                app.state.maintenance = False
     finally:
         upload.unlink(missing_ok=True)
 

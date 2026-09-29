@@ -232,6 +232,8 @@ def test_usage_instruction_detection_and_web_cache():
     cached = cached_web_instruction_sources(product)
     assert cached[0]['url'] == 'https://example.test/product'
     assert cached[0]['snippet'] == 'Нанесите средство.'
+    product.facts.append({'text':'Старая инструкция','source':'https://old.test','host':'old.test','researched_at':'2020-01-01T00:00:00+00:00','verification_status':'WEB_UNVERIFIED'})
+    assert all(item['host'] != 'old.test' for item in cached_web_instruction_sources(product))
 
 
 def test_internet_instruction_search_only_when_review_needs_it():

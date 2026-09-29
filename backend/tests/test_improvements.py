@@ -3,7 +3,7 @@ import pytest
 from types import SimpleNamespace
 from sqlalchemy import select
 from app.db import Session, Product, Review, Draft, Job, Account, Action, setting, set_setting
-from app.services import assess_reply, edit_draft
+from app.services import assess_reply, edit_draft, QUALITY_EVALUATOR_VERSION
 from app.integrations import web_research
 
 
@@ -37,6 +37,33 @@ def test_quality_includes_explainable_breakdown():
     assert result['intent_label'] == 'неприятный запах'
     assert result['breakdown']['safety']['score'] == 40
     assert result['breakdown']['relevance']['score'] == 12
+    assert result['evaluator_version'] == QUALITY_EVALUATOR_VERSION
+
+
+def test_quality_report_rechecks_old_scores(client, seeded):
+    with Session() as db:
+        db.add(Draft(id='old-score', review_id='r1', text='Спасибо за отзыв.', original='Спасибо за отзыв.', quality={'score': 99, 'passed': True}))
+        db.commit()
+    assert client.get('/quality-report').status_code == 200
+    with Session() as db:
+        quality = db.get(Draft, 'old-score').quality
+        assert quality['evaluator_version'] == QUALITY_EVALUATOR_VERSION
+        assert quality['score'] < 99
+
+
+def test_system_status_and_auto_reply_window(client, seeded, monkeypatch):
+    async def no_queue():
+        return None
+    monkeypatch.setattr('app.main.run_job_queue', no_queue)
+    status = client.get('/system/status')
+    assert status.status_code == 200
+    assert 'database_mb' in status.json() and 'scheduler' in status.json()
+    started = client.post('/auto-replies/start')
+    assert started.status_code == 200
+    with Session() as db:
+        job = db.scalar(select(Job).where(Job.kind == 'drafts').order_by(Job.created_at.desc()))
+        assert job.result['since']
+        assert setting(db, 'automation_schedule')['drafts_days'] == 7
 
 
 def test_edit_is_learned_and_rescored(client, seeded):

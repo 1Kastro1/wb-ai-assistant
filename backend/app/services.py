@@ -16,6 +16,8 @@ WORDS = re.compile(r'[а-яё0-9]{4,}', re.I)
 MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
+QUALITY_EVALUATOR_VERSION = '2.0'
+WEB_FACT_MAX_AGE_DAYS = 30
 INTENT_LABELS = {
     'WRONG_ITEM': 'пришёл другой товар', 'MISSING_PARTS': 'неполная комплектация',
     'DAMAGED_ITEM': 'повреждение товара', 'FITMENT_PROBLEM': 'товар не подошёл',
@@ -111,11 +113,21 @@ def positive_rating_reply(product, revision=1):
 
 
 def cached_web_instruction_sources(product):
-    return [
-        {'title': f.get('title', ''), 'snippet': f.get('text', ''), 'url': f.get('source', ''), 'host': f.get('host', ''), 'match_score': f.get('match_score', 0)}
-        for f in (product.facts or [])
-        if f.get('verification_status') == 'WEB_UNVERIFIED' and f.get('source')
-    ][:5]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=WEB_FACT_MAX_AGE_DAYS)
+    results = []
+    for fact in product.facts or []:
+        if fact.get('verification_status') != 'WEB_UNVERIFIED' or not fact.get('source'):
+            continue
+        try:
+            researched_at = datetime.fromisoformat(fact.get('researched_at', ''))
+            if researched_at.tzinfo is None:
+                researched_at = researched_at.replace(tzinfo=timezone.utc)
+            if researched_at < cutoff:
+                continue
+        except (TypeError, ValueError):
+            continue
+        results.append({'title': fact.get('title', ''), 'snippet': fact.get('text', ''), 'url': fact.get('source', ''), 'host': fact.get('host', ''), 'match_score': fact.get('match_score', 0)})
+    return results[:5]
 
 
 def remember_web_instruction_sources(product, sources):
@@ -261,7 +273,7 @@ def assess_reply(review, product, reply):
         'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
         'issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
         'intent': intent, 'intent_label': 'недовольство результатом и неприятный запах' if combined_cleaner_complaint and any(x in review.text.lower() for x in ('воня', 'запах', 'аромат', 'пах')) else INTENT_LABELS.get(intent, INTENT_LABELS['GENERAL']),
-        'checked_at': now(),
+        'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION,
     }
 
 
@@ -305,7 +317,7 @@ def quality_report(db, days=30, account_id=''):
     drafts = list(db.scalars(select(Draft).join(Review).where(*filters)))
     changed = False
     for draft in drafts:
-        if not draft.quality:
+        if not draft.quality or draft.quality.get('evaluator_version') != QUALITY_EVALUATOR_VERSION:
             review = db.get(Review, draft.review_id)
             product = db.get(Product, review.product_id)
             draft.quality = assess_reply(review, product, draft.text)
