@@ -1,0 +1,2 @@
+part_number,brand,oe_number,make,model,generation,engine,engine_code,year_from,year_to,axle,brake_system,disc_diameter,notes,wb_nm_id,category
+DEMO-PART,DEMO-BRAND,DEMO-OE,DEMO-MAKE,DEMO-MODEL,DEMO-GEN,DEMO-ENGINE,DEMO-CODE,2018,2020,front,DEMO-SYSTEM,300,Учебная строка; не для реального подбора,,brake_pads

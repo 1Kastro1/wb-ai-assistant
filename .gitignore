@@ -1,0 +1,17 @@
+.venv/
+.vs/
+.dotnet-cli/
+.nuget/
+node_modules/
+.next/
+bin/
+obj/
+out/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+data/
+*.db*
+*.log
+*.tsbuildinfo

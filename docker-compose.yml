@@ -1,0 +1,24 @@
+services:
+  backend:
+    build: ./backend
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      OLLAMA_MODEL: qwen3:4b
+    volumes: ["wb_data:/data"]
+    secrets: [wb_key]
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [backend]
+    restart: unless-stopped
+  ollama:
+    image: ollama/ollama:0.11.10
+    volumes: ["ollama_models:/root/.ollama"]
+    restart: unless-stopped
+secrets:
+  wb_key:
+    file: ${WB_DOCKER_SECRET_PATH:?Set WB_DOCKER_SECRET_PATH to a local Fernet key file outside OneDrive}
+volumes:
+  wb_data:
+  ollama_models:

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>WB AI Assistant</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\backend\**\*"
+          Exclude="..\backend\**\__pycache__\**;..\backend\**\*.pyc;..\backend\.pytest_cache\**"
+          Link="backend\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="..\frontend\**\*"
+          Exclude="..\frontend\node_modules\**;..\frontend\.next\**;..\frontend\*.tsbuildinfo"
+          Link="frontend\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="..\scripts\**\*"
+          Link="scripts\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="..\examples\**\*"
+          Link="examples\%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="..\README.md" Link="README.md" />
+    <None Include="..\VERIFICATION.md" Link="VERIFICATION.md" />
+    <None Include="..\DEPENDENCY_AUDIT.json" Link="DEPENDENCY_AUDIT.json" />
+    <None Include="..\docker-compose.yml" Link="docker-compose.yml" />
+    <None Include="..\.env.example" Link=".env.example" />
+    <None Include="..\.gitignore" Link=".gitignore" />
+    <None Include="..\*.bat" Link="%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

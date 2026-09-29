@@ -1,0 +1,177 @@
+[
+  {
+    "name": "alembic",
+    "version": "1.16.5",
+    "advisories": []
+  },
+  {
+    "name": "annotated-doc",
+    "version": "0.0.5",
+    "advisories": []
+  },
+  {
+    "name": "annotated-types",
+    "version": "0.8.0",
+    "advisories": []
+  },
+  {
+    "name": "anyio",
+    "version": "4.15.1",
+    "advisories": []
+  },
+  {
+    "name": "argon2-cffi",
+    "version": "25.1.0",
+    "advisories": []
+  },
+  {
+    "name": "argon2-cffi-bindings",
+    "version": "26.1.0",
+    "advisories": []
+  },
+  {
+    "name": "certifi",
+    "version": "2026.7.22",
+    "advisories": []
+  },
+  {
+    "name": "cffi",
+    "version": "2.1.1",
+    "advisories": []
+  },
+  {
+    "name": "click",
+    "version": "8.5.0",
+    "advisories": []
+  },
+  {
+    "name": "colorama",
+    "version": "0.4.6",
+    "advisories": []
+  },
+  {
+    "name": "cryptography",
+    "version": "50.0.1",
+    "advisories": []
+  },
+  {
+    "name": "et_xmlfile",
+    "version": "2.0.0",
+    "advisories": []
+  },
+  {
+    "name": "fastapi",
+    "version": "0.141.1",
+    "advisories": []
+  },
+  {
+    "name": "greenlet",
+    "version": "3.5.6",
+    "advisories": []
+  },
+  {
+    "name": "h11",
+    "version": "0.16.0",
+    "advisories": []
+  },
+  {
+    "name": "httpcore",
+    "version": "1.0.9",
+    "advisories": []
+  },
+  {
+    "name": "httpx",
+    "version": "0.28.1",
+    "advisories": []
+  },
+  {
+    "name": "idna",
+    "version": "3.20",
+    "advisories": []
+  },
+  {
+    "name": "iniconfig",
+    "version": "2.3.0",
+    "advisories": []
+  },
+  {
+    "name": "Mako",
+    "version": "1.4.3",
+    "advisories": []
+  },
+  {
+    "name": "MarkupSafe",
+    "version": "3.0.3",
+    "advisories": []
+  },
+  {
+    "name": "openpyxl",
+    "version": "3.1.5",
+    "advisories": []
+  },
+  {
+    "name": "packaging",
+    "version": "26.3",
+    "advisories": []
+  },
+  {
+    "name": "pluggy",
+    "version": "1.6.0",
+    "advisories": []
+  },
+  {
+    "name": "pycparser",
+    "version": "3.0",
+    "advisories": []
+  },
+  {
+    "name": "pydantic",
+    "version": "2.11.7",
+    "advisories": []
+  },
+  {
+    "name": "pydantic_core",
+    "version": "2.33.2",
+    "advisories": []
+  },
+  {
+    "name": "Pygments",
+    "version": "2.21.0",
+    "advisories": []
+  },
+  {
+    "name": "pytest",
+    "version": "9.1.1",
+    "advisories": []
+  },
+  {
+    "name": "python-multipart",
+    "version": "0.0.32",
+    "advisories": []
+  },
+  {
+    "name": "SQLAlchemy",
+    "version": "2.0.43",
+    "advisories": []
+  },
+  {
+    "name": "starlette",
+    "version": "1.7.0",
+    "advisories": []
+  },
+  {
+    "name": "typing-inspection",
+    "version": "0.4.4",
+    "advisories": []
+  },
+  {
+    "name": "typing_extensions",
+    "version": "4.16.0",
+    "advisories": []
+  },
+  {
+    "name": "uvicorn",
+    "version": "0.34.3",
+    "advisories": []
+  }
+]
