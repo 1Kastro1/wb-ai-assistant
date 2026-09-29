@@ -108,10 +108,23 @@ class ToolRegistry:
 registry = ToolRegistry()
 
 
+def speech_version(answer: str) -> str:
+    """Turn a screen-oriented answer into a concise phrase suitable for TTS."""
+    value = re.sub(r'https?://\S+', 'ссылка доступна на экране', answer)
+    value = re.sub(r'[`*_#>|\[\]{}]', ' ', value)
+    value = re.sub(r'\b(?:VERIFIED_FIT|INSUFFICIENT_DATA|LOCAL_FIRST)\b', '', value)
+    value = re.sub(r'\s+', ' ', value).strip()
+    sentences = re.split(r'(?<=[.!?])\s+', value)
+    spoken = ' '.join(sentences[:4]).strip()
+    if len(spoken) > 850:
+        spoken = spoken[:850].rsplit(' ', 1)[0] + '.'
+    return spoken or 'Результат показан на экране.'
+
+
 class AssistantService:
     MAX_TOOL_CALLS_PER_MESSAGE = 10
 
-    async def send(self, db, text, conversation_id=None, selection=None):
+    async def send(self, db, text, conversation_id=None, selection=None, voice_mode=False):
         conversation = db.get(Conversation, conversation_id) if conversation_id else None
         if not conversation:
             conversation = Conversation(id=str(uuid4()), title=mask_vin(text[:70]), context={})
@@ -213,7 +226,8 @@ class AssistantService:
             else:
                 history = db.scalars(select(Message).where(Message.conversation_id == conversation.id).order_by(Message.created_at.desc()).limit(8)).all()
                 schema = {'type':'object','properties':{'tool':{'type':'string','enum':['none',*registry.risk]},'arguments':{'type':'object'},'answer':{'type':'string'}},'required':['tool','arguments','answer']}
-                plan = await ollama.structured([{'role':'system','content':'Ты локальный помощник WB. Верни JSON: tool, arguments, answer. Выбери не более одного инструмента. Для обычной беседы tool=none. Не выдумывай числа, факты или выполненные действия. reviews.search принимает q, unanswered, max_rating, days, limit; генерация — index (от 1), instruction; memory.propose — text. Публикация лишь предлагает подтверждение. Никогда не утверждай совместимость без результата каталога. Контекст: '+json.dumps(context,ensure_ascii=False)}, *[{'role':m.role,'content':m.text[:3000]} for m in reversed(history)]], schema)
+                voice_instruction = ' Пользователь говорит голосом: отвечай естественно, короткими фразами, без таблиц и служебной разметки.' if voice_mode else ''
+                plan = await ollama.structured([{'role':'system','content':'Ты локальный помощник WB. Верни JSON: tool, arguments, answer. Выбери не более одного инструмента. Для обычной беседы tool=none. Не выдумывай числа, факты или выполненные действия. reviews.search принимает q, unanswered, max_rating, days, limit; генерация — index (от 1), instruction; memory.propose — text. Публикация лишь предлагает подтверждение. Никогда не утверждай совместимость без результата каталога.'+voice_instruction+' Контекст: '+json.dumps(context,ensure_ascii=False)}, *[{'role':m.role,'content':m.text[:3000]} for m in reversed(history)]], schema)
                 tool = plan.get('tool', 'none')
                 if tool == 'none':
                     tool = 'system.status'
@@ -244,7 +258,7 @@ class AssistantService:
         conversation.summary = json.dumps({'task': context.get('active_task'), 'filters': context.get('active_filters'), 'last_response': answer[:700]}, ensure_ascii=False)
         db.add(Message(id=str(uuid4()), conversation_id=conversation.id, role='assistant', text=answer))
         db.commit()
-        return {'conversation_id': conversation.id, 'text': answer, 'data': data, 'context': context}
+        return {'conversation_id': conversation.id, 'text': answer, 'speech_text': speech_version(answer) if voice_mode else answer, 'data': data, 'context': context}
 
 
 assistant = AssistantService()

@@ -2,6 +2,7 @@ import secrets
 import time
 import hashlib
 import asyncio
+import shutil
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from contextlib import asynccontextmanager
@@ -18,7 +19,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select, delete, text, func
 from .db import *
 from .config import ORIGIN, DATA, DATABASE, MODEL, REAL_PUBLISH
-from .security import digest, encrypt_secret, guard
+from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, wb_token
 from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action
 from .assistant import assistant
@@ -584,6 +585,19 @@ async def scheduler_loop():
                     async with maintenance_lock:
                         await asyncio.to_thread(backup)
                     schedule['last_backup'] = current
+                portable_sync = setting(db, 'portable_sync', {'enabled': False})
+                sync_account = db.get(Account, 'portable:sync')
+                if portable_sync.get('enabled') and sync_account and current - float(portable_sync.get('last_sync', 0)) >= max(1, int(portable_sync.get('hours', 24))) * 3600:
+                    destination = Path(str(portable_sync.get('directory', ''))).expanduser().resolve()
+                    if not destination.is_dir():
+                        raise ValueError('Папка синхронизации недоступна')
+                    async with maintenance_lock:
+                        export = await asyncio.to_thread(portable_backup, decrypt_secret(sync_account.encrypted_token))
+                        copied = await asyncio.to_thread(shutil.copy2, export, destination / export.name)
+                    for obsolete in sorted(destination.glob('wb-assistant-*.wbai'), key=lambda path:path.stat().st_mtime, reverse=True)[10:]:
+                        obsolete.unlink(missing_ok=True)
+                    portable_sync.update(last_sync=current,last_file=Path(copied).name,last_error='')
+                    set_setting(db, 'portable_sync', portable_sync)
                 set_setting(db, 'scheduler_status', {'state': 'ok', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': ''})
                 set_setting(db, 'automation_schedule', schedule)
                 db.commit()
@@ -906,6 +920,7 @@ class Chat(Payload):
     text: str = Field(min_length=1, max_length=5000)
     conversation_id: str | None = None
     selection: dict[str,str] = Field(default_factory=dict)
+    voice_mode: bool = False
 
 
 chat_lock = asyncio.Lock()
@@ -914,7 +929,7 @@ chat_lock = asyncio.Lock()
 @app.post('/chat')
 async def chat(body: Chat, auth: AUTH, db: DB):
     async with chat_lock:
-        return await assistant.send(db, body.text, body.conversation_id, body.selection)
+        return await assistant.send(db, body.text, body.conversation_id, body.selection, body.voice_mode)
 
 
 class VoiceText(Payload):
@@ -1060,6 +1075,57 @@ class PortablePassword(Payload):
 
 
 portable_lock = asyncio.Lock()
+
+
+class PortableSyncInput(Payload):
+    enabled: bool = False
+    directory: str = Field(default='', max_length=1000)
+    password: str = Field(default='', max_length=1024)
+    hours: int = Field(default=24, ge=1, le=720)
+
+
+def portable_sync_public(db):
+    value = setting(db, 'portable_sync', {'enabled':False,'directory':'','hours':24})
+    return {**value,'configured':bool(db.get(Account,'portable:sync'))}
+
+
+@app.get('/settings/portable-sync')
+def portable_sync_get(auth: AUTH, db: DB):
+    return portable_sync_public(db)
+
+
+@app.patch('/settings/portable-sync')
+def portable_sync_set(body: PortableSyncInput, auth: AUTH, db: DB):
+    destination = Path(body.directory).expanduser().resolve() if body.directory else None
+    if body.enabled and (not destination or not destination.is_dir()):
+        raise ValueError('Выберите существующую папку Google Drive, OneDrive или другую папку синхронизации')
+    account = db.get(Account,'portable:sync')
+    if body.password:
+        if len(body.password) < 12:
+            raise ValueError('Пароль синхронизации должен содержать не менее 12 символов')
+        db.merge(Account(id='portable:sync',encrypted_token=encrypt_secret(body.password)))
+        account = True
+    if body.enabled and not account:
+        raise ValueError('Задайте отдельный пароль зашифрованной синхронизации')
+    current = setting(db,'portable_sync',{})
+    current.update(enabled=body.enabled,directory=str(destination) if destination else '',hours=body.hours)
+    set_setting(db,'portable_sync',current);db.commit()
+    return portable_sync_public(db)
+
+
+@app.post('/portable/sync-now')
+async def portable_sync_now(auth: AUTH, db: DB):
+    config=setting(db,'portable_sync',{})
+    account=db.get(Account,'portable:sync')
+    destination=Path(str(config.get('directory',''))).expanduser().resolve()
+    if not config.get('enabled') or not account or not destination.is_dir():
+        raise ValueError('Сначала настройте зашифрованную синхронизацию')
+    async with portable_lock:
+        export=await asyncio.to_thread(portable_backup,decrypt_secret(account.encrypted_token))
+        copied=await asyncio.to_thread(shutil.copy2,export,destination/export.name)
+    config.update(last_sync=time.time(),last_file=Path(copied).name,last_error='')
+    set_setting(db,'portable_sync',config);db.commit()
+    return {'ok':True,'file':Path(copied).name}
 
 
 @app.post('/portable/export')

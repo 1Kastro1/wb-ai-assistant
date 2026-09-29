@@ -56,3 +56,13 @@ def test_portable_restore_waits_for_active_jobs(client,seeded):
     restored=client.post('/portable/restore',data={'password':PASSWORD},files={'file':('shop.wbai',exported.content,'application/octet-stream')})
     assert restored.status_code==400
     assert 'очереди' in restored.json()['detail']
+
+
+def test_encrypted_folder_sync(client,seeded,tmp_path):
+    configured=client.patch('/settings/portable-sync',json={'enabled':True,'directory':str(tmp_path),'password':PASSWORD,'hours':24})
+    assert configured.status_code==200
+    assert configured.json()['configured'] is True
+    synced=client.post('/portable/sync-now')
+    assert synced.status_code==200
+    destination=tmp_path/synced.json()['file']
+    assert destination.read_bytes().startswith(b'WBAIPORT1')

@@ -30,6 +30,15 @@ def test_combined_search_and_drafts(client,seeded):
     assert set(response['context']['drafted_ids'])=={'r1','r2'}
 
 
+def test_voice_chat_returns_screen_and_spoken_versions(client,seeded):
+    response=client.post('/chat',json={'text':'Что сегодня требует внимания?','voice_mode':True})
+    assert response.status_code==200
+    body=response.json()
+    assert body['text']
+    assert body['speech_text']
+    assert len(body['speech_text'])<=850
+
+
 def test_structured_tool_route(client,seeded,monkeypatch):
     from app.integrations import ollama
     async def planner(*args,**kwargs):
