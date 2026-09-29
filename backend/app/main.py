@@ -2,7 +2,6 @@ import secrets
 import time
 import hashlib
 import asyncio
-import re
 from uuid import uuid4
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -60,14 +59,11 @@ async def lifespan(app):
 
 
 app = FastAPI(title='WB AI Assistant', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-TAILSCALE_ORIGIN = re.compile(r'^https://[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net(?::\d+)?$', re.I)
-
-
 def allowed_origin(origin):
-    return origin == ORIGIN or bool(origin and TAILSCALE_ORIGIN.fullmatch(origin))
+    return origin == ORIGIN
 
 
-app.add_middleware(CORSMiddleware, allow_origins=[ORIGIN], allow_origin_regex=r'https://[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net(?::\d+)?', allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type', 'X-CSRF-Token'])
+app.add_middleware(CORSMiddleware, allow_origins=[ORIGIN], allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type', 'X-CSRF-Token'])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
 
 

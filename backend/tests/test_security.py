@@ -45,13 +45,6 @@ def test_csrf_and_origin(client):
     assert client.get('/health',headers={'Host':'evil.example'}).status_code == 400
 
 
-def test_tailscale_https_origin_is_allowed():
-    from fastapi.testclient import TestClient
-    from app.main import app
-    with TestClient(app, headers={'Origin': 'https://my-pc.example-tailnet.ts.net'}) as remote:
-        assert remote.get('/auth/status').status_code == 200
-
-
 def test_untrusted_remote_origin_is_blocked():
     from fastapi.testclient import TestClient
     from app.main import app
