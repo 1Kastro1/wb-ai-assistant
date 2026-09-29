@@ -370,24 +370,37 @@ async def generate_draft(db, review_id, instruction=''):
         messages = [
             {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
             {'role': 'user', 'content': json.dumps({'review_data': review.text, 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'web_instruction_sources': web_sources, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
-        reply = await ollama.chat(messages)
-        best_reply, best_quality = reply, assess_reply(review, product, reply)
-        for _ in range(2):
-            repeated = bool(initial_draft and best_reply.strip() == initial_draft.text.strip())
-            if best_quality['score'] >= MIN_DRAFT_QUALITY and not repeated:
-                break
-            issues = best_quality['issues'] or ['сделать ответ конкретнее и содержательнее']
-            if repeated:
-                issues = [*issues, 'написать новый текст, заметно отличающийся от предыдущего черновика']
-            improved = await ollama.chat(messages + [
-                {'role': 'assistant', 'content': best_reply},
-                {'role': 'user', 'content': f'Перепиши ответ так, чтобы проверка качества была не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues) + '. Верни только новый ответ.'},
-            ])
-            improved_quality = assess_reply(review, product, improved)
-            improved_repeated = bool(initial_draft and improved.strip() == initial_draft.text.strip())
-            if not improved_repeated and improved_quality['score'] >= best_quality['score']:
-                best_reply, best_quality = improved, improved_quality
-        reply = best_reply
+        best_reply, best_quality = None, {'score': -1, 'issues': []}
+        attempt_messages = messages
+        last_candidate = ''
+        for attempt in range(3):
+            try:
+                last_candidate = await ollama.chat(attempt_messages)
+                checked_candidate = validate_reply(mask_vin(last_candidate))
+                candidate_quality = assess_reply(review, product, checked_candidate)
+                repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
+                if not repeated and candidate_quality['score'] >= best_quality['score']:
+                    best_reply, best_quality = checked_candidate, candidate_quality
+                issues = list(candidate_quality['issues'])
+                if repeated:
+                    issues.append('написать новый текст, заметно отличающийся от предыдущего черновика')
+                if candidate_quality['score'] >= MIN_DRAFT_QUALITY and not repeated:
+                    break
+            except Exception as error:
+                # Ollama may be temporarily unavailable or may produce a reply that
+                # violates a hard rule. Retry with the concrete validation feedback.
+                issues = [str(error) or 'ответ не прошёл проверку безопасности']
+            if attempt < 2:
+                attempt_messages = messages + [
+                    {'role': 'assistant', 'content': last_candidate},
+                    {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания и не направляй покупателя к продавцу. Верни только ответ.'},
+                ]
+        fallback = validate_reply(safe_fallback_reply(review, product, generation_revision))
+        fallback_quality = assess_reply(review, product, fallback)
+        if best_reply is None or fallback_quality['score'] > best_quality['score']:
+            reply, model = fallback, 'safety-fallback-1.2'
+        else:
+            reply = best_reply
         if initial_draft and reply.strip() == initial_draft.text.strip() and not review.text.strip() and review.rating >= 4:
             reply = f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали {product.name}. Надеемся, товар будет радовать вас при использовании. Будем рады видеть вас снова!'
     # Explicit forbidden-word preferences can be enforced even for safety templates.
@@ -400,8 +413,8 @@ async def generate_draft(db, review_id, instruction=''):
     except ValueError:
         # A local-model answer may be useful but still violate a hard safety rule.
         # Preserve the safety boundary while always giving the owner a reviewable draft.
-        reply = validate_reply(safe_fallback_reply(review, product))
-        model = 'safety-fallback-1.1'
+        reply = validate_reply(safe_fallback_reply(review, product, generation_revision))
+        model = 'safety-fallback-1.2'
     if web_search_failed:
         model += ' · без интернет-источников'
     quality = assess_reply(review, product, reply)

@@ -66,6 +66,40 @@ def test_fragrance_regeneration_rotates_high_quality_reply(client):
     assert second['model'] == 'safety-rules-1.1'
 
 
+def test_cleaner_odor_complaint_generates_and_regenerates_without_ai(client, monkeypatch):
+    from app.integrations import ollama
+    async def unavailable(*args, **kwargs):
+        raise AssertionError('Контекстный ответ на запах не должен зависеть от Ollama')
+    monkeypatch.setattr(ollama, 'chat', unavailable)
+    with Session() as db:
+        db.add(Product(id='cleaner-odor-product', name='Очиститель салона автомобиля Profoam 3000', brand='KANGAROO', category='Очистители'))
+        db.add(Review(id='cleaner-odor-review', wb_review_id='cleaner-odor-review', product_id='cleaner-odor-product', rating=1, text='Полная хрень да ещё и воняет как средство против жира', risk='NORMAL'))
+        db.commit()
+    first = client.post('/reviews/cleaner-odor-review/draft', json={})
+    second = client.post('/reviews/cleaner-odor-review/draft', json={})
+    assert first.status_code == second.status_code == 200
+    assert first.json()['quality']['score'] > 95
+    assert second.json()['quality']['score'] > 95
+    assert second.json()['text'] != first.json()['text']
+    assert 'запах' in second.json()['text'].lower()
+
+
+def test_new_review_falls_back_without_error_when_ai_is_unavailable(client, monkeypatch):
+    from app.integrations import ollama
+    async def unavailable(*args, **kwargs):
+        raise ValueError('Ollama временно недоступен')
+    monkeypatch.setattr(ollama, 'chat', unavailable)
+    with Session() as db:
+        db.add(Product(id='fallback-product', name='Универсальный товар', brand='KANGAROO', category='Автотовары'))
+        db.add(Review(id='fallback-review', wb_review_id='fallback-review', product_id='fallback-product', rating=2, text='Качество совершенно не устроило', risk='NORMAL'))
+        db.commit()
+    first = client.post('/reviews/fallback-review/draft', json={})
+    second = client.post('/reviews/fallback-review/draft', json={})
+    assert first.status_code == second.status_code == 200
+    assert first.json()['model'] == second.json()['model'] == 'safety-fallback-1.2'
+    assert second.json()['text'] != first.json()['text']
+
+
 def test_safe_fallback_always_passes_reply_validation():
     product = SimpleNamespace()
     for rating in (1, 5):
