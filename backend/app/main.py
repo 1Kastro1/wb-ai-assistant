@@ -919,7 +919,7 @@ async def chat(body: Chat, auth: AUTH, db: DB):
 
 class VoiceText(Payload):
     text: str = Field(min_length=1, max_length=3000)
-    speaker: str = Field(default='xenia', max_length=20)
+    speaker: str = Field(default='aidar', max_length=20)
 
 
 @app.get('/voice/status')

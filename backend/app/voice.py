@@ -39,7 +39,7 @@ def status():
         'stt': vosk_ready and VOSK_MODEL.is_dir(),
         'engine': 'Silero TTS + Vosk STT',
         'speakers': list(SPEAKERS),
-        'default_speaker': 'xenia',
+        'default_speaker': 'aidar',
     }
 
 
@@ -76,7 +76,7 @@ def _load_tts():
     return _tts_model
 
 
-def synthesize(text: str, speaker: str = 'xenia') -> bytes:
+def synthesize(text: str, speaker: str = 'aidar') -> bytes:
     if speaker not in SPEAKERS:
         raise ValueError('Неизвестный голос Silero')
     cleaned = _clean_for_speech(text)

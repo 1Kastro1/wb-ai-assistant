@@ -6,15 +6,18 @@ def test_voice_status(client):
     response=client.get('/voice/status')
     assert response.status_code==200
     assert response.json()['engine']=='Silero TTS + Vosk STT'
+    assert response.json()['default_speaker']=='aidar'
 
 
 def test_voice_tts_returns_wav(client,monkeypatch):
     from app import voice
-    monkeypatch.setattr(voice,'synthesize',lambda text,speaker: b'RIFF-test-wave')
-    response=client.post('/voice/tts',json={'text':'Привет','speaker':'xenia'})
+    selected=[]
+    monkeypatch.setattr(voice,'synthesize',lambda text,speaker: selected.append(speaker) or b'RIFF-test-wave')
+    response=client.post('/voice/tts',json={'text':'Привет'})
     assert response.status_code==200
     assert response.headers['content-type']=='audio/wav'
     assert response.content.startswith(b'RIFF')
+    assert selected==['aidar']
 
 
 def test_voice_stt_returns_text(client,monkeypatch):
