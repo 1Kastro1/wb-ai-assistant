@@ -84,6 +84,53 @@ def test_prepare_all_unanswered_drafts_job(client, seeded):
         assert len(list(db.scalars(select(Draft)))) == 4
 
 
+def test_auto_replies_start_runs_now_and_can_be_paused(client, seeded):
+    started = client.post('/auto-replies/start').json()
+    assert started['enabled'] is True
+    assert started['next_run_at'] is not None
+    job = client.get('/jobs/' + started['job']['id']).json()
+    assert job['status'] == 'completed'
+    with Session() as db:
+        schedule = setting(db, 'automation_schedule')
+        assert schedule['enabled'] is True and schedule['drafts_enabled'] is True
+        assert len(list(db.scalars(select(Draft)))) == 4
+
+    paused = client.post('/auto-replies/pause').json()
+    assert paused['enabled'] is False and paused['state'] == 'paused'
+    assert paused['next_run_at'] is None
+    with Session() as db:
+        assert setting(db, 'automation_schedule')['drafts_enabled'] is False
+        assert len(list(db.scalars(select(Draft)))) == 4
+
+
+def test_auto_replies_pause_cancels_queued_generation(client):
+    with Session() as db:
+        db.add(Job(id='pause-drafts', kind='drafts', status='queued'))
+        db.commit()
+    paused = client.post('/auto-replies/pause').json()
+    assert paused['state'] == 'paused'
+    with Session() as db:
+        job = db.get(Job, 'pause-drafts')
+        assert job.status == 'cancelled' and job.cancel_requested is True
+
+
+def test_auto_replies_process_reviews_after_sync(client, seeded, monkeypatch):
+    async def sync_reviews(db, account_id, progress, cancelled):
+        progress(100)
+        return 0
+    monkeypatch.setattr('app.main.wb.sync_reviews', sync_reviews)
+    monkeypatch.setattr('app.main.wb_token', lambda db: 'test-token')
+    with Session() as db:
+        set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True, 'drafts_hours': 6})
+        db.commit()
+    sync = client.post('/jobs/sync/reviews').json()
+    assert client.get('/jobs/' + sync['id']).json()['status'] == 'completed'
+    with Session() as db:
+        drafts_job = db.scalar(select(Job).where(Job.kind == 'drafts').order_by(Job.created_at.desc()))
+        assert drafts_job.status == 'completed'
+        assert len(list(db.scalars(select(Draft)))) == 4
+
+
 def test_completed_memory_action_can_be_removed(client):
     aid = client.post('/memory/propose', json={'text': 'Не используй слово «пример»'}).json()['id']
     assert client.delete('/actions/' + aid).status_code == 400

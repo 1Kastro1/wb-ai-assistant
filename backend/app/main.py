@@ -342,6 +342,61 @@ def schedule_set(body: ScheduleInput, auth: AUTH, db: DB):
     return value
 
 
+def auto_replies_status(db):
+    schedule = schedule_get(None, db)
+    enabled = bool(schedule.get('enabled') and schedule.get('drafts_enabled'))
+    current_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
+    last_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.not_in(['queued', 'running'])).order_by(Job.created_at.desc()))
+    next_run_at = None
+    if enabled:
+        last_run = float(schedule.get('last_drafts', time.time()))
+        next_run_at = int((last_run + max(1, int(schedule.get('drafts_hours', 6))) * 3600) * 1000)
+    return {
+        'enabled': enabled,
+        'state': current_job.status if enabled and current_job else ('active' if enabled else 'paused'),
+        'interval_hours': max(1, int(schedule.get('drafts_hours', 6))),
+        'next_run_at': next_run_at,
+        'current_job': public(current_job) if current_job else None,
+        'last_job': public(last_job) if last_job else None,
+    }
+
+
+@app.get('/auto-replies/status')
+def get_auto_replies_status(auth: AUTH, db: DB):
+    return auto_replies_status(db)
+
+
+@app.post('/auto-replies/start')
+async def start_auto_replies(background: BackgroundTasks, auth: AUTH, db: DB):
+    schedule = schedule_get(auth, db)
+    schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time()})
+    set_setting(db, 'automation_schedule', schedule)
+    job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
+    if not job:
+        active = setting(db, 'active_store', 'owner')
+        job = Job(id=str(uuid4()), kind='drafts', priority=50, result={'account_id': active, 'message': 'Автоответы запущены: подготавливаем новые черновики'})
+        db.add(job)
+    db.commit()
+    result = auto_replies_status(db)
+    result['job'] = public(job)
+    background.add_task(run_job_queue)
+    return result
+
+
+@app.post('/auto-replies/pause')
+def pause_auto_replies(auth: AUTH, db: DB):
+    schedule = schedule_get(auth, db)
+    schedule['drafts_enabled'] = False
+    set_setting(db, 'automation_schedule', schedule)
+    for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
+        job.cancel_requested = True
+        if job.status == 'queued':
+            job.status = 'cancelled'
+            job.result = {**(job.result or {}), 'message': 'Автоответы поставлены на паузу'}
+    db.commit()
+    return auto_replies_status(db)
+
+
 @app.get('/ollama')
 async def ollama_status(auth: AUTH):
     try:
@@ -399,7 +454,7 @@ async def run_sync_job(job_id):
                     schedule = setting(db, 'automation_schedule', {})
                     proposal_id = None
                     if schedule.get('auto_propose'):
-                        minimum = max(70, min(100, int(schedule.get('min_quality', 90))))
+                        minimum = max(70, min(100, int(schedule.get('min_quality', 96))))
                         limit = max(1, min(100, int(schedule.get('max_proposals', 100))))
                         candidates = list(db.scalars(
                             select(Review.id).join(Draft, Draft.review_id == Review.id).where(
@@ -433,6 +488,11 @@ async def run_sync_job(job_id):
                             raise
                         count = await operation(db)
                     job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id}
+                    schedule = setting(db, 'automation_schedule', {})
+                    if kind == 'reviews' and schedule.get('enabled') and schedule.get('drafts_enabled') and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
+                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
+                        schedule['last_drafts'] = time.time()
+                        set_setting(db, 'automation_schedule', schedule)
             except asyncio.CancelledError:
                 db.rollback()
                 job = db.get(Job, job_id)
@@ -482,7 +542,7 @@ async def scheduler_loop():
                     last = float(schedule.get('last_drafts', 0))
                     hours = max(1, int(schedule.get('drafts_hours', 6)))
                     if current - last >= hours * 3600 and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind='drafts', priority=150, result={'account_id': active, 'scheduled': True, 'message': 'Плановая подготовка автоответов'}))
+                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': active, 'scheduled': True, 'message': 'Плановая подготовка автоответов'}))
                         schedule['last_drafts'] = current
                 if current - float(schedule.get('last_backup', 0)) >= max(1, int(schedule.get('backup_hours', 24))) * 3600:
                     backup()
