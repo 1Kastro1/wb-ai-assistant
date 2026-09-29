@@ -24,6 +24,7 @@ from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
 from .maintenance import backup
+from . import voice
 
 
 @asynccontextmanager
@@ -822,6 +823,31 @@ chat_lock = asyncio.Lock()
 async def chat(body: Chat, auth: AUTH, db: DB):
     async with chat_lock:
         return await assistant.send(db, body.text, body.conversation_id, body.selection)
+
+
+class VoiceText(Payload):
+    text: str = Field(min_length=1, max_length=3000)
+    speaker: str = Field(default='xenia', max_length=20)
+
+
+@app.get('/voice/status')
+def voice_status(auth: AUTH):
+    return voice.status()
+
+
+@app.post('/voice/tts')
+async def voice_tts(body: VoiceText, auth: AUTH):
+    audio = await asyncio.to_thread(voice.synthesize, body.text, body.speaker)
+    return Response(content=audio, media_type='audio/wav', headers={'Content-Disposition':'inline; filename="assistant.wav"'})
+
+
+@app.post('/voice/stt')
+async def voice_stt(auth: AUTH, audio: UploadFile = File(...)):
+    if audio.content_type not in ('audio/wav', 'audio/x-wav', 'application/octet-stream'):
+        raise ValueError('Поддерживается запись WAV')
+    raw = await audio.read(12 * 1024 * 1024 + 1)
+    text_value = await asyncio.to_thread(voice.transcribe, raw)
+    return {'text': text_value}
 
 
 @app.get('/conversations')

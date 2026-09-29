@@ -61,6 +61,7 @@ try {
     }
     if(!(Test-Path -LiteralPath $NodeExe)){throw 'Install Node.js 22 LTS.'}
     Run-Python @('-m','pip','install','--timeout','60','-r','backend/requirements.lock.txt')
+    Run-Python @('scripts/install_voice.py','--data-root',$DataRoot)
     Push-Location frontend
     try {
       if($UsePnpm){Run-Package @('install','--frozen-lockfile')}else{Run-Package @('install')}

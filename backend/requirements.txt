@@ -7,4 +7,7 @@ argon2-cffi>=23,<26
 cryptography>=50.0.1,<51
 openpyxl>=3.1,<4
 python-multipart>=0.0.32,<1
+numpy>=2.5,<2.6
+torch>=2.14,<2.15
+vosk>=0.3.45,<0.4
 pytest>=9.0.3,<10

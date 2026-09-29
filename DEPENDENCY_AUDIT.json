@@ -40,6 +40,11 @@
     "advisories": []
   },
   {
+    "name": "charset-normalizer",
+    "version": "3.5.1",
+    "advisories": []
+  },
+  {
     "name": "click",
     "version": "8.5.0",
     "advisories": []
@@ -62,6 +67,16 @@
   {
     "name": "fastapi",
     "version": "0.141.1",
+    "advisories": []
+  },
+  {
+    "name": "filelock",
+    "version": "4.0.6",
+    "advisories": []
+  },
+  {
+    "name": "fsspec",
+    "version": "2026.9.0",
     "advisories": []
   },
   {
@@ -95,6 +110,11 @@
     "advisories": []
   },
   {
+    "name": "Jinja2",
+    "version": "3.1.6",
+    "advisories": []
+  },
+  {
     "name": "Mako",
     "version": "1.4.3",
     "advisories": []
@@ -102,6 +122,21 @@
   {
     "name": "MarkupSafe",
     "version": "3.0.3",
+    "advisories": []
+  },
+  {
+    "name": "mpmath",
+    "version": "1.3.0",
+    "advisories": []
+  },
+  {
+    "name": "networkx",
+    "version": "3.7",
+    "advisories": []
+  },
+  {
+    "name": "numpy",
+    "version": "2.5.3",
     "advisories": []
   },
   {
@@ -150,13 +185,43 @@
     "advisories": []
   },
   {
+    "name": "requests",
+    "version": "2.34.2",
+    "advisories": []
+  },
+  {
+    "name": "setuptools",
+    "version": "84.0.0",
+    "advisories": []
+  },
+  {
     "name": "SQLAlchemy",
     "version": "2.0.43",
     "advisories": []
   },
   {
+    "name": "srt",
+    "version": "3.5.3",
+    "advisories": []
+  },
+  {
     "name": "starlette",
     "version": "1.7.0",
+    "advisories": []
+  },
+  {
+    "name": "sympy",
+    "version": "1.14.0",
+    "advisories": []
+  },
+  {
+    "name": "torch",
+    "version": "2.14.0",
+    "advisories": []
+  },
+  {
+    "name": "tqdm",
+    "version": "4.70.1",
     "advisories": []
   },
   {
@@ -170,8 +235,23 @@
     "advisories": []
   },
   {
+    "name": "urllib3",
+    "version": "2.8.0",
+    "advisories": []
+  },
+  {
     "name": "uvicorn",
     "version": "0.34.3",
+    "advisories": []
+  },
+  {
+    "name": "vosk",
+    "version": "0.3.45",
+    "advisories": []
+  },
+  {
+    "name": "websockets",
+    "version": "17.1",
     "advisories": []
   }
 ]

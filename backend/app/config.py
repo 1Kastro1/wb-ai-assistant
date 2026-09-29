@@ -10,7 +10,7 @@ def data_root() -> Path:
 
 
 DATA = data_root()
-for folder in ('database', 'backups', 'catalogs', 'uploads', 'exports', 'temp'):
+for folder in ('database', 'backups', 'catalogs', 'uploads', 'exports', 'temp', 'models'):
     (DATA / folder).mkdir(parents=True, exist_ok=True)
 DATABASE = DATA / 'database/wb_assistant.db'
 ORIGIN = 'http://127.0.0.1:3000'
