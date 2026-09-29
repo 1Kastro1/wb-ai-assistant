@@ -7,7 +7,7 @@ from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, case, text as sql_text
 from .db import *
-from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin
+from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint
 from .integrations import ollama, wb, web_research
 from .config import MODEL, REAL_PUBLISH
 
@@ -91,8 +91,10 @@ def has_usage_instruction(facts):
     return any(word in text for word in ('способ применен', 'применение', 'нанесите', 'нанести', 'распылите', 'встряхните', 'используйте', 'рекомендуется обработать', 'обработать поверхность'))
 
 
-def needs_usage_instruction(review):
+def needs_usage_instruction(review, product=None):
     if review_intent(review.text) == 'NO_RESULT':
+        return True
+    if product is not None and cleaner_effectiveness_complaint(review, product):
         return True
     text = review.text.lower().replace('ё', 'е')
     return any(phrase in text for phrase in ('как пользоваться', 'как использовать', 'как применять', 'как нанести', 'как наносить', 'способ применения', 'нужна инструкция'))
@@ -216,18 +218,34 @@ def assess_reply(review, product, reply):
     else:
         issues.append('ответить именно на содержание отзыва')
     intent = review_intent(review.text)
+    combined_cleaner_complaint = cleaner_effectiveness_complaint(review, product)
     if intent == 'WRONG_ITEM':
         if 'возврат' in lowered or 'вернуть' in lowered:
             score += 18
             breakdown['resolution']['score'] = 18
         else:
             issues.append('объяснить возможность возврата неверного товара')
-    elif intent == 'NO_RESULT':
-        if any(x in lowered for x in ('инструкц', 'нанес', 'обработ', 'примен')):
-            score += 15
-            breakdown['resolution']['score'] = 15
+    elif intent == 'NO_RESULT' or combined_cleaner_complaint:
+        if any(x in lowered for x in ('инструкц', 'нанес', 'обработ', 'примен', 'распыл', 'протр')):
+            score += 18
+            breakdown['resolution']['score'] = 18
         else:
             issues.append('дать безопасную инструкцию по применению')
+        verified_facts = ' '.join(
+            str(fact.get('text', '')) for fact in (getattr(product, 'facts', None) or [])
+            if fact.get('verification_status') == 'VERIFIED'
+        ).lower().replace('ё', 'е')
+        missing_steps = []
+        if 'распыл' in verified_facts and 'распыл' not in lowered:
+            missing_steps.append('распыление')
+        if ('30 секунд' in verified_facts or '30 сек' in verified_facts) and not ('30 секунд' in lowered or '30 сек' in lowered):
+            missing_steps.append('выдержка 30 секунд')
+        if ('ткан' in verified_facts or 'салфет' in verified_facts) and not ('ткан' in lowered or 'салфет' in lowered):
+            missing_steps.append('удаление чистой тканью или салфеткой')
+        if combined_cleaner_complaint and missing_steps:
+            issues.append('указать подтверждённые шаги применения: ' + ', '.join(missing_steps))
+        if combined_cleaner_complaint and any(x in review.text.lower() for x in ('воня', 'запах', 'аромат', 'пах')) and not any(x in lowered for x in ('воня', 'запах', 'аромат', 'пах')):
+            issues.append('признать замечание о неприятном запахе')
     else:
         score += 10
         breakdown['resolution']['score'] = 10
@@ -242,7 +260,7 @@ def assess_reply(review, product, reply):
     return {
         'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
         'issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
-        'intent': intent, 'intent_label': INTENT_LABELS.get(intent, INTENT_LABELS['GENERAL']),
+        'intent': intent, 'intent_label': 'недовольство результатом и неприятный запах' if combined_cleaner_complaint and any(x in review.text.lower() for x in ('воня', 'запах', 'аромат', 'пах')) else INTENT_LABELS.get(intent, INTENT_LABELS['GENERAL']),
         'checked_at': now(),
     }
 
@@ -419,7 +437,7 @@ async def generate_draft(db, review_id, instruction=''):
         examples = previous_answer_examples(db, review, product)
         comparison_texts = ([initial_draft.text] if initial_draft else []) + [example.get('answer', '') for example in examples]
         web_sources = []
-        if not has_usage_instruction(facts) and needs_usage_instruction(review):
+        if not has_usage_instruction(facts) and needs_usage_instruction(review, product):
             web_sources = cached_web_instruction_sources(product)
             try:
                 if not web_sources:

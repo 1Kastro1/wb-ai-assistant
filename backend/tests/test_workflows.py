@@ -72,7 +72,10 @@ def test_cleaner_odor_complaint_generates_and_regenerates_without_ai(client, mon
         raise AssertionError('Контекстный ответ на запах не должен зависеть от Ollama')
     monkeypatch.setattr(ollama, 'chat', unavailable)
     with Session() as db:
-        db.add(Product(id='cleaner-odor-product', name='Очиститель салона автомобиля Profoam 3000', brand='KANGAROO', category='Очистители'))
+        db.add(Product(id='cleaner-odor-product', name='Очиститель салона автомобиля Profoam 3000', brand='KANGAROO', category='Очистители', facts=[{
+            'text': 'Способ применения: проверьте на небольшом участке, распылите средство, сильные загрязнения обработайте щеткой, оставьте на 30 секунд, затем протрите чистой тканью или салфеткой и промойте водой.',
+            'source': 'Карточка WB: описание', 'verification_status': 'VERIFIED',
+        }]))
         db.add(Review(id='cleaner-odor-review', wb_review_id='cleaner-odor-review', product_id='cleaner-odor-product', rating=1, text='Полная хрень да ещё и воняет как средство против жира', risk='NORMAL'))
         db.commit()
     first = client.post('/reviews/cleaner-odor-review/draft', json={})
@@ -81,7 +84,25 @@ def test_cleaner_odor_complaint_generates_and_regenerates_without_ai(client, mon
     assert first.json()['quality']['score'] > 95
     assert second.json()['quality']['score'] > 95
     assert second.json()['text'] != first.json()['text']
-    assert 'запах' in second.json()['text'].lower()
+    for draft in (first.json(), second.json()):
+        lowered = draft['text'].lower()
+        assert 'запах' in lowered
+        assert '30 секунд' in lowered
+        assert 'тканью или салфеткой' in lowered
+        assert draft['quality']['intent_label'] == 'недовольство результатом и неприятный запах'
+
+
+def test_combined_cleaner_complaint_requires_specific_verified_steps():
+    review = SimpleNamespace(text='Полная хрень, ещё и воняет', rating=1)
+    product = SimpleNamespace(name='Очиститель салона', category='Очистители', facts=[{
+        'text': 'Распылите средство, оставьте на 30 секунд, затем протрите чистой тканью или салфеткой.',
+        'verification_status': 'VERIFIED',
+    }])
+    generic = assess_reply(review, product, 'Здравствуйте! Нам жаль, что средство не помогло и запах оказался неприятным. Спасибо за отзыв. Применяйте средство по инструкции.')
+    detailed = assess_reply(review, product, 'Здравствуйте! Нам жаль, что средство не помогло и запах оказался неприятным. Спасибо за отзыв. Распылите средство, оставьте на 30 секунд, затем протрите чистой тканью или салфеткой.')
+    assert generic['passed'] is False
+    assert 'подтверждённые шаги' in '; '.join(generic['issues'])
+    assert detailed['passed'] is True
 
 
 def test_new_review_falls_back_without_error_when_ai_is_unavailable(client, monkeypatch):
@@ -217,6 +238,10 @@ def test_internet_instruction_search_only_when_review_needs_it():
     assert needs_usage_instruction(SimpleNamespace(text='Я не увидела результата'))
     assert needs_usage_instruction(SimpleNamespace(text='Как пользоваться этим средством?'))
     assert not needs_usage_instruction(SimpleNamespace(text='Спасибо, отличный товар!'))
+    assert needs_usage_instruction(
+        SimpleNamespace(text='Полная хрень, ещё и воняет', rating=1),
+        SimpleNamespace(name='Очиститель салона', category='Автохимия'),
+    )
 
 
 def test_analytics_aggregates_seeded_reviews(seeded):
