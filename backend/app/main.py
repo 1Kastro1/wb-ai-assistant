@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 from fastapi import FastAPI, Depends, Request, Response, HTTPException, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -23,7 +23,7 @@ from .services import reviews_search, reviews_page, analytics, quality_report, g
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
-from .maintenance import backup
+from .maintenance import backup, portable_backup, portable_restore
 from . import voice
 
 
@@ -73,7 +73,8 @@ async def boundary(request, call_next):
     origin = request.headers.get('origin')
     if origin and not allowed_origin(origin):
         return JSONResponse({'detail': 'Недопустимый Origin'}, 403)
-    if int(request.headers.get('content-length', '0')) > 12 * 1024 * 1024:
+    upload_limit = 1024 * 1024 * 1024 if request.url.path == '/portable/restore' else 12 * 1024 * 1024
+    if int(request.headers.get('content-length', '0')) > upload_limit:
         return JSONResponse({'detail': 'Слишком большой запрос'}, 413)
     if request.method in ('POST', 'PATCH', 'DELETE') and not allowed_origin(origin):
         return JSONResponse({'detail': 'Нужен локальный Origin'}, 403)
@@ -961,6 +962,40 @@ def brand_save(body: BrandInput, auth: AUTH, db: DB):
 @app.post('/backup')
 def backup_create(auth: AUTH):
     return {'file': backup(), 'secrets_included': False}
+
+
+class PortablePassword(Payload):
+    password: str = Field(min_length=12, max_length=1024)
+
+
+portable_lock = asyncio.Lock()
+
+
+@app.post('/portable/export')
+async def portable_export(body: PortablePassword, auth: AUTH):
+    path = await asyncio.to_thread(portable_backup, body.password)
+    return FileResponse(path, media_type='application/octet-stream', filename=path.name, headers={'X-Backup-Encrypted':'AES-256-GCM','X-Secrets-Included':'false'})
+
+
+@app.post('/portable/restore')
+async def portable_import(auth: AUTH, password: str = Form(...), file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith('.wbai'):
+        raise ValueError('Выберите зашифрованную копию .wbai')
+    if len(password) < 12:
+        raise ValueError('Пароль копии должен содержать не менее 12 символов')
+    upload = DATA / 'temp' / f'upload-{uuid4().hex}.wbai'
+    size = 0
+    try:
+        with upload.open('wb') as output:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > 1024 * 1024 * 1024:
+                    raise ValueError('Резервная копия слишком большая')
+                output.write(chunk)
+        async with portable_lock:
+            return await asyncio.to_thread(portable_restore, upload, password)
+    finally:
+        upload.unlink(missing_ok=True)
 
 
 @app.get('/export/reviews')
