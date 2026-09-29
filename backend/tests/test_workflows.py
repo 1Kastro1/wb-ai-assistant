@@ -86,7 +86,9 @@ def test_cleaner_odor_complaint_generates_and_regenerates_without_ai(client, mon
 
 def test_new_review_falls_back_without_error_when_ai_is_unavailable(client, monkeypatch):
     from app.integrations import ollama
+    calls = []
     async def unavailable(*args, **kwargs):
+        calls.append(args)
         raise ValueError('Ollama временно недоступен')
     monkeypatch.setattr(ollama, 'chat', unavailable)
     with Session() as db:
@@ -98,6 +100,32 @@ def test_new_review_falls_back_without_error_when_ai_is_unavailable(client, monk
     assert first.status_code == second.status_code == 200
     assert first.json()['model'] == second.json()['model'] == 'safety-fallback-1.2'
     assert second.json()['text'] != first.json()['text']
+    assert len(calls) == 10
+
+
+def test_rejected_model_reply_is_replaced_by_new_safe_model_reply(client, monkeypatch):
+    from app.integrations import ollama
+    candidates = [
+        'Здравствуйте! Напишите продавцу, и он обязательно решит проблему.',
+        'Здравствуйте! Спасибо, что поделились отзывом о качестве товара. Нам искренне жаль, что качество покупки вас разочаровало. Мы внимательно учтём ваше замечание при работе с информацией о товаре. Благодарим за честную обратную связь.',
+    ]
+    calls = []
+    async def local(messages, schema=None):
+        calls.append(messages)
+        return candidates[min(len(calls) - 1, len(candidates) - 1)]
+    monkeypatch.setattr(ollama, 'chat', local)
+    with Session() as db:
+        db.add(Product(id='safety-retry-product', name='Универсальный товар', brand='KANGAROO', category='Автотовары'))
+        db.add(Review(id='safety-retry-review', wb_review_id='safety-retry-review', product_id='safety-retry-product', rating=1, text='Качество оказалось ужасным', risk='NORMAL'))
+        db.commit()
+    result = client.post('/reviews/safety-retry-review/draft', json={})
+    assert result.status_code == 200
+    draft = result.json()
+    assert len(calls) == 2
+    assert draft['model'] != 'safety-fallback-1.2'
+    assert draft['quality']['score'] > 95
+    assert 'напишите продавцу' not in draft['text'].lower()
+    assert validate_reply(draft['text']) == draft['text']
 
 
 def test_safe_fallback_always_passes_reply_validation():

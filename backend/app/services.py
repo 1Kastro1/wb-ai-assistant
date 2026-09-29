@@ -14,6 +14,7 @@ from .config import MODEL, REAL_PUBLISH
 
 WORDS = re.compile(r'[а-яё0-9]{4,}', re.I)
 MIN_DRAFT_QUALITY = 96
+MAX_GENERATION_ATTEMPTS = 5
 
 
 def _addresses_review_topic(review_text, reply_text):
@@ -373,7 +374,7 @@ async def generate_draft(db, review_id, instruction=''):
         best_reply, best_quality = None, {'score': -1, 'issues': []}
         attempt_messages = messages
         last_candidate = ''
-        for attempt in range(3):
+        for attempt in range(MAX_GENERATION_ATTEMPTS):
             try:
                 last_candidate = await ollama.chat(attempt_messages)
                 checked_candidate = validate_reply(mask_vin(last_candidate))
@@ -390,7 +391,7 @@ async def generate_draft(db, review_id, instruction=''):
                 # Ollama may be temporarily unavailable or may produce a reply that
                 # violates a hard rule. Retry with the concrete validation feedback.
                 issues = [str(error) or 'ответ не прошёл проверку безопасности']
-            if attempt < 2:
+            if attempt < MAX_GENERATION_ATTEMPTS - 1:
                 attempt_messages = messages + [
                     {'role': 'assistant', 'content': last_candidate},
                     {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания и не направляй покупателя к продавцу. Верни только ответ.'},
