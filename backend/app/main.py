@@ -730,7 +730,8 @@ def publish_proposal(body: PublishInput, auth: AUTH, db: DB):
 
 @app.get('/actions')
 def actions(auth: AUTH, db: DB):
-    return [public(a) for a in db.scalars(select(Action).order_by(Action.created_at.desc()).limit(100))]
+    active_statuses = ['pending', 'executing', 'needs_review']
+    return [public(a) for a in db.scalars(select(Action).where(Action.status.in_(active_statuses)).order_by(Action.created_at.desc()).limit(100))]
 
 
 @app.delete('/actions/{aid}')

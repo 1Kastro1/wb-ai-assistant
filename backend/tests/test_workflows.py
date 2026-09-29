@@ -323,9 +323,11 @@ def test_mass_publish_exclusions_and_manual_ack(client,seeded):
 def test_memory_requires_confirmation(client):
     aid=client.post('/memory/propose',json={'text':'Не используй слово «уважаемый»'}).json()['id']
     assert client.get('/memory').json()==[]
+    assert [item['id'] for item in client.get('/actions').json()] == [aid]
     client.post('/actions/'+aid+'/confirm',json={})
     memories = client.get('/memory').json()
     assert len(memories)==1
+    assert client.get('/actions').json()==[]
     deleted = client.delete('/memory/'+memories[0]['id'])
     assert deleted.status_code == 200 and deleted.json()['id'] == memories[0]['id']
     assert client.get('/memory').json()==[]
