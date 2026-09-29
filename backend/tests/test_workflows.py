@@ -38,6 +38,20 @@ def test_fragrance_complaint_uses_safe_local_template():
     assert validate_reply(reply) == reply
 
 
+def test_all_fragrance_variants_suggest_another_scent_without_removal_advice():
+    review = SimpleNamespace(text='Запах совершенно не понравился', rating=1, risk='NORMAL')
+    product = SimpleNamespace(brand='Kogado', name='Ароматизатор в машину', category='Автомобильные ароматизаторы')
+    for revision in range(3):
+        reply = rule_reply(review, product, revision)
+        lowered = reply.lower()
+        assert 'друг' in lowered and ('аромат' in lowered or 'запах' in lowered)
+        assert 'убрать ароматизатор' not in lowered
+        assert 'убрать средство' not in lowered
+        assert 'прекратить использование' not in lowered
+        assert 'проветрить' not in lowered
+        assert assess_reply(review, product, reply)['score'] > 95
+
+
 def test_fragrance_regeneration_rotates_high_quality_reply(client):
     with Session() as db:
         db.add(Product(id='fragrance-product', name='Ароматизатор в машину парфюм для авто', brand='Kogado', category='Автомобильные ароматизаторы'))
