@@ -39,6 +39,25 @@ class OllamaProvider:
     async def structured(self, messages, schema):
         return json.loads(await self.chat(messages, schema))
 
+    async def reply_variants(self, messages, count=3):
+        """Request several customer-facing variants in one model call."""
+        request = [dict(message) for message in messages] + [{
+            'role': 'user',
+            'content': (
+                f'Создай {count} разных безопасных вариантов ответа. Верни только JSON без Markdown: '
+                '{"variants":["ответ 1","ответ 2","ответ 3"]}. '
+                'Внутри variants должны быть только готовые ответы покупателю, без анализа, правил, пояснений и служебного текста.'
+            ),
+        }]
+        raw = await self.chat(request)
+        try:
+            match = re.search(r'\{.*\}', raw, re.S)
+            payload = json.loads(match.group(0) if match else raw)
+            variants = [str(value).strip() for value in payload.get('variants', []) if str(value).strip()]
+            return variants[:count] or [raw]
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return [raw]
+
 
 ollama = OllamaProvider()
 

@@ -17,7 +17,7 @@ def test_safety_classifier(text,risk):
     assert result['manual']==(risk=='HIGH')
 
 
-@pytest.mark.parametrize('text',['Это нормально, притрутся.','Вы неправильно установили.','У вас плохие диски.','Это точно не брак.','Продолжайте ездить — пройдёт.','Напишите продавцу через Wildberries.','Свяжитесь с продавцом.','VIN JTMAB3FV10D123456 подходит'])
+@pytest.mark.parametrize('text',['Это нормально, притрутся.','Вы неправильно установили.','У вас плохие диски.','Это точно не брак.','Продолжайте ездить — пройдёт.','Напишите продавцу через Wildberries.','Свяжитесь с продавцом.','Важно не повторять предыдущий черновик previous_draft.','VIN JTMAB3FV10D123456 подходит'])
 def test_reply_validation(text):
     with pytest.raises(ValueError): validate_reply(text)
 
@@ -100,7 +100,7 @@ def test_new_review_falls_back_without_error_when_ai_is_unavailable(client, monk
     assert first.status_code == second.status_code == 200
     assert first.json()['model'] == second.json()['model'] == 'safety-fallback-1.2'
     assert second.json()['text'] != first.json()['text']
-    assert len(calls) == 10
+    assert len(calls) == 2
 
 
 def test_rejected_model_reply_is_replaced_by_new_safe_model_reply(client, monkeypatch):
@@ -129,6 +129,32 @@ def test_rejected_model_reply_is_replaced_by_new_safe_model_reply(client, monkey
     assert draft['quality']['candidates_evaluated'] == 3
     assert 'напишите продавцу' not in draft['text'].lower()
     assert validate_reply(draft['text']) == draft['text']
+
+
+def test_best_of_three_is_generated_in_one_model_request(client, monkeypatch):
+    from app.integrations import ollama
+    variants = [
+        'Здравствуйте! Спасибо за честный отзыв о качестве товара. Нам искренне жаль, что покупка вас разочаровала. Мы внимательно учтём ваше замечание при работе с карточкой. Благодарим за обратную связь.',
+        'Добрый день! Благодарим, что оценили качество покупки и рассказали о недостатке. Сожалеем, что товар не оправдал ожиданий. Ваш отзыв поможет точнее представить особенности товара другим покупателям.',
+        'Здравствуйте! Нам очень жаль, что качество товара оставило негативное впечатление. Спасибо, что подробно сообщили о своём опыте. Эта обратная связь будет учтена при дальнейшем улучшении информации о продукции.',
+    ]
+    calls = []
+    async def local(messages, schema=None):
+        calls.append(messages)
+        return json.dumps({'variants': variants}, ensure_ascii=False)
+    monkeypatch.setattr(ollama, 'chat', local)
+    with Session() as db:
+        db.add(Product(id='best-three-product', name='Универсальный товар', brand='KANGAROO', category='Автотовары'))
+        db.add(Review(id='best-three-review', wb_review_id='best-three-review', product_id='best-three-product', rating=1, text='Качество товара разочаровало', risk='NORMAL'))
+        db.commit()
+    result = client.post('/reviews/best-three-review/draft', json={'instruction': 'Создай три разных ответа и выбери лучший.'})
+    assert result.status_code == 200
+    draft = result.json()
+    assert len(calls) == 1
+    assert draft['quality']['candidates_evaluated'] == 3
+    assert draft['quality']['score'] > 95
+    assert draft['text'] in variants
+    assert 'previous_draft' not in draft['text']
 
 
 def test_safe_fallback_always_passes_reply_validation():

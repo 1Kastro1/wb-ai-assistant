@@ -3,3 +3,4 @@
 .job-progress{height:8px;background:#efedf5;border-radius:6px;overflow:hidden}.job-progress i{display:block;height:100%;background:var(--purple);transition:width .25s}.context-stat span small{display:block}
 
 .sidebar{overflow-y:auto}
+.generation-analysis{margin:10px 0;padding:10px 12px;border:1px solid #e6e1f2;border-radius:8px;background:#f7f5fc}.generation-analysis summary{cursor:pointer;color:#66558f;font-size:11px;font-weight:600}.generation-analysis p{margin:8px 0 0}

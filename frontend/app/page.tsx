@@ -162,8 +162,7 @@ function ReviewCard({review:r,checked,toggle,busy,generating,generationError,gen
     <p className="review-text">{r.text}</p>
     {r.is_answered ? <blockquote>{r.existing_answer}</blockquote> : r.draft ? <div className="draft">
       <label>Черновик ответа · {r.draft.model} {q.intent_label&&<span className="pill">{q.intent_label}</span>} {q.score!==undefined&&<span className={'pill '+(q.passed?'green':'amber')}>качество {q.score}/100</span>}<textarea value={text} onChange={e => setText(e.target.value)}/></label>
-      {q.selection_note&&<p className="muted">{q.selection_note}. Проверено вариантов: {q.candidates_evaluated || 1}.</p>}
-      {qualityDetails.length>0&&<div className="quality-grid">{qualityDetails.map((item:Row,index:number)=><span className="quality-detail" key={index}><small>{item.label}</small><b>{item.score}/{item.max}</b></span>)}</div>}
+      {(q.analysis_summary||q.selection_note||qualityDetails.length>0)&&<details className="generation-analysis"><summary>Анализ генерации</summary>{q.analysis_summary&&<p>{q.analysis_summary}</p>}{q.selection_note&&<p className="muted">{q.selection_note}. Проверено вариантов: {q.candidates_evaluated || 1}.</p>}{qualityDetails.length>0&&<div className="quality-grid">{qualityDetails.map((item:Row,index:number)=><span className="quality-detail" key={index}><small>{item.label}</small><b>{item.score}/{item.max}</b></span>)}</div>}</details>}
       {q.issues?.length>0&&<p className="orange">Проверьте: {q.issues.join('; ')}</p>}
       {generationError&&<p className="orange">{generationError}</p>}
       <div className="draft-actions"><button disabled={busy || text===r.draft.text} onClick={() => save(text,r.draft.revision)}>Сохранить правку</button><button className="primary" disabled={busy} onClick={()=>generate()}>{generating?'Анализирую варианты…':'Сгенерировать лучше'}</button></div>

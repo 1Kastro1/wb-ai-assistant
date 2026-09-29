@@ -55,6 +55,13 @@ def validate_reply(text):
         raise ValueError('Полный VIN запрещён в публичном ответе')
     if any(x in text.lower() for x in FORBIDDEN):
         raise ValueError('Ответ содержит запрещённое обещание или небезопасное утверждение')
+    service_markers = (
+        'previous_draft', 'review_data', 'detected_intent', 'owner_style_profile',
+        'важно не повторять предыдущий', 'нужно сделать ответ', 'ответ должен быть содержательным',
+        'вот мой анализ', 'служебная инструкция', '/no_think',
+    )
+    if any(marker in text.lower() for marker in service_markers):
+        raise ValueError('Ответ содержит служебные рассуждения вместо текста покупателю')
     if re.search(r'совместимость\s+подтверждена|(?:точно|полностью|гарантированно)\s+под(?:ходит|ойдут)|подходит\s+(?:к|для|на)\s+ваш', text, re.I):
         raise ValueError('Подтверждать применяемость можно только по проверенному результату каталога')
     return text.strip()

@@ -431,9 +431,19 @@ async def generate_draft(db, review_id, instruction=''):
         valid_candidates = []
         attempt_messages = messages
         last_candidate = ''
+        model_unavailable = False
+        try:
+            seed_candidates = await ollama.reply_variants(messages, MIN_AI_CANDIDATES)
+        except Exception:
+            # A connection failure should immediately use the safe local path instead
+            # of holding the browser open for several identical network retries.
+            seed_candidates = []
+            model_unavailable = True
         for attempt in range(MAX_GENERATION_ATTEMPTS):
+            if model_unavailable:
+                break
             try:
-                last_candidate = await ollama.chat(attempt_messages)
+                last_candidate = seed_candidates[attempt] if attempt < len(seed_candidates) else await ollama.chat(attempt_messages)
                 checked_candidate = validate_reply(mask_vin(last_candidate))
                 candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates])
                 repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
@@ -485,6 +495,7 @@ async def generate_draft(db, review_id, instruction=''):
     quality = assess_reply(review, product, reply)
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
+    quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы.'
     # Generation may have awaited Ollama while another request published the review.
     db.refresh(review)
     if review.is_answered or review.status == 'publishing':
