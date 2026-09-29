@@ -371,15 +371,20 @@ async def generate_draft(db, review_id, instruction=''):
     product = db.get(Product, review.product_id)
     memories = [m.text for m in db.scalars(select(Memory).where(Memory.enabled == True)) if m.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
     generation_revision = initial_draft.revision if initial_draft else 0
-    reply = rule_reply(review, product, generation_revision)
+    rule_candidates = []
+    for offset in range(3):
+        candidate = rule_reply(review, product, generation_revision + offset)
+        if candidate and candidate not in rule_candidates:
+            rule_candidates.append(validate_reply(mask_vin(candidate)))
+    reply = max(rule_candidates, key=lambda value: assess_reply(review, product, value)['score']) if rule_candidates else None
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
     structured_intents = ('WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM')
     forced_model = None
     comparison_texts = []
-    candidates_evaluated = 1
-    selection_note = 'Использован проверенный сценарий ответа'
+    candidates_evaluated = max(1, len(rule_candidates))
+    selection_note = f'Выбран лучший из {len(rule_candidates)} проверенных вариантов' if len(rule_candidates) > 1 else 'Использован проверенный сценарий ответа'
     if instruction.strip() and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents:
         # Directed improvements should reach the model even when a local rule exists.
         reply = None
