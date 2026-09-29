@@ -13,6 +13,25 @@ from .config import MODEL, REAL_PUBLISH
 
 
 WORDS = re.compile(r'[а-яё0-9]{4,}', re.I)
+MIN_DRAFT_QUALITY = 96
+
+
+def _addresses_review_topic(review_text, reply_text):
+    """Recognise semantic topic matches that do not share the same word ending."""
+    review_value = review_text.lower().replace('ё', 'е')
+    reply_value = reply_text.lower().replace('ё', 'е')
+    topic_groups = (
+        (('воня', 'запах', 'аромат', 'пах'), ('воня', 'запах', 'аромат', 'пах')),
+        (('скрип', 'свист', 'шум'), ('скрип', 'свист', 'шум')),
+        (('тормоз', 'педал', 'скрежет'), ('тормоз', 'педал', 'скрежет', 'диагност')),
+        (('сломан', 'разбит', 'поврежд', 'помят'), ('сломан', 'разбит', 'поврежд', 'помят')),
+        (('не подош', 'не подходит', 'несовмест'), ('не подош', 'не подходит', 'совместим')),
+    )
+    return any(
+        any(marker in review_value for marker in review_markers)
+        and any(marker in reply_value for marker in reply_markers)
+        for review_markers, reply_markers in topic_groups
+    )
 
 
 def owner_style_profile(db, account_id='owner'):
@@ -166,9 +185,9 @@ def assess_reply(review, product, reply):
     elif review.rating <= 3:
         issues.append('признать проблему и проявить эмпатию')
     else:
-        score += 8
+        score += 10
     overlap = review_words & reply_words
-    if overlap or len(review_words) <= 1:
+    if overlap or len(review_words) <= 1 or _addresses_review_topic(review.text, reply):
         score += 12
     else:
         issues.append('ответить именно на содержание отзыва')
@@ -191,7 +210,7 @@ def assess_reply(review, product, reply):
     if reply.strip().lower() in ('спасибо за отзыв!', 'спасибо за отзыв.', 'спасибо!'):
         score = min(score, 35)
         issues.append('слишком общий ответ')
-    return {'score': min(100, score), 'passed': score >= 70 and not issues, 'issues': list(dict.fromkeys(issues)), 'checked_at': now()}
+    return {'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues, 'issues': list(dict.fromkeys(issues)), 'checked_at': now()}
 
 
 def learn_from_edit(db, draft, old, new):
@@ -301,13 +320,18 @@ async def generate_draft(db, review_id, instruction=''):
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
     memories = [m.text for m in db.scalars(select(Memory).where(Memory.enabled == True)) if m.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
-    reply = rule_reply(review, product)
+    generation_revision = initial_draft.revision if initial_draft else 0
+    reply = rule_reply(review, product, generation_revision)
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
     structured_intents = ('WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM')
     forced_model = None
-    if initial_draft and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents:
+    if initial_draft and reply and reply.strip() != initial_draft.text.strip():
+        # Deterministic safety replies rotate too, so regeneration remains useful
+        # even while the local model is unavailable.
+        forced_model = 'safety-rules-1.1'
+    elif initial_draft and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents:
         issues = (previous_quality or {}).get('issues') or ['сделать ответ заметно лучше и содержательнее']
         instruction = (instruction + ' ' if instruction else '') + 'Это повторная генерация. Не повторяй прежний черновик. Исправь замечания: ' + '; '.join(issues) + '.'
         if not review.text.strip() and review.rating >= 4:
@@ -347,14 +371,23 @@ async def generate_draft(db, review_id, instruction=''):
             {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
             {'role': 'user', 'content': json.dumps({'review_data': review.text, 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'web_instruction_sources': web_sources, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
         reply = await ollama.chat(messages)
-        first_quality = assess_reply(review, product, reply)
-        if first_quality['score'] < 70:
+        best_reply, best_quality = reply, assess_reply(review, product, reply)
+        for _ in range(2):
+            repeated = bool(initial_draft and best_reply.strip() == initial_draft.text.strip())
+            if best_quality['score'] >= MIN_DRAFT_QUALITY and not repeated:
+                break
+            issues = best_quality['issues'] or ['сделать ответ конкретнее и содержательнее']
+            if repeated:
+                issues = [*issues, 'написать новый текст, заметно отличающийся от предыдущего черновика']
             improved = await ollama.chat(messages + [
-                {'role': 'assistant', 'content': reply},
-                {'role': 'user', 'content': 'Перепиши ответ. Исправь замечания автоматической проверки: ' + '; '.join(first_quality['issues']) + '. Верни только новый ответ.'},
+                {'role': 'assistant', 'content': best_reply},
+                {'role': 'user', 'content': f'Перепиши ответ так, чтобы проверка качества была не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues) + '. Верни только новый ответ.'},
             ])
-            if assess_reply(review, product, improved)['score'] >= first_quality['score']:
-                reply = improved
+            improved_quality = assess_reply(review, product, improved)
+            improved_repeated = bool(initial_draft and improved.strip() == initial_draft.text.strip())
+            if not improved_repeated and improved_quality['score'] >= best_quality['score']:
+                best_reply, best_quality = improved, improved_quality
+        reply = best_reply
         if initial_draft and reply.strip() == initial_draft.text.strip() and not review.text.strip() and review.rating >= 4:
             reply = f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали {product.name}. Надеемся, товар будет радовать вас при использовании. Будем рады видеть вас снова!'
     # Explicit forbidden-word preferences can be enforced even for safety templates.

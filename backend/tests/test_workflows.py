@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.db import Session, Review, Draft, Memory, Action, Product, Account
 from app.safety import classify, review_intent, validate_reply, mask_vin, rule_reply, safe_fallback_reply
 from app.integrations import guard, wb, web_research
-from app.services import analytics, has_usage_instruction, needs_usage_instruction, remember_web_instruction_sources, cached_web_instruction_sources
+from app.services import analytics, assess_reply, has_usage_instruction, needs_usage_instruction, remember_web_instruction_sources, cached_web_instruction_sources
 from app.security import encrypt_secret
 
 
@@ -34,7 +34,22 @@ def test_fragrance_complaint_uses_safe_local_template():
     product = SimpleNamespace(brand='Kogado', name='Ароматизатор в машину', category='Автомобильные ароматизаторы')
     reply = rule_reply(review, product)
     assert 'аромат вам не понравился' in reply
+    assert assess_reply(review, product, reply)['score'] > 95
     assert validate_reply(reply) == reply
+
+
+def test_fragrance_regeneration_rotates_high_quality_reply(client):
+    with Session() as db:
+        db.add(Product(id='fragrance-product', name='Ароматизатор в машину парфюм для авто', brand='Kogado', category='Автомобильные ароматизаторы'))
+        db.add(Review(id='fragrance-review', wb_review_id='fragrance-review', product_id='fragrance-product', rating=1, text='Воняет сцаками в крыжовнике', risk='NORMAL'))
+        db.commit()
+    first = client.post('/reviews/fragrance-review/draft', json={}).json()
+    second = client.post('/reviews/fragrance-review/draft', json={}).json()
+    assert first['quality']['score'] > 95
+    assert second['quality']['score'] > 95
+    assert second['quality']['passed'] is True
+    assert second['text'] != first['text']
+    assert second['model'] == 'safety-rules-1.1'
 
 
 def test_safe_fallback_always_passes_reply_validation():
@@ -315,7 +330,7 @@ def test_regenerate_improves_noncritical_rule_template(client, monkeypatch):
     second = client.post('/reviews/empty-review/draft', json={}).json()
     assert second['text'] != first['text']
     assert second['model'] == 'positive-rules-1.1'
-    assert second['quality']['score'] >= 90
+    assert second['quality']['score'] > 95
     third = client.post('/reviews/empty-review/draft', json={}).json()
     assert third['text'] != second['text']
     assert not calls
