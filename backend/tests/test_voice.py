@@ -29,3 +29,16 @@ def test_voice_stt_returns_text(client,monkeypatch):
     response=client.post('/voice/stt',files={'audio':('voice.wav',buffer.getvalue(),'audio/wav')})
     assert response.status_code==200
     assert response.json()=={'text':'покажи отзывы'}
+
+
+def test_voice_wake_uses_limited_grammar(client,monkeypatch):
+    from app import voice
+    received=[]
+    monkeypatch.setattr(voice,'transcribe',lambda raw,grammar: received.append(grammar) or 'брат')
+    buffer=BytesIO()
+    with wave.open(buffer,'wb') as output:
+        output.setnchannels(1);output.setsampwidth(2);output.setframerate(16000);output.writeframes(b'\0\0'*100)
+    response=client.post('/voice/wake',data={'wake_word':'Брат'},files={'audio':('wake.wav',buffer.getvalue(),'audio/wav')})
+    assert response.status_code==200
+    assert response.json()=={'text':'брат'}
+    assert received==[['брат','[unk]']]

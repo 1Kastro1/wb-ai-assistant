@@ -117,7 +117,7 @@ export default function App() {
       const chunks=monitor.chunks.splice(0);monitor.speechStarted=false;monitor.preRoll=[];if(chunks.reduce((sum:number,item:Float32Array)=>sum+item.length,0)<context.sampleRate/3)return;
       monitor.processing=true;
       try{
-        const form=new FormData();form.append('audio',wavFromAudio(chunks,context.sampleRate),'wake.wav');const result=await api('/voice/stt','POST',form);const heard=String(result.text||'').trim();
+        const form=new FormData();form.append('audio',wavFromAudio(chunks,context.sampleRate),'wake.wav');if(monitor.phase==='wake')form.append('wake_word',String(voicePrefsRef.current.wakeWord||'брат'));const result=await api(monitor.phase==='wake'?'/voice/wake':'/voice/stt','POST',form);const heard=String(result.text||'').trim();
         const wakeWord=String(voicePrefsRef.current.wakeWord||'брат').toLowerCase();const normalized=heard.toLowerCase().replace(/[^а-яёa-z0-9\s-]/g,' ').replace(/\s+/g,' ').trim();
         if(monitor.phase==='wake'&&(normalized===wakeWord||normalized.startsWith(wakeWord+' ')||normalized.endsWith(' '+wakeWord))){
           const greetings=['Слушаю вас','Да, я слушаю','Я здесь. Говорите'];monitor.phase='speaking';monitor.endRequested=false;setWakeAwake(true);setNotice('Слушаю вас…');await speakText(greetings[Math.floor(Math.random()*greetings.length)]);monitor.chunks.splice(0);if(monitor.endRequested){monitor.phase='wake';setWakeAwake(false);return}monitor.phase='command';monitor.listenUntil=Date.now()+15000;

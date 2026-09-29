@@ -112,7 +112,7 @@ def _load_stt():
     return _stt_model
 
 
-def transcribe(raw: bytes) -> str:
+def transcribe(raw: bytes, grammar: list[str] | None = None) -> str:
     if len(raw) > 12 * 1024 * 1024:
         raise ValueError('Запись слишком большая')
     try:
@@ -124,7 +124,7 @@ def transcribe(raw: bytes) -> str:
             raise ValueError('Нужна запись WAV, моно, PCM 16 бит')
         from vosk import KaldiRecognizer
         with _stt_lock:
-            recognizer = KaldiRecognizer(_load_stt(), wav.getframerate())
+            recognizer = KaldiRecognizer(_load_stt(), wav.getframerate(), json.dumps(grammar, ensure_ascii=False)) if grammar else KaldiRecognizer(_load_stt(), wav.getframerate())
             while data := wav.readframes(4000):
                 recognizer.AcceptWaveform(data)
             text = json.loads(recognizer.FinalResult()).get('text', '').strip()

@@ -957,6 +957,18 @@ async def voice_stt(auth: AUTH, audio: UploadFile = File(...)):
     return {'text': text_value}
 
 
+@app.post('/voice/wake')
+async def voice_wake(auth: AUTH, wake_word: str = Form(...), audio: UploadFile = File(...)):
+    word = ''.join(character for character in wake_word.lower().strip() if character.isalnum() or character in (' ', '-'))[:30]
+    if not word:
+        raise ValueError('Укажите ключевое слово')
+    if audio.content_type not in ('audio/wav', 'audio/x-wav', 'application/octet-stream'):
+        raise ValueError('Поддерживается запись WAV')
+    raw = await audio.read(12 * 1024 * 1024 + 1)
+    text_value = await asyncio.to_thread(voice.transcribe, raw, [word, '[unk]'])
+    return {'text': text_value}
+
+
 @app.get('/conversations')
 def conversations(auth: AUTH, db: DB):
     return [public(c) for c in db.scalars(select(Conversation))]
