@@ -51,6 +51,17 @@ def test_quality_report_rechecks_old_scores(client, seeded):
         assert quality['score'] < 99
 
 
+def test_owner_feedback_is_saved_for_learning(client, seeded):
+    with Session() as db:
+        db.add(Draft(id='feedback-draft', review_id='r1', text='Подробный ответ покупателю.', original='Подробный ответ покупателю.'))
+        db.commit()
+    response = client.post('/drafts/feedback-draft/feedback', json={'rating':'negative','reasons':['слишком общий']})
+    assert response.status_code == 200
+    with Session() as db:
+        assert db.get(Draft, 'feedback-draft').quality['owner_feedback']['rating'] == 'negative'
+        assert setting(db, 'reply_feedback:owner')['reasons']['слишком общий'] == 1
+
+
 def test_system_status_and_auto_reply_window(client, seeded, monkeypatch):
     async def no_queue():
         return None

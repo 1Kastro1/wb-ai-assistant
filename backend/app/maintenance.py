@@ -130,6 +130,9 @@ def backup():
         target.execute('VACUUM')
         if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Проверка резервной копии не пройдена')
+    backups = sorted((DATA / 'backups').glob('*.db'), key=lambda path: path.stat().st_mtime, reverse=True)
+    for obsolete in backups[10:]:
+        obsolete.unlink(missing_ok=True)
     return destination.name
 
 

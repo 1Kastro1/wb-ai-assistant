@@ -721,6 +721,7 @@ def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset:
 class Fact(Payload):
     text: str = Field(min_length=2, max_length=2000)
     source: str = Field(min_length=2, max_length=1000)
+    kind: str = Field(default='instruction', pattern='^(instruction|restriction|faq|feature)$')
 
 
 @app.post('/products/{pid}/facts')
@@ -762,6 +763,31 @@ def draft_edit(did: str, body: DraftEdit, auth: AUTH, db: DB):
     return edit_draft(db, did, body.text, body.revision)
 
 
+class DraftFeedback(Payload):
+    rating: str = Field(pattern='^(positive|negative)$')
+    reasons: list[str] = Field(default_factory=list, max_length=5)
+
+
+@app.post('/drafts/{did}/feedback')
+def draft_feedback(did: str, body: DraftFeedback, auth: AUTH, db: DB):
+    draft = db.get(Draft, did)
+    if not draft:
+        raise HTTPException(404, 'Черновик не найден')
+    reasons = [reason.strip()[:100] for reason in body.reasons if reason.strip()][:5]
+    quality = dict(draft.quality or {})
+    quality['owner_feedback'] = {'rating': body.rating, 'reasons': reasons, 'at': now()}
+    draft.quality = quality
+    review = db.get(Review, draft.review_id)
+    key = 'reply_feedback:' + review.wb_account_id
+    summary = setting(db, key, {'positive': 0, 'negative': 0, 'reasons': {}})
+    summary[body.rating] = int(summary.get(body.rating, 0)) + 1
+    for reason in reasons:
+        summary.setdefault('reasons', {})[reason] = int(summary['reasons'].get(reason, 0)) + 1
+    set_setting(db, key, summary)
+    db.commit()
+    return {'ok': True, 'feedback': quality['owner_feedback']}
+
+
 class PublishInput(Payload):
     review_ids: list[str] = Field(min_length=1, max_length=100)
 
@@ -775,6 +801,26 @@ def publish_proposal(body: PublishInput, auth: AUTH, db: DB):
 def actions(auth: AUTH, db: DB):
     active_statuses = ['pending', 'executing', 'needs_review']
     return [public(a) for a in db.scalars(select(Action).where(Action.status.in_(active_statuses)).order_by(Action.created_at.desc()).limit(100))]
+
+
+@app.post('/publications/reconcile')
+async def reconcile_publications(auth: AUTH, db: DB):
+    active = setting(db, 'active_store', 'owner')
+    wb_token(db, active)
+    await wb.sync_reviews(db, active)
+    checked, confirmed, mismatched = 0, 0, 0
+    for publication in db.scalars(select(Publication).where(Publication.status.in_(['uncertain', 'in_flight']))):
+        review = db.get(Review, publication.review_id)
+        draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
+        checked += 1
+        if review.is_answered and draft and review.existing_answer.strip() == draft.text.strip():
+            publication.status, review.status = 'published', 'published'
+            confirmed += 1
+        elif review.is_answered:
+            publication.status, review.status = 'mismatch', 'manual_review'
+            mismatched += 1
+    db.commit()
+    return {'checked': checked, 'confirmed': confirmed, 'mismatched': mismatched}
 
 
 @app.delete('/actions/{aid}')

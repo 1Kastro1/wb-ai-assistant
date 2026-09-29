@@ -446,6 +446,7 @@ async def generate_draft(db, review_id, instruction=''):
         facts = [f for f in product.facts if f.get('verification_status') == 'VERIFIED']
         style = owner_style_profile(db, review.wb_account_id)
         style['learned_from_edits'] = setting(db, 'learned_edit_preferences:' + review.wb_account_id, {})
+        style['owner_feedback'] = setting(db, 'reply_feedback:' + review.wb_account_id, {})
         examples = previous_answer_examples(db, review, product)
         comparison_texts = ([initial_draft.text] if initial_draft else []) + [example.get('answer', '') for example in examples]
         web_sources = []
