@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 from types import SimpleNamespace
 from sqlalchemy import select
 from app.db import Session, Product, Review, Draft, Job, Account, Action, setting, set_setting
@@ -13,6 +14,29 @@ def test_quality_gate_understands_wrong_item():
     useful = assess_reply(review, product, 'Здравствуйте! Нам очень жаль, что пришёл не тот товар. Вы можете оформить возврат товара через Wildberries. Спасибо, что сообщили о ситуации.')
     assert weak['score'] < 70
     assert useful['score'] >= 70
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('Воняет, очень неприятный запах', 'ODOR_COMPLAINT'),
+    ('Запаха почти нет', 'WEAK_SCENT'),
+    ('Товар не соответствует описанию', 'DESCRIPTION_MISMATCH'),
+    ('Коробка помята и упаковка вскрыта', 'PACKAGING_ISSUE'),
+    ('Как пользоваться этим средством?', 'USAGE_QUESTION'),
+    ('Отличный товар, рекомендую', 'POSITIVE_EXPERIENCE'),
+])
+def test_extended_review_intents(text, expected):
+    from app.safety import review_intent
+    assert review_intent(text) == expected
+
+
+def test_quality_includes_explainable_breakdown():
+    review = SimpleNamespace(text='Запах оказался неприятным', rating=1)
+    product = SimpleNamespace(name='Очиститель')
+    result = assess_reply(review, product, 'Здравствуйте! Спасибо за честный отзыв. Нам искренне жаль, что запах средства показался неприятным. Мы обязательно учтём ваше замечание об аромате товара. Благодарим за обратную связь.')
+    assert result['intent'] == 'ODOR_COMPLAINT'
+    assert result['intent_label'] == 'неприятный запах'
+    assert result['breakdown']['safety']['score'] == 40
+    assert result['breakdown']['relevance']['score'] == 12
 
 
 def test_edit_is_learned_and_rescored(client, seeded):

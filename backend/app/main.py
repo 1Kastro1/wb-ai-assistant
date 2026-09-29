@@ -265,7 +265,7 @@ class ScheduleInput(Payload):
     drafts_enabled: bool = False
     drafts_hours: int = Field(default=6, ge=1, le=168)
     auto_propose: bool = False
-    min_quality: int = Field(default=90, ge=70, le=100)
+    min_quality: int = Field(default=96, ge=70, le=100)
     max_proposals: int = Field(default=100, ge=1, le=100)
 
 
@@ -329,7 +329,7 @@ def activate_store(store_id: str, auth: AUTH, db: DB):
 
 @app.get('/settings/schedule')
 def schedule_get(auth: AUTH, db: DB):
-    defaults = {'enabled': False, 'reviews_hours': 3, 'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False, 'min_quality': 90, 'max_proposals': 100}
+    defaults = {'enabled': False, 'reviews_hours': 3, 'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False, 'min_quality': 96, 'max_proposals': 100}
     return {**defaults, **setting(db, 'automation_schedule', {})}
 
 

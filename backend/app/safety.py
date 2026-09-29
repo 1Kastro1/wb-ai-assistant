@@ -12,12 +12,26 @@ def review_intent(text):
         return 'WRONG_ITEM'
     if any(x in value for x in ('нет детал', 'не хватает', 'неполная комплектац', 'не доложили')):
         return 'MISSING_PARTS'
+    if any(x in value for x in ('упаковка поврежд', 'упаковка помят', 'коробка помят', 'плохо упакован', 'упаковка вскрыт')):
+        return 'PACKAGING_ISSUE'
     if any(x in value for x in ('сломан', 'разбит', 'поврежден', 'помят')):
         return 'DAMAGED_ITEM'
     if any(x in value for x in ('не подошел', 'не подходит', 'несовместим')):
         return 'FITMENT_PROBLEM'
     if any(x in value for x in ('не увидел результата', 'не увидела результата', 'нет результата', 'не помог', 'не помогло', 'не очищает', 'не очистил', 'не отмыл', 'не отмыла')):
         return 'NO_RESULT'
+    if 'воняет' in value or (any(x in value for x in ('запах', 'аромат')) and any(x in value for x in ('неприят', 'резк', 'ужасн', 'не понрав'))):
+        return 'ODOR_COMPLAINT'
+    if any(x in value for x in ('запаха почти нет', 'слабый запах', 'слабый аромат', 'не пахнет', 'аромат не чувств')):
+        return 'WEAK_SCENT'
+    if any(x in value for x in ('не соответствует описанию', 'не как на фото', 'отличается от описания', 'характеристики не совпадают')):
+        return 'DESCRIPTION_MISMATCH'
+    if any(x in value for x in ('долго достав', 'задержали достав', 'проблема с достав', 'курьер', 'пункт выдачи')):
+        return 'DELIVERY_ISSUE'
+    if any(x in value for x in ('как пользоваться', 'как использовать', 'как применять', 'как наносить', 'способ применения', 'подскажите')) or '?' in value:
+        return 'USAGE_QUESTION'
+    if any(x in value for x in ('отличный', 'понравил', 'рекомендую', 'справился', 'хороший товар', 'все супер', 'всё супер')):
+        return 'POSITIVE_EXPERIENCE'
     return 'GENERAL'
 
 

@@ -15,6 +15,16 @@ from .config import MODEL, REAL_PUBLISH
 WORDS = re.compile(r'[а-яё0-9]{4,}', re.I)
 MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
+MIN_AI_CANDIDATES = 3
+INTENT_LABELS = {
+    'WRONG_ITEM': 'пришёл другой товар', 'MISSING_PARTS': 'неполная комплектация',
+    'DAMAGED_ITEM': 'повреждение товара', 'FITMENT_PROBLEM': 'товар не подошёл',
+    'NO_RESULT': 'нет ожидаемого результата', 'ODOR_COMPLAINT': 'неприятный запах',
+    'WEAK_SCENT': 'слабый аромат', 'DESCRIPTION_MISMATCH': 'несоответствие описанию',
+    'PACKAGING_ISSUE': 'проблема с упаковкой', 'DELIVERY_ISSUE': 'проблема с доставкой',
+    'USAGE_QUESTION': 'вопрос по применению', 'POSITIVE_EXPERIENCE': 'положительный опыт',
+    'GENERAL': 'общее впечатление',
+}
 
 
 def _addresses_review_topic(review_text, reply_text):
@@ -173,45 +183,84 @@ def assess_reply(review, product, reply):
     review_words = set(WORDS.findall(review.text.lower()))
     reply_words = set(WORDS.findall(lowered))
     issues, score = [], 40
+    breakdown = {
+        'safety': {'label': 'Безопасность', 'score': 40, 'max': 40},
+        'substance': {'label': 'Содержательность', 'score': 0, 'max': 15},
+        'courtesy': {'label': 'Дружелюбность', 'score': 0, 'max': 10},
+        'empathy': {'label': 'Эмпатия', 'score': 0, 'max': 10},
+        'relevance': {'label': 'Соответствие отзыву', 'score': 0, 'max': 12},
+        'resolution': {'label': 'Полезность решения', 'score': 0, 'max': 18},
+    }
     if 120 <= len(reply) <= 900:
         score += 15
+        breakdown['substance']['score'] = 15
     else:
         issues.append('ответ должен быть содержательным, без лишней длины')
     if any(x in lowered for x in ('спасибо', 'благодар')):
         score += 10
+        breakdown['courtesy']['score'] = 10
     else:
         issues.append('добавить благодарность')
     if review.rating <= 3 and any(x in lowered for x in ('жаль', 'извин', 'сожале')):
         score += 10
+        breakdown['empathy']['score'] = 10
     elif review.rating <= 3:
         issues.append('признать проблему и проявить эмпатию')
     else:
         score += 10
+        breakdown['empathy']['score'] = 10
     overlap = review_words & reply_words
     if overlap or len(review_words) <= 1 or _addresses_review_topic(review.text, reply):
         score += 12
+        breakdown['relevance']['score'] = 12
     else:
         issues.append('ответить именно на содержание отзыва')
     intent = review_intent(review.text)
     if intent == 'WRONG_ITEM':
         if 'возврат' in lowered or 'вернуть' in lowered:
             score += 18
+            breakdown['resolution']['score'] = 18
         else:
             issues.append('объяснить возможность возврата неверного товара')
     elif intent == 'NO_RESULT':
         if any(x in lowered for x in ('инструкц', 'нанес', 'обработ', 'примен')):
             score += 15
+            breakdown['resolution']['score'] = 15
         else:
             issues.append('дать безопасную инструкцию по применению')
     else:
         score += 10
+        breakdown['resolution']['score'] = 10
     if any(x in lowered for x in ('напишите продавцу', 'свяжитесь с продавцом', 'обратитесь к продавцу')):
         score = 0
+        breakdown['safety']['score'] = 0
         issues.append('не отправлять покупателя писать продавцу')
     if reply.strip().lower() in ('спасибо за отзыв!', 'спасибо за отзыв.', 'спасибо!'):
         score = min(score, 35)
         issues.append('слишком общий ответ')
-    return {'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues, 'issues': list(dict.fromkeys(issues)), 'checked_at': now()}
+    intent = review_intent(review.text)
+    return {
+        'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
+        'issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
+        'intent': intent, 'intent_label': INTENT_LABELS.get(intent, INTENT_LABELS['GENERAL']),
+        'checked_at': now(),
+    }
+
+
+def assess_candidate(review, product, reply, comparisons=()):
+    """Apply the normal quality gate and penalise near-copies of earlier answers."""
+    quality = assess_reply(review, product, reply)
+    similarities = [difflib.SequenceMatcher(None, reply.lower(), text.lower()).ratio() for text in comparisons if text]
+    similarity = max(similarities, default=0.0)
+    quality['breakdown']['originality'] = {
+        'label': 'Оригинальность', 'score': round((1 - similarity) * 100), 'max': 100,
+    }
+    quality['similarity'] = round(similarity, 3)
+    if similarity >= 0.86:
+        quality['score'] = max(0, quality['score'] - 20)
+        quality['issues'] = list(dict.fromkeys([*quality['issues'], 'не повторять предыдущие ответы']))
+        quality['passed'] = False
+    return quality
 
 
 def learn_from_edit(db, draft, old, new):
@@ -328,7 +377,13 @@ async def generate_draft(db, review_id, instruction=''):
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
     structured_intents = ('WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM')
     forced_model = None
-    if initial_draft and reply and reply.strip() != initial_draft.text.strip():
+    comparison_texts = []
+    candidates_evaluated = 1
+    selection_note = 'Использован проверенный сценарий ответа'
+    if instruction.strip() and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents:
+        # Directed improvements should reach the model even when a local rule exists.
+        reply = None
+    elif initial_draft and reply and reply.strip() != initial_draft.text.strip():
         # Deterministic safety replies rotate too, so regeneration remains useful
         # even while the local model is unavailable.
         forced_model = 'safety-rules-1.1'
@@ -357,6 +412,7 @@ async def generate_draft(db, review_id, instruction=''):
         style = owner_style_profile(db, review.wb_account_id)
         style['learned_from_edits'] = setting(db, 'learned_edit_preferences:' + review.wb_account_id, {})
         examples = previous_answer_examples(db, review, product)
+        comparison_texts = ([initial_draft.text] if initial_draft else []) + [example.get('answer', '') for example in examples]
         web_sources = []
         if not has_usage_instruction(facts) and needs_usage_instruction(review):
             web_sources = cached_web_instruction_sources(product)
@@ -372,21 +428,26 @@ async def generate_draft(db, review_id, instruction=''):
             {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
             {'role': 'user', 'content': json.dumps({'review_data': review.text, 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'web_instruction_sources': web_sources, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
         best_reply, best_quality = None, {'score': -1, 'issues': []}
+        valid_candidates = []
         attempt_messages = messages
         last_candidate = ''
         for attempt in range(MAX_GENERATION_ATTEMPTS):
             try:
                 last_candidate = await ollama.chat(attempt_messages)
                 checked_candidate = validate_reply(mask_vin(last_candidate))
-                candidate_quality = assess_reply(review, product, checked_candidate)
+                candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates])
                 repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
                 if not repeated and candidate_quality['score'] >= best_quality['score']:
                     best_reply, best_quality = checked_candidate, candidate_quality
+                if not repeated and candidate_quality.get('similarity', 0) < 0.86:
+                    valid_candidates.append(checked_candidate)
                 issues = list(candidate_quality['issues'])
                 if repeated:
                     issues.append('написать новый текст, заметно отличающийся от предыдущего черновика')
-                if candidate_quality['score'] >= MIN_DRAFT_QUALITY and not repeated:
+                if len(valid_candidates) >= MIN_AI_CANDIDATES and best_quality['score'] >= MIN_DRAFT_QUALITY:
                     break
+                if candidate_quality['score'] >= MIN_DRAFT_QUALITY:
+                    issues.append('создать ещё один самостоятельный вариант, чтобы выбрать лучший')
             except Exception as error:
                 # Ollama may be temporarily unavailable or may produce a reply that
                 # violates a hard rule. Retry with the concrete validation feedback.
@@ -398,10 +459,13 @@ async def generate_draft(db, review_id, instruction=''):
                 ]
         fallback = validate_reply(safe_fallback_reply(review, product, generation_revision))
         fallback_quality = assess_reply(review, product, fallback)
+        candidates_evaluated = len(valid_candidates)
         if best_reply is None or fallback_quality['score'] > best_quality['score']:
             reply, model = fallback, 'safety-fallback-1.2'
+            selection_note = 'Локальная модель не дала более качественный безопасный вариант; выбран контекстный ответ'
         else:
             reply = best_reply
+            selection_note = f'Выбран лучший из {max(1, len(valid_candidates))} безопасных вариантов'
         if initial_draft and reply.strip() == initial_draft.text.strip() and not review.text.strip() and review.rating >= 4:
             reply = f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали {product.name}. Надеемся, товар будет радовать вас при использовании. Будем рады видеть вас снова!'
     # Explicit forbidden-word preferences can be enforced even for safety templates.
@@ -419,6 +483,8 @@ async def generate_draft(db, review_id, instruction=''):
     if web_search_failed:
         model += ' · без интернет-источников'
     quality = assess_reply(review, product, reply)
+    quality['candidates_evaluated'] = candidates_evaluated
+    quality['selection_note'] = selection_note
     # Generation may have awaited Ollama while another request published the review.
     db.refresh(review)
     if review.is_answered or review.status == 'publishing':

@@ -108,6 +108,8 @@ def test_rejected_model_reply_is_replaced_by_new_safe_model_reply(client, monkey
     candidates = [
         'Здравствуйте! Напишите продавцу, и он обязательно решит проблему.',
         'Здравствуйте! Спасибо, что поделились отзывом о качестве товара. Нам искренне жаль, что качество покупки вас разочаровало. Мы внимательно учтём ваше замечание при работе с информацией о товаре. Благодарим за честную обратную связь.',
+        'Здравствуйте! Благодарим за честное мнение о качестве покупки. Нам очень жаль, что товар оставил у вас настолько негативное впечатление. Ваше замечание будет учтено при уточнении информации в карточке товара. Спасибо, что рассказали о своём опыте.',
+        'Здравствуйте! Спасибо за обратную связь о качестве товара. Искренне сожалеем, что покупка не оправдала ваших ожиданий. Мы внимательно относимся к таким оценкам и учтём содержание отзыва в дальнейшей работе. Благодарим за ваше мнение.',
     ]
     calls = []
     async def local(messages, schema=None):
@@ -121,9 +123,10 @@ def test_rejected_model_reply_is_replaced_by_new_safe_model_reply(client, monkey
     result = client.post('/reviews/safety-retry-review/draft', json={})
     assert result.status_code == 200
     draft = result.json()
-    assert len(calls) == 2
+    assert len(calls) == 4
     assert draft['model'] != 'safety-fallback-1.2'
     assert draft['quality']['score'] > 95
+    assert draft['quality']['candidates_evaluated'] == 3
     assert 'напишите продавцу' not in draft['text'].lower()
     assert validate_reply(draft['text']) == draft['text']
 
