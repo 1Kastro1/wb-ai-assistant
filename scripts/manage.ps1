@@ -95,7 +95,6 @@ try {
   try {
     $NextPath=Join-Path $ProjectRoot 'frontend\node_modules\next\dist\bin\next'
     $FrontendProcess = Start-Process -FilePath $NodeExe -ArgumentList ('"'+$NextPath+'" start -H 127.0.0.1 -p 3000') -WorkingDirectory (Join-Path $ProjectRoot 'frontend') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $RunRoot 'frontend.out.log') -RedirectStandardError (Join-Path $RunRoot 'frontend.err.log')
-    @(@{id=$BackendProcess.Id;start=$BackendProcess.StartTime.ToUniversalTime().Ticks.ToString()},@{id=$FrontendProcess.Id;start=$FrontendProcess.StartTime.ToUniversalTime().Ticks.ToString()}) | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding UTF8
     $healthy=$false
     for($attempt=0;$attempt -lt 30;$attempt++){
       try{$null=Invoke-RestMethod 'http://127.0.0.1:8000/health';$null=Invoke-WebRequest 'http://127.0.0.1:3000' -UseBasicParsing;$healthy=$true;break}catch{Start-Sleep -Seconds 1}
@@ -104,6 +103,13 @@ try {
     $BackendProcess.Refresh()
     $FrontendProcess.Refresh()
     if($BackendProcess.HasExited -or $FrontendProcess.HasExited){throw 'One application process exited during startup. Check local logs.'}
+    $managed=@()
+    foreach($port in @(8000,3000)){
+      $listener=Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop | Select-Object -First 1
+      $process=Get-Process -Id $listener.OwningProcess -ErrorAction Stop
+      $managed+=@{id=$process.Id;start=$process.StartTime.ToUniversalTime().Ticks.ToString()}
+    }
+    $managed | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding UTF8
     if($env:WB_NO_BROWSER -ne '1'){
       try {Start-Process 'http://127.0.0.1:3000'} catch {Write-Host 'Open http://127.0.0.1:3000 in your browser.'}
     }
