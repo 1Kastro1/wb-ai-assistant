@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from fastapi import FastAPI, Depends, Request, Response, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
@@ -40,7 +40,7 @@ async def lifespan(app):
         db.merge(StoreProfile(id='owner', name='Мой магазин'))
         legacy_hash = setting(db, 'password_hash')
         if legacy_hash and not db.get(User, 'owner'):
-            db.add(User(id='owner', username='owner', display_name='Владелец', password_hash=legacy_hash, role='owner', enabled=True))
+            db.add(User(id='owner', username='owner', display_name='Владелец', password_hash=legacy_hash, role='owner', position='Владелец', enabled=True, must_change_password=False))
         if not setting(db, 'active_store'):
             set_setting(db, 'active_store', 'owner')
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
@@ -119,9 +119,11 @@ def authorize(request: Request):
         user = db.get(User, session.user_id) if session else None
         if not session or session.expires < time.time() or not user or not user.enabled:
             raise HTTPException(401, 'Войдите в приложение')
+        if user.must_change_password and request.url.path not in ('/auth/session', '/auth/password', '/auth/logout'):
+            raise HTTPException(403, 'Сначала замените временный пароль')
         if request.method not in ('GET', 'HEAD') and not secrets.compare_digest(session.csrf, request.headers.get('x-csrf-token', '')):
             raise HTTPException(403, 'Неверный CSRF-токен')
-        return {'csrf': session.csrf, 'user_id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role}
+        return {'csrf': session.csrf, 'user_id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password}
 
 
 AUTH = Annotated[dict, Depends(authorize)]
@@ -166,7 +168,7 @@ def normalized_username(value):
 
 
 def session_response(user, csrf):
-    return {'csrf': csrf, 'user': {'id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role}}
+    return {'csrf': csrf, 'user': {'id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password}}
 
 
 def set_session_cookie(response, request, token):
@@ -229,7 +231,7 @@ async def auth_setup(body: SetupPassword, response: Response, request: Request, 
         username = normalized_username(body.username)
         password_hash = PasswordHasher().hash(body.password)
         set_setting(db, 'password_hash', password_hash)
-        user = User(id='owner', username=username, display_name=body.display_name.strip(), password_hash=password_hash, role='owner', enabled=True)
+        user = User(id='owner', username=username, display_name=body.display_name.strip(), password_hash=password_hash, role='owner', position='Владелец', enabled=True, must_change_password=False)
         db.add(user)
         token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
         db.add(LoginSession(id=digest(token), expires=int(time.time() + SESSION_SECONDS), csrf=csrf, user_id='owner'))
@@ -240,7 +242,7 @@ async def auth_setup(body: SetupPassword, response: Response, request: Request, 
 
 @app.get('/auth/session')
 def session(auth: AUTH):
-    return {'csrf': auth['csrf'], 'user': {'id': auth['user_id'], 'username': auth['username'], 'display_name': auth['display_name'], 'role': auth['role']}}
+    return {'csrf': auth['csrf'], 'user': {'id': auth['user_id'], 'username': auth['username'], 'display_name': auth['display_name'], 'role': auth['role'], 'position': auth['position'], 'must_change_password': auth['must_change_password']}}
 
 
 @app.post('/auth/logout')
@@ -255,10 +257,13 @@ class TeamUserInput(Payload):
     username: str = Field(min_length=3, max_length=64)
     display_name: str = Field(min_length=2, max_length=100)
     password: str = Field(min_length=12, max_length=1024)
+    position: Literal['Менеджер WB', 'Менеджер Ozon', 'Менеджер Яндекс Маркет'] = 'Менеджер WB'
 
 
 class TeamUserState(Payload):
-    enabled: bool
+    enabled: bool | None = None
+    display_name: str | None = Field(default=None, min_length=2, max_length=100)
+    position: Literal['Менеджер WB', 'Менеджер Ozon', 'Менеджер Яндекс Маркет'] | None = None
 
 
 class TeamPassword(Payload):
@@ -271,7 +276,7 @@ class OwnPassword(Payload):
 
 
 def public_user(user):
-    return {k: getattr(user, k) for k in ('id', 'username', 'display_name', 'role', 'enabled', 'created_at')}
+    return {k: getattr(user, k) for k in ('id', 'username', 'display_name', 'role', 'position', 'enabled', 'must_change_password', 'created_at')}
 
 
 @app.get('/users')
@@ -284,7 +289,7 @@ def users_create(body: TeamUserInput, auth: OWNER, db: DB):
     username = normalized_username(body.username)
     if db.scalar(select(User).where(User.username == username)):
         raise HTTPException(409, 'Пользователь с таким логином уже существует')
-    user = User(id=str(uuid4()), username=username, display_name=body.display_name.strip(), password_hash=PasswordHasher().hash(body.password), role='member', enabled=True)
+    user = User(id=str(uuid4()), username=username, display_name=body.display_name.strip(), password_hash=PasswordHasher().hash(body.password), role='member', position=body.position, enabled=True, must_change_password=True)
     db.add(user)
     db.commit()
     return public_user(user)
@@ -295,10 +300,15 @@ def users_state(user_id: str, body: TeamUserState, auth: OWNER, db: DB):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(404, 'Пользователь не найден')
-    if user.role == 'owner' and not body.enabled:
+    if user.role == 'owner' and body.enabled is False:
         raise ValueError('Учётную запись владельца нельзя отключить')
-    user.enabled = body.enabled
-    if not body.enabled:
+    if body.enabled is not None:
+        user.enabled = body.enabled
+    if body.display_name is not None:
+        user.display_name = body.display_name.strip()
+    if body.position is not None and user.role != 'owner':
+        user.position = body.position
+    if body.enabled is False:
         db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
     db.commit()
     return public_user(user)
@@ -310,6 +320,7 @@ def users_password(user_id: str, body: TeamPassword, auth: OWNER, db: DB):
     if not user:
         raise HTTPException(404, 'Пользователь не найден')
     user.password_hash = PasswordHasher().hash(body.password)
+    user.must_change_password = True
     db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
     db.commit()
     return {'ok': True}
@@ -323,6 +334,7 @@ def own_password(body: OwnPassword, auth: AUTH, db: DB):
     except (VerificationError, InvalidHashError):
         raise HTTPException(401, 'Текущий пароль указан неверно') from None
     user.password_hash = PasswordHasher().hash(body.new_password)
+    user.must_change_password = False
     if user.role == 'owner':
         set_setting(db, 'password_hash', user.password_hash)
     db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))

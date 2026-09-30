@@ -51,7 +51,9 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String)
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String, default='member')
+    position: Mapped[str] = mapped_column(String, default='Менеджер WB')
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[str] = mapped_column(String, default=now)
 
 
