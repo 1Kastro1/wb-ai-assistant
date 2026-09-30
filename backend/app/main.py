@@ -18,7 +18,7 @@ from argon2.exceptions import VerificationError, InvalidHashError
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select, delete, text, func
 from .db import *
-from .config import ORIGIN, DATA, DATABASE, MODEL, REAL_PUBLISH
+from .config import ORIGIN, ORIGINS, DATA, DATABASE, MODEL, REAL_PUBLISH
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, wb_token
 from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action
@@ -38,6 +38,9 @@ async def lifespan(app):
     command.upgrade(cfg, 'head')
     with Session() as db:
         db.merge(StoreProfile(id='owner', name='Мой магазин'))
+        legacy_hash = setting(db, 'password_hash')
+        if legacy_hash and not db.get(User, 'owner'):
+            db.add(User(id='owner', username='owner', display_name='Владелец', password_hash=legacy_hash, role='owner', enabled=True))
         if not setting(db, 'active_store'):
             set_setting(db, 'active_store', 'owner')
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
@@ -64,11 +67,11 @@ async def lifespan(app):
 app = FastAPI(title='WB AI Assistant', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.state.maintenance = False
 def allowed_origin(origin):
-    return origin == ORIGIN
+    return origin in ORIGINS
 
 
-app.add_middleware(CORSMiddleware, allow_origins=[ORIGIN], allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type', 'X-CSRF-Token'])
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
+app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type', 'X-CSRF-Token'])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver', 'assistant.blackmindworks.com'])
 
 
 @app.middleware('http')
@@ -113,14 +116,24 @@ def authorize(request: Request):
     cookie = request.cookies.get('wb_session', '')
     with Session() as db:
         session = db.get(LoginSession, digest(cookie)) if cookie else None
-        if not session or session.expires < time.time():
+        user = db.get(User, session.user_id) if session else None
+        if not session or session.expires < time.time() or not user or not user.enabled:
             raise HTTPException(401, 'Войдите в приложение')
         if request.method not in ('GET', 'HEAD') and not secrets.compare_digest(session.csrf, request.headers.get('x-csrf-token', '')):
             raise HTTPException(403, 'Неверный CSRF-токен')
-        return session.csrf
+        return {'csrf': session.csrf, 'user_id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role}
 
 
-AUTH = Annotated[str, Depends(authorize)]
+AUTH = Annotated[dict, Depends(authorize)]
+
+
+def owner(auth: AUTH):
+    if auth['role'] != 'owner':
+        raise HTTPException(403, 'Это действие доступно только владельцу')
+    return auth
+
+
+OWNER = Annotated[dict, Depends(owner)]
 
 
 class Payload(BaseModel):
@@ -128,17 +141,38 @@ class Payload(BaseModel):
 
 
 class Password(Payload):
+    username: str = Field(default='owner', min_length=3, max_length=64)
     password: str = Field(min_length=1, max_length=1024)
 
 
 class SetupPassword(Payload):
+    username: str = Field(default='owner', min_length=3, max_length=64)
+    display_name: str = Field(default='Владелец', min_length=2, max_length=100)
     password: str = Field(min_length=12, max_length=1024)
     confirmation: str = Field(min_length=12, max_length=1024)
 
 
-login_attempts = []
+login_attempts = {}
 login_lock = asyncio.Lock()
 setup_lock = asyncio.Lock()
+SESSION_SECONDS = 30 * 24 * 3600
+
+
+def normalized_username(value):
+    username = value.strip().lower()
+    if not username.replace('.', '').replace('_', '').replace('-', '').isalnum():
+        raise ValueError('Логин может содержать буквы, цифры, точку, дефис и подчёркивание')
+    return username
+
+
+def session_response(user, csrf):
+    return {'csrf': csrf, 'user': {'id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role}}
+
+
+def set_session_cookie(response, request, token):
+    forwarded = request.headers.get('x-forwarded-proto', '')
+    secure = forwarded == 'https' or request.headers.get('origin', '').startswith('https://')
+    response.set_cookie('wb_session', token, httponly=True, secure=secure, samesite='strict', max_age=SESSION_SECONDS, path='/')
 
 
 @app.get('/health')
@@ -151,29 +185,36 @@ def health(db: DB):
 async def login(body: Password, response: Response, request: Request, db: DB):
     async with login_lock:
         current = time.time()
-        login_attempts[:] = [t for t in login_attempts if current - t < 300]
-        if len(login_attempts) >= 5:
+        username = normalized_username(body.username)
+        attempts = [t for t in login_attempts.get(username, []) if current - t < 300]
+        login_attempts[username] = attempts
+        if len(attempts) >= 5:
             raise HTTPException(429, 'Слишком много попыток. Повторите через 5 минут')
-        value = setting(db, 'password_hash')
-        if not value:
-            raise HTTPException(409, 'Первый пароль создаётся локально: запустите setup.bat')
+        user = db.scalar(select(User).where(User.username == username))
+        if not user:
+            attempts.append(current)
+            if not db.scalar(select(func.count()).select_from(User)):
+                raise HTTPException(409, 'Сначала создайте аккаунт владельца')
+            raise HTTPException(401, 'Неверный логин или пароль')
+        if not user.enabled:
+            raise HTTPException(403, 'Учётная запись отключена владельцем')
         try:
-            PasswordHasher().verify(value, body.password)
+            PasswordHasher().verify(user.password_hash, body.password)
         except (VerificationError, InvalidHashError):
-            login_attempts.append(current)
+            attempts.append(current)
             raise HTTPException(401, 'Неверный пароль') from None
-        login_attempts.clear()
+        login_attempts.pop(username, None)
         token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
         db.execute(delete(LoginSession).where(LoginSession.expires < current))
-        db.add(LoginSession(id=digest(token), expires=int(current + 8 * 3600), csrf=csrf))
+        db.add(LoginSession(id=digest(token), expires=int(current + SESSION_SECONDS), csrf=csrf, user_id=user.id))
         db.commit()
-        response.set_cookie('wb_session', token, httponly=True, secure=request.headers.get('origin', '').startswith('https://'), samesite='strict', max_age=8 * 3600, path='/')
-        return {'csrf': csrf}
+        set_session_cookie(response, request, token)
+        return session_response(user, csrf)
 
 
 @app.get('/auth/status')
 def auth_status(db: DB):
-    return {'initialized': bool(setting(db, 'password_hash'))}
+    return {'initialized': bool(db.scalar(select(func.count()).select_from(User)) or setting(db, 'password_hash'))}
 
 
 @app.post('/auth/setup')
@@ -183,19 +224,23 @@ async def auth_setup(body: SetupPassword, response: Response, request: Request, 
     async with setup_lock:
         db.rollback()
         db.execute(text('BEGIN IMMEDIATE'))
-        if setting(db, 'password_hash'):
+        if db.scalar(select(func.count()).select_from(User)) or setting(db, 'password_hash'):
             raise HTTPException(409, 'Пароль владельца уже создан')
-        set_setting(db, 'password_hash', PasswordHasher().hash(body.password))
+        username = normalized_username(body.username)
+        password_hash = PasswordHasher().hash(body.password)
+        set_setting(db, 'password_hash', password_hash)
+        user = User(id='owner', username=username, display_name=body.display_name.strip(), password_hash=password_hash, role='owner', enabled=True)
+        db.add(user)
         token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
-        db.add(LoginSession(id=digest(token), expires=int(time.time() + 8 * 3600), csrf=csrf))
+        db.add(LoginSession(id=digest(token), expires=int(time.time() + SESSION_SECONDS), csrf=csrf, user_id='owner'))
         db.commit()
-        response.set_cookie('wb_session', token, httponly=True, secure=request.headers.get('origin', '').startswith('https://'), samesite='strict', max_age=8 * 3600, path='/')
-        return {'csrf': csrf}
+        set_session_cookie(response, request, token)
+        return session_response(user, csrf)
 
 
 @app.get('/auth/session')
 def session(auth: AUTH):
-    return {'csrf': auth}
+    return {'csrf': auth['csrf'], 'user': {'id': auth['user_id'], 'username': auth['username'], 'display_name': auth['display_name'], 'role': auth['role']}}
 
 
 @app.post('/auth/logout')
@@ -204,6 +249,85 @@ def logout(request: Request, response: Response, auth: AUTH, db: DB):
     db.commit()
     response.delete_cookie('wb_session')
     return {'ok': True}
+
+
+class TeamUserInput(Payload):
+    username: str = Field(min_length=3, max_length=64)
+    display_name: str = Field(min_length=2, max_length=100)
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class TeamUserState(Payload):
+    enabled: bool
+
+
+class TeamPassword(Payload):
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class OwnPassword(Payload):
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=12, max_length=1024)
+
+
+def public_user(user):
+    return {k: getattr(user, k) for k in ('id', 'username', 'display_name', 'role', 'enabled', 'created_at')}
+
+
+@app.get('/users')
+def users_list(auth: OWNER, db: DB):
+    return [public_user(user) for user in db.scalars(select(User).order_by(User.role.desc(), User.username)).all()]
+
+
+@app.post('/users')
+def users_create(body: TeamUserInput, auth: OWNER, db: DB):
+    username = normalized_username(body.username)
+    if db.scalar(select(User).where(User.username == username)):
+        raise HTTPException(409, 'Пользователь с таким логином уже существует')
+    user = User(id=str(uuid4()), username=username, display_name=body.display_name.strip(), password_hash=PasswordHasher().hash(body.password), role='member', enabled=True)
+    db.add(user)
+    db.commit()
+    return public_user(user)
+
+
+@app.patch('/users/{user_id}')
+def users_state(user_id: str, body: TeamUserState, auth: OWNER, db: DB):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, 'Пользователь не найден')
+    if user.role == 'owner' and not body.enabled:
+        raise ValueError('Учётную запись владельца нельзя отключить')
+    user.enabled = body.enabled
+    if not body.enabled:
+        db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    db.commit()
+    return public_user(user)
+
+
+@app.post('/users/{user_id}/password')
+def users_password(user_id: str, body: TeamPassword, auth: OWNER, db: DB):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, 'Пользователь не найден')
+    user.password_hash = PasswordHasher().hash(body.password)
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    db.commit()
+    return {'ok': True}
+
+
+@app.post('/auth/password')
+def own_password(body: OwnPassword, auth: AUTH, db: DB):
+    user = db.get(User, auth['user_id'])
+    try:
+        PasswordHasher().verify(user.password_hash, body.current_password)
+    except (VerificationError, InvalidHashError):
+        raise HTTPException(401, 'Текущий пароль указан неверно') from None
+    user.password_hash = PasswordHasher().hash(body.new_password)
+    if user.role == 'owner':
+        set_setting(db, 'password_hash', user.password_hash)
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    db.commit()
+    return {'ok': True, 'login_required': True}
 
 
 @app.get('/security')
@@ -293,7 +417,7 @@ class ScheduleInput(Payload):
 
 
 @app.post('/settings/wb-token')
-def token(body: Token, auth: AUTH, db: DB):
+def token(body: Token, auth: OWNER, db: DB):
     active = setting(db, 'active_store', 'owner')
     if db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == active)):
         raise ValueError('В этом профиле уже есть отзывы. Создайте новый профиль магазина для другого токена')
@@ -315,7 +439,7 @@ def search_settings(auth: AUTH, db: DB):
 
 
 @app.patch('/settings/search')
-def search_settings_update(body: SearchProviderInput, auth: AUTH, db: DB):
+def search_settings_update(body: SearchProviderInput, auth: OWNER, db: DB):
     if body.provider not in ('duckduckgo', 'tavily'):
         raise ValueError('Поддерживаются DuckDuckGo и Tavily')
     if body.provider == 'tavily' and not body.api_key and not db.get(Account, 'search:tavily'):
@@ -334,7 +458,7 @@ def stores(auth: AUTH, db: DB):
 
 
 @app.post('/stores')
-def create_store(body: StoreInput, auth: AUTH, db: DB):
+def create_store(body: StoreInput, auth: OWNER, db: DB):
     store = StoreProfile(id='store-' + uuid4().hex[:12], name=body.name.strip())
     db.add(store)
     db.commit()
@@ -342,7 +466,7 @@ def create_store(body: StoreInput, auth: AUTH, db: DB):
 
 
 @app.post('/stores/{store_id}/activate')
-def activate_store(store_id: str, auth: AUTH, db: DB):
+def activate_store(store_id: str, auth: OWNER, db: DB):
     if not db.get(StoreProfile, store_id):
         raise HTTPException(404)
     set_setting(db, 'active_store', store_id)

@@ -44,11 +44,23 @@ class StoreProfile(Base):
     created_at: Mapped[str] = mapped_column(String, default=now)
 
 
+class User(Base):
+    __tablename__ = 'users'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    username: Mapped[str] = mapped_column(String, unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String)
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String, default='member')
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[str] = mapped_column(String, default=now)
+
+
 class LoginSession(Base):
     __tablename__ = 'sessions'
     id: Mapped[str] = mapped_column(String, primary_key=True)
     expires: Mapped[int] = mapped_column(Integer)
     csrf: Mapped[str] = mapped_column(String)
+    user_id: Mapped[str] = mapped_column(String, default='owner')
 
 
 class Product(Base):

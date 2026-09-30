@@ -5,7 +5,7 @@ $env:NEXT_TELEMETRY_DISABLED='1'
 $env:PYTHONUTF8='1'
 if(Test-Path -LiteralPath (Join-Path $ProjectRoot '.env')) {
   foreach($line in Get-Content -LiteralPath (Join-Path $ProjectRoot '.env')) {
-    if($line -match '^(OLLAMA_MODEL|WB_DATA_DIR|WB_ENABLE_REAL_PUBLISH)=(.*)$') {
+    if($line -match '^(OLLAMA_MODEL|WB_DATA_DIR|WB_ENABLE_REAL_PUBLISH|WB_PUBLIC_ORIGIN)=(.*)$') {
       [Environment]::SetEnvironmentVariable($matches[1],$matches[2].Trim(),'Process')
     }
   }
@@ -26,6 +26,7 @@ else{$PackageManager=Join-Path $RuntimeRoot 'bin\fallback\pnpm.cmd';$UsePnpm=$tr
 $DataRoot = if($env:WB_DATA_DIR){$env:WB_DATA_DIR}else{Join-Path $env:LOCALAPPDATA 'WBAIAssistant\data'}
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 if($DataRoot -match '(?i)(onedrive|dropbox|google drive|[\\/]public[\\/]|[\\/]static[\\/])'){throw 'Choose a data directory outside cloud-sync/public folders.'}
+$env:WB_DATA_DIR=$DataRoot
 $RunRoot = Join-Path $DataRoot 'run'
 New-Item -ItemType Directory -Force -Path $RunRoot | Out-Null
 $StateFile=Join-Path $RunRoot 'processes.json'

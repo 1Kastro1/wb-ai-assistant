@@ -5,7 +5,7 @@ import pytest
 import httpx
 from app.security import EgressGuard, encrypt_secret, decrypt_secret, redact
 from app.assistant import registry
-from app.db import Session, Account, Audit, set_setting
+from app.db import Session, Account, Audit, User, set_setting
 from sqlalchemy import select
 from app.config import DATA
 
@@ -56,6 +56,32 @@ def test_password_rate_limit(client):
     for _ in range(5):
         assert client.post('/auth/login',json={'password':'wrong'}).status_code == 401
     assert client.post('/auth/login',json={'password':'wrong'}).status_code == 429
+
+
+def test_owner_can_create_colleague_with_separate_login(client):
+    created = client.post('/users', json={'username':'anna','display_name':'Анна','password':'anna-password-123'})
+    assert created.status_code == 200
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app, headers={'Origin':'http://127.0.0.1:3000'}) as colleague:
+        logged = colleague.post('/auth/login', json={'username':'anna','password':'anna-password-123'})
+        assert logged.status_code == 200
+        colleague.headers['X-CSRF-Token'] = logged.json()['csrf']
+        assert colleague.get('/auth/session').json()['user']['role'] == 'member'
+        assert colleague.get('/security').status_code == 200
+        assert colleague.get('/users').status_code == 403
+        assert colleague.post('/settings/wb-token', json={'token':'member-cannot-replace-this'}).status_code == 403
+
+
+def test_disabling_colleague_revokes_sessions(client):
+    user = client.post('/users', json={'username':'pavel','display_name':'Павел','password':'pavel-password-123'}).json()
+    from fastapi.testclient import TestClient
+    from app.main import app
+    with TestClient(app, headers={'Origin':'http://127.0.0.1:3000'}) as colleague:
+        logged = colleague.post('/auth/login', json={'username':'pavel','password':'pavel-password-123'})
+        colleague.headers['X-CSRF-Token'] = logged.json()['csrf']
+        assert client.patch('/users/'+user['id'], json={'enabled':False}).status_code == 200
+        assert colleague.get('/security').status_code == 401
 
 
 def test_token_not_exposed(client):
@@ -125,5 +151,6 @@ def test_backup_has_no_secrets(client,seeded):
         assert backup.execute('SELECT count(*) FROM wb_accounts').fetchone()[0]==0
         assert backup.execute('SELECT count(*) FROM sessions').fetchone()[0]==0
         assert not backup.execute("SELECT * FROM app_settings WHERE key='password_hash'").fetchall()
+        assert backup.execute('SELECT count(*) FROM users').fetchone()[0]==0
         assert backup.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
         assert backup.execute('SELECT count(*) FROM reviews').fetchone()[0]==4
