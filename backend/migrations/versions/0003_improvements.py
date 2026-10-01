@@ -30,7 +30,13 @@ def upgrade():
     ):
         if name not in job_columns:
             op.add_column('jobs', column)
-    op.execute("INSERT OR IGNORE INTO store_profiles (id, name, created_at) VALUES ('owner', 'Мой магазин', datetime('now'))")
+    columns = {item['name'] for item in sa.inspect(bind).get_columns('store_profiles')}
+    store = sa.table('store_profiles', sa.column('id', sa.String()), sa.column('name', sa.String()), sa.column('created_at', sa.String()), sa.column('provider', sa.String()), sa.column('config', sa.JSON()))
+    if not bind.execute(sa.select(store.c.id).where(store.c.id == 'owner')).first():
+        values = {'id':'owner', 'name':'Мой магазин', 'created_at':'2026-01-01T00:00:00+00:00'}
+        if 'provider' in columns: values['provider'] = 'wb'
+        if 'config' in columns: values['config'] = {}
+        bind.execute(store.insert().values(**values))
     op.execute("UPDATE jobs SET progress=100 WHERE status='completed'")
 
 

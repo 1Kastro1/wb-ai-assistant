@@ -5,7 +5,7 @@ $env:NEXT_TELEMETRY_DISABLED='1'
 $env:PYTHONUTF8='1'
 if(Test-Path -LiteralPath (Join-Path $ProjectRoot '.env')) {
   foreach($line in Get-Content -LiteralPath (Join-Path $ProjectRoot '.env')) {
-    if($line -match '^(OLLAMA_MODEL|WB_DATA_DIR|WB_ENABLE_REAL_PUBLISH|WB_PUBLIC_ORIGIN)=(.*)$') {
+    if($line -match '^(OLLAMA_MODEL|WB_DATA_DIR|WB_ENABLE_REAL_PUBLISH|WB_PUBLIC_ORIGIN|DATABASE_URL)=(.*)$') {
       [Environment]::SetEnvironmentVariable($matches[1],$matches[2].Trim(),'Process')
     }
   }

@@ -35,6 +35,7 @@ pydantic_core==2.33.2
 Pygments==2.21.0
 pytest==9.1.1
 python-multipart==0.0.32
+psycopg[binary]>=3.2,<4
 requests==2.34.2
 setuptools==84.0.0
 SQLAlchemy==2.0.43

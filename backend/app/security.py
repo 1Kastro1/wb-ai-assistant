@@ -76,6 +76,12 @@ class EgressGuard:
         ('wb', 'review'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/feedback'),
         ('wb', 'products'): ('POST', 'https://content-api.wildberries.ru/content/v2/get/cards/list'),
         ('wb', 'publish'): ('POST', 'https://feedbacks-api.wildberries.ru/api/v1/feedbacks/answer'),
+        ('ozon', 'reviews'): ('POST', 'https://api-seller.ozon.ru/v2/review/list'),
+        ('ozon', 'review'): ('POST', 'https://api-seller.ozon.ru/v2/review/info'),
+        ('ozon', 'publish'): ('POST', 'https://api-seller.ozon.ru/v1/review/comment/create'),
+        ('yandex', 'reviews'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback'),
+        ('yandex', 'publish'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback/comments/update'),
+        ('telegram', 'send'): ('POST', 'https://api.telegram.org/bot{token}/sendMessage'),
         ('web', 'search'): ('GET', 'https://html.duckduckgo.com/html/'),
         ('tavily', 'search'): ('POST', 'https://api.tavily.com/search'),
     }
@@ -97,17 +103,27 @@ class EgressGuard:
                     raise ValueError('WB WRITE заблокирован режимом безопасности')
         return endpoint
 
-    async def request(self, provider, operation, *, token=None, params=None, body=None, return_text=False):
+    async def request(self, provider, operation, *, token=None, params=None, body=None, headers=None, url=None, return_text=False):
         start = time.monotonic()
         status, host = 'BLOCKED', 'blocked'
         try:
-            method, url = self.validate(provider, operation)
+            method, template = self.validate(provider, operation)
+            url = url or template
+            if '{' not in template and url != template:
+                raise ValueError('Соединение заблокировано: адрес не разрешён')
+            if provider == 'yandex' and not re.fullmatch(r'https://api\.partner\.market\.yandex\.ru/v2/businesses/[0-9]+/goods-feedback(?:/comments/update)?', url):
+                raise ValueError('Соединение заблокировано: неверный адрес Яндекс Маркета')
+            if provider == 'telegram' and not re.fullmatch(r'https://api\.telegram\.org/bot[^/]+/sendMessage', url):
+                raise ValueError('Соединение заблокировано: неверный адрес Telegram')
             host = urlsplit(url).hostname
             # Ignore environment proxies; never follow redirects with a secret.
             async with httpx.AsyncClient(timeout=120 if provider == 'ollama' else 30, follow_redirects=False, trust_env=False, transport=self.transport) as client:
                 attempts = 1 if operation == 'publish' else 3
                 for attempt in range(attempts):
-                    response = await client.request(method, url, params=params, json=body, headers={'Authorization': token} if token else {})
+                    safe_headers = dict(headers or {})
+                    if token:
+                        safe_headers['Authorization'] = token
+                    response = await client.request(method, url, params=params, json=body, headers=safe_headers)
                     status = str(response.status_code)
                     if response.status_code in (429, 502, 503, 504) and attempt + 1 < attempts:
                         import asyncio
@@ -124,7 +140,7 @@ class EgressGuard:
             raise ValueError('Сервис недоступен; данные не отправлены в другие сервисы') from None
         finally:
             with Session() as db:
-                db.add(Audit(provider=provider if provider in ('wb', 'ollama', 'web', 'tavily') else 'unknown', host=host, operation=operation if (provider, operation) in self.ENDPOINTS else 'blocked', status=status, duration_ms=int((time.monotonic() - start) * 1000)))
+                db.add(Audit(provider=provider if provider in ('wb', 'ozon', 'yandex', 'telegram', 'ollama', 'web', 'tavily') else 'unknown', host=host, operation=operation if (provider, operation) in self.ENDPOINTS else 'blocked', status=status, duration_ms=int((time.monotonic() - start) * 1000)))
                 db.commit()
 
 

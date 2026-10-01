@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
-from .config import DATABASE
+from .config import DATABASE, DATABASE_URL
 
 
 def now():
@@ -12,11 +12,14 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_engine('sqlite:///' + str(DATABASE), connect_args={'check_same_thread': False, 'timeout': 30})
+IS_SQLITE = DATABASE_URL.startswith('sqlite:')
+engine = create_engine(DATABASE_URL, connect_args={'check_same_thread': False, 'timeout': 30} if IS_SQLITE else {'connect_timeout': 15}, pool_pre_ping=True)
 
 
 @event.listens_for(engine, 'connect')
 def pragmas(connection, _):
+    if not IS_SQLITE:
+        return
     connection.execute('PRAGMA foreign_keys=ON')
     connection.execute('PRAGMA journal_mode=WAL')
     connection.execute('PRAGMA busy_timeout=30000')
@@ -41,6 +44,8 @@ class StoreProfile(Base):
     __tablename__ = 'store_profiles'
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str] = mapped_column(String)
+    provider: Mapped[str] = mapped_column(String, default='wb')
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[str] = mapped_column(String, default=now)
 
 
@@ -52,6 +57,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String, default='member')
     position: Mapped[str] = mapped_column(String, default='Менеджер WB')
+    permissions: Mapped[list] = mapped_column(JSON, default=list)
+    store_ids: Mapped[list] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[str] = mapped_column(String, default=now)
@@ -74,6 +81,9 @@ class Activity(Base):
     method: Mapped[str] = mapped_column(String)
     path: Mapped[str] = mapped_column(String)
     status: Mapped[int] = mapped_column(Integer)
+    entity_type: Mapped[str] = mapped_column(String, default='')
+    entity_id: Mapped[str] = mapped_column(String, default='')
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Product(Base):
@@ -84,6 +94,7 @@ class Product(Base):
     category: Mapped[str] = mapped_column(String, default='')
     part_number: Mapped[str] = mapped_column(String, default='')
     facts: Mapped[list] = mapped_column(JSON, default=list)
+    marketplace: Mapped[str] = mapped_column(String, default='wb')
 
 
 class Review(Base):
@@ -103,6 +114,7 @@ class Review(Base):
     manual: Mapped[bool] = mapped_column(Boolean, default=False)
     safety_critical: Mapped[bool] = mapped_column(Boolean, default=False)
     topics: Mapped[list] = mapped_column(JSON, default=list)
+    marketplace: Mapped[str] = mapped_column(String, default='wb')
 
 
 class Draft(Base):
@@ -116,6 +128,22 @@ class Draft(Base):
     model: Mapped[str] = mapped_column(String, default='rules-v1')
     prompt_version: Mapped[str] = mapped_column(String, default='1.0')
     quality: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String, default='')
+    updated_by: Mapped[str] = mapped_column(String, default='')
+
+
+class Notification(Base):
+    __tablename__ = 'notifications'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String)
+    title: Mapped[str] = mapped_column(String)
+    message: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(String, default='info')
+    user_id: Mapped[str] = mapped_column(String, default='')
+    store_id: Mapped[str] = mapped_column(String, default='')
+    read: Mapped[bool] = mapped_column(Boolean, default=False)
+    telegram_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[str] = mapped_column(String, default=now)
 
 
 class Action(Base):

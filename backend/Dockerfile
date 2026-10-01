@@ -1,4 +1,5 @@
 FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
 ENV PYTHONUNBUFFERED=1 WB_DATA_DIR=/data WB_CONTAINER=1 WB_SECRET_KEY_FILE=/run/secrets/wb_key
 WORKDIR /app
 COPY requirements.lock.txt .

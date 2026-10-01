@@ -49,6 +49,7 @@ class ToolRegistry:
             args = ToolArgs(**arguments).model_dump()
             if name == 'reviews.get_recent': args['days'] = args['days'] or 7
             if name == 'reviews.get_unanswered': args['unanswered'] = True
+            args['account_id'] = context.get('active_store_id', '')
             rows = reviews_search(db, **args)
             context.update(last_result_ids=[r['id'] for r in rows], active_filters=args, active_task='reviews')
             return rows
@@ -77,7 +78,7 @@ class ToolRegistry:
             rows = db.scalars(select(Product).where(Product.name.contains(query, autoescape=True) | Product.brand.contains(query, autoescape=True)).limit(50)).all()
             return [public(r) for r in rows]
         if name.startswith('analytics.'):
-            return analytics(db, max(0, min(3650, int(arguments.get('days', 0)))), str(arguments.get('product_id', '')))
+            return analytics(db, max(0, min(3650, int(arguments.get('days', 0)))), str(arguments.get('product_id', '')), context.get('active_store_id', ''))
         if name == 'memory.search':
             query = str(arguments.get('q', ''))[:200]
             return [public(m) for m in db.scalars(select(Memory).where(Memory.enabled == True, Memory.text.contains(query, autoescape=True)).limit(20))]
@@ -134,6 +135,8 @@ class AssistantService:
             db.add(conversation)
             db.commit()
         context = dict(conversation.context)
+        if (selection or {}).get('active_store_id'):
+            context['active_store_id'] = str(selection['active_store_id'])
         for key, cls in (('selected_product_id',Product),('selected_review_id',Review),('selected_vehicle_id',Vehicle)):
             value = (selection or {}).get(key)
             if value and db.get(cls,value):

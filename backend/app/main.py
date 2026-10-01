@@ -18,14 +18,14 @@ from argon2.exceptions import VerificationError, InvalidHashError
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select, delete, text, func
 from .db import *
-from .config import ORIGIN, ORIGINS, DATA, DATABASE, MODEL, REAL_PUBLISH
+from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
-from .integrations import ollama, wb, wb_token
+from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for
 from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
-from .maintenance import backup, portable_backup, portable_restore
+from .maintenance import backup, portable_backup, portable_restore, database_health, recovery_snapshot
 from . import voice
 
 
@@ -37,10 +37,10 @@ async def lifespan(app):
     cfg.set_main_option('script_location', str(Path(__file__).parent.parent / 'migrations'))
     command.upgrade(cfg, 'head')
     with Session() as db:
-        db.merge(StoreProfile(id='owner', name='Мой магазин'))
+        db.merge(StoreProfile(id='owner', name='Мой магазин', provider='wb'))
         legacy_hash = setting(db, 'password_hash')
         if legacy_hash and not db.get(User, 'owner'):
-            db.add(User(id='owner', username='owner', display_name='Владелец', password_hash=legacy_hash, role='owner', position='Владелец', enabled=True, must_change_password=False))
+            db.add(User(id='owner', username='owner', display_name='Владелец', password_hash=legacy_hash, role='owner', position='Владелец', permissions=['*'], store_ids=['*'], enabled=True, must_change_password=False))
         if not setting(db, 'active_store'):
             set_setting(db, 'active_store', 'owner')
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
@@ -91,7 +91,10 @@ async def boundary(request, call_next):
     if actor and request.method in ('POST', 'PATCH', 'DELETE') and response.status_code < 400:
         try:
             with Session() as audit_db:
-                audit_db.add(Activity(user_id=actor['user_id'], username=actor['username'], method=request.method, path=request.url.path[:300], status=response.status_code))
+                parts = [part for part in request.url.path.split('/') if part]
+                entity_type = parts[0] if parts else ''
+                entity_id = parts[1] if len(parts) > 1 and len(parts[1]) < 100 else ''
+                audit_db.add(Activity(user_id=actor['user_id'], username=actor['username'], method=request.method, path=request.url.path[:300], status=response.status_code, entity_type=entity_type, entity_id=entity_id, details={'query_keys':sorted(request.query_params.keys())}))
                 audit_db.commit()
         except Exception:
             pass
@@ -132,7 +135,8 @@ def authorize(request: Request):
         if request.method not in ('GET', 'HEAD') and not secrets.compare_digest(session.csrf, request.headers.get('x-csrf-token', '')):
             raise HTTPException(403, 'Неверный CSRF-токен')
         request.state.actor = {'user_id': user.id, 'username': user.username}
-        return {'csrf': session.csrf, 'user_id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password, 'can_manage_wb': user.role == 'owner' or user.position == 'Менеджер WB'}
+        permissions = ['*'] if user.role == 'owner' else (user.permissions or permission_preset(user.position))
+        return {'csrf': session.csrf, 'user_id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'permissions': permissions, 'store_ids': user.store_ids or [], 'must_change_password': user.must_change_password, 'can_manage_wb': '*' in permissions or 'wb:operate' in permissions}
 
 
 AUTH = Annotated[dict, Depends(authorize)]
@@ -148,12 +152,40 @@ OWNER = Annotated[dict, Depends(owner)]
 
 
 def wb_operator(auth: AUTH):
-    if auth['role'] != 'owner' and auth['position'] != 'Менеджер WB':
+    if '*' not in auth.get('permissions', []) and 'wb:operate' not in auth.get('permissions', []):
         raise HTTPException(403, 'Операции Wildberries доступны владельцу и менеджеру WB')
     return auth
 
 
 WB_OPERATOR = Annotated[dict, Depends(wb_operator)]
+
+
+def marketplace_operator(auth: AUTH):
+    if '*' not in auth.get('permissions', []) and not any(p.endswith(':operate') for p in auth.get('permissions', [])):
+        raise HTTPException(403, 'Нужны права менеджера маркетплейса')
+    return auth
+
+
+MARKET_OPERATOR = Annotated[dict, Depends(marketplace_operator)]
+
+
+def permission_preset(position):
+    provider = {'Менеджер WB':'wb', 'Менеджер Ozon':'ozon', 'Менеджер Яндекс Маркет':'yandex'}.get(position)
+    return ['data:read', 'assistant:use'] + ([provider + ':operate'] if provider else [])
+
+
+def can(auth, permission):
+    if '*' not in auth.get('permissions', []) and permission not in auth.get('permissions', []):
+        raise HTTPException(403, 'Недостаточно прав для этого действия')
+
+
+def active_store(db, auth):
+    key = 'active_store:' + auth['user_id']
+    store_id = setting(db, key, setting(db, 'active_store', 'owner'))
+    allowed = auth.get('store_ids') or []
+    if auth['role'] != 'owner' and allowed and '*' not in allowed and store_id not in allowed:
+        store_id = allowed[0]
+    return store_id
 
 
 class Payload(BaseModel):
@@ -186,7 +218,8 @@ def normalized_username(value):
 
 
 def session_response(user, csrf):
-    return {'csrf': csrf, 'user': {'id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password, 'can_manage_wb': user.role == 'owner' or user.position == 'Менеджер WB'}}
+    permissions = ['*'] if user.role == 'owner' else (user.permissions or permission_preset(user.position))
+    return {'csrf': csrf, 'user': {'id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'permissions': permissions, 'store_ids': user.store_ids or [], 'must_change_password': user.must_change_password, 'can_manage_wb': '*' in permissions or 'wb:operate' in permissions}}
 
 
 def set_session_cookie(response, request, token):
@@ -243,13 +276,13 @@ async def auth_setup(body: SetupPassword, response: Response, request: Request, 
         raise ValueError('Пароли не совпадают')
     async with setup_lock:
         db.rollback()
-        db.execute(text('BEGIN IMMEDIATE'))
+        db.execute(text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
         if db.scalar(select(func.count()).select_from(User)) or setting(db, 'password_hash'):
             raise HTTPException(409, 'Пароль владельца уже создан')
         username = normalized_username(body.username)
         password_hash = PasswordHasher().hash(body.password)
         set_setting(db, 'password_hash', password_hash)
-        user = User(id='owner', username=username, display_name=body.display_name.strip(), password_hash=password_hash, role='owner', position='Владелец', enabled=True, must_change_password=False)
+        user = User(id='owner', username=username, display_name=body.display_name.strip(), password_hash=password_hash, role='owner', position='Владелец', permissions=['*'], store_ids=['*'], enabled=True, must_change_password=False)
         db.add(user)
         token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
         db.add(LoginSession(id=digest(token), expires=int(time.time() + SESSION_SECONDS), csrf=csrf, user_id='owner'))
@@ -260,7 +293,7 @@ async def auth_setup(body: SetupPassword, response: Response, request: Request, 
 
 @app.get('/auth/session')
 def session(auth: AUTH):
-    return {'csrf': auth['csrf'], 'user': {'id': auth['user_id'], 'username': auth['username'], 'display_name': auth['display_name'], 'role': auth['role'], 'position': auth['position'], 'must_change_password': auth['must_change_password'], 'can_manage_wb': auth['can_manage_wb']}}
+    return {'csrf': auth['csrf'], 'user': {k: auth[k] for k in ('user_id','username','display_name','role','position','permissions','store_ids','must_change_password','can_manage_wb')} | {'id':auth['user_id']}}
 
 
 @app.post('/auth/logout')
@@ -282,6 +315,8 @@ class TeamUserState(Payload):
     enabled: bool | None = None
     display_name: str | None = Field(default=None, min_length=2, max_length=100)
     position: Literal['Менеджер WB', 'Менеджер Ozon', 'Менеджер Яндекс Маркет'] | None = None
+    permissions: list[str] | None = None
+    store_ids: list[str] | None = None
 
 
 class TeamPassword(Payload):
@@ -294,7 +329,7 @@ class OwnPassword(Payload):
 
 
 def public_user(user):
-    return {k: getattr(user, k) for k in ('id', 'username', 'display_name', 'role', 'position', 'enabled', 'must_change_password', 'created_at')}
+    return {k: getattr(user, k) for k in ('id', 'username', 'display_name', 'role', 'position', 'permissions', 'store_ids', 'enabled', 'must_change_password', 'created_at')}
 
 
 @app.get('/users')
@@ -307,12 +342,24 @@ def team_activity(auth: OWNER, db: DB):
     return [public(item) for item in db.scalars(select(Activity).order_by(Activity.id.desc()).limit(200)).all()]
 
 
+@app.get('/team/dashboard')
+def team_dashboard(auth: OWNER, db: DB, days: int = 30):
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1,min(days,365)))).isoformat()
+    users = list(db.scalars(select(User).order_by(User.display_name)))
+    result = []
+    for user in users:
+        actions = db.scalar(select(func.count()).select_from(Activity).where(Activity.user_id == user.id, Activity.timestamp >= cutoff)) or 0
+        drafts = db.scalar(select(func.count()).select_from(Draft).where(Draft.updated_by == user.id)) or 0
+        result.append({'user':public_user(user), 'actions':actions, 'drafts':drafts})
+    return {'period_days':days, 'members':result, 'totals':{'users':len(users),'actions':sum(x['actions'] for x in result),'drafts':sum(x['drafts'] for x in result)}}
+
+
 @app.post('/users')
 def users_create(body: TeamUserInput, auth: OWNER, db: DB):
     username = normalized_username(body.username)
     if db.scalar(select(User).where(User.username == username)):
         raise HTTPException(409, 'Пользователь с таким логином уже существует')
-    user = User(id=str(uuid4()), username=username, display_name=body.display_name.strip(), password_hash=PasswordHasher().hash(body.password), role='member', position=body.position, enabled=True, must_change_password=True)
+    user = User(id=str(uuid4()), username=username, display_name=body.display_name.strip(), password_hash=PasswordHasher().hash(body.password), role='member', position=body.position, permissions=permission_preset(body.position), store_ids=[], enabled=True, must_change_password=True)
     db.add(user)
     db.commit()
     return public_user(user)
@@ -331,6 +378,13 @@ def users_state(user_id: str, body: TeamUserState, auth: OWNER, db: DB):
         user.display_name = body.display_name.strip()
     if body.position is not None and user.role != 'owner':
         user.position = body.position
+        if body.permissions is None: user.permissions = permission_preset(body.position)
+    if body.permissions is not None and user.role != 'owner':
+        allowed = {'data:read','assistant:use','wb:operate','ozon:operate','yandex:operate','drafts:publish'}
+        user.permissions = [item for item in dict.fromkeys(body.permissions) if item in allowed]
+    if body.store_ids is not None and user.role != 'owner':
+        existing = set(db.scalars(select(StoreProfile.id)))
+        user.store_ids = [item for item in dict.fromkeys(body.store_ids) if item in existing]
     if body.enabled is False:
         db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
     db.commit()
@@ -368,8 +422,8 @@ def own_password(body: OwnPassword, auth: AUTH, db: DB):
 @app.get('/security')
 def security(auth: AUTH, db: DB):
     audit = db.scalars(select(Audit).order_by(Audit.id.desc()).limit(30)).all()
-    active = setting(db, 'active_store', 'owner')
-    return {'privacy_mode': 'LOCAL_FIRST', 'safe_mode': setting(db, 'safe_mode', False), 'test_mode': setting(db, 'test_mode', True), 'cloud_ai': False, 'web_research': True, 'search_provider': setting(db, 'search_provider', 'duckduckgo'), 'search_configured': bool(db.get(Account, 'search:tavily')), 'telemetry': False, 'database': 'LOCAL', 'token': 'ENCRYPTED (Windows DPAPI)' if db.get(Account, active) else 'NOT_CONNECTED', 'active_store': active, 'backend': '127.0.0.1', 'model': MODEL, 'real_publish_enabled': REAL_PUBLISH, 'audit': [public(a) for a in audit], 'backups': sorted(p.name for p in (DATA / 'backups').glob('*.db'))[-10:]}
+    active = active_store(db, auth)
+    return {'privacy_mode': 'SERVER_SHARED', 'safe_mode': setting(db, 'safe_mode', False), 'test_mode': setting(db, 'test_mode', True), 'cloud_ai': False, 'web_research': True, 'search_provider': setting(db, 'search_provider', 'duckduckgo'), 'search_configured': bool(db.get(Account, 'search:tavily')), 'telemetry': False, 'database': 'POSTGRESQL' if DATABASE_URL.startswith('postgresql') else 'SQLITE', 'token': 'ENCRYPTED' if db.get(Account, active) else 'NOT_CONNECTED', 'active_store': active, 'backend': 'server', 'model': MODEL, 'real_publish_enabled': REAL_PUBLISH, 'audit': [public(a) for a in audit], 'backups': sorted(p.name for p in (DATA / 'backups').glob('*.db'))[-10:]}
 
 
 @app.get('/system/status')
@@ -380,6 +434,8 @@ def system_status(auth: AUTH, db: DB):
         job = db.scalar(select(Job).where(Job.kind == kind, Job.status == 'completed').order_by(Job.created_at.desc()))
         latest[kind] = public(job) if job else None
     backups = sorted((DATA / 'backups').glob('*.db'), key=lambda path: path.stat().st_mtime, reverse=True)[:10]
+    try: health = database_health()
+    except Exception as error: health = {'status':'failed','detail':type(error).__name__}
     return {
         'database_mb': round(DATABASE.stat().st_size / 1024 / 1024, 1) if DATABASE.exists() else 0,
         'automation_enabled': bool(schedule.get('enabled')),
@@ -388,6 +444,9 @@ def system_status(auth: AUTH, db: DB):
         'latest': latest,
         'active_jobs': db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['queued', 'running']))) or 0,
         'backups': [{'name': path.name, 'size_mb': round(path.stat().st_size / 1024 / 1024, 1), 'created_at': datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()} for path in backups],
+        'database_health': health,
+        'startup_recovery': SQLITE_STARTUP_HEALTH,
+        'notifications_unread': db.scalar(select(func.count()).select_from(Notification).where(Notification.read == False)) or 0,
     }
 
 
@@ -434,8 +493,23 @@ class SearchProviderInput(Payload):
     api_key: str = Field(default='', max_length=4096)
 
 
+class TelegramInput(Payload):
+    bot_token: str = Field(default='', max_length=4096)
+    chat_id: str = Field(default='', max_length=100)
+    enabled: bool = False
+
+
 class StoreInput(Payload):
     name: str = Field(min_length=2, max_length=100)
+    provider: Literal['wb','ozon','yandex'] = 'wb'
+    client_id: str = Field(default='', max_length=200)
+    business_id: str = Field(default='', max_length=100)
+
+
+class StoreConnection(Payload):
+    token: str = Field(min_length=10, max_length=4096)
+    client_id: str = Field(default='', max_length=200)
+    business_id: str = Field(default='', max_length=100)
 
 
 class ScheduleInput(Payload):
@@ -453,7 +527,7 @@ class ScheduleInput(Payload):
 
 @app.post('/settings/wb-token')
 def token(body: Token, auth: OWNER, db: DB):
-    active = setting(db, 'active_store', 'owner')
+    active = active_store(db, auth)
     if db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == active)):
         raise ValueError('В этом профиле уже есть отзывы. Создайте новый профиль магазина для другого токена')
     db.merge(Account(id=active, encrypted_token=encrypt_secret(body.token)))
@@ -463,7 +537,7 @@ def token(body: Token, auth: OWNER, db: DB):
 
 @app.post('/settings/wb-test')
 async def wb_test(auth: WB_OPERATOR, db: DB):
-    await guard.request('wb', 'reviews', token=wb_token(db), params={'isAnswered': 'false', 'take': 1, 'skip': 0})
+    await guard.request('wb', 'reviews', token=wb_token(db, active_store(db, auth)), params={'isAnswered': 'false', 'take': 1, 'skip': 0})
     return {'ok': True}
 
 
@@ -486,27 +560,105 @@ def search_settings_update(body: SearchProviderInput, auth: OWNER, db: DB):
     return search_settings(auth, db)
 
 
+def add_notification(db, kind, title, message, severity='info', store_id='', user_id=''):
+    item = Notification(id=str(uuid4()), kind=kind, title=title[:200], message=message[:2000], severity=severity, store_id=store_id, user_id=user_id)
+    db.add(item)
+    return item
+
+
+@app.get('/notifications')
+def notifications(auth: AUTH, db: DB, unread: bool = False):
+    query = select(Notification).where((Notification.user_id == '') | (Notification.user_id == auth['user_id']))
+    if unread: query = query.where(Notification.read == False)
+    items = list(db.scalars(query.order_by(Notification.created_at.desc()).limit(100)))
+    return {'unread': db.scalar(select(func.count()).select_from(Notification).where(Notification.read == False, (Notification.user_id == '') | (Notification.user_id == auth['user_id']))) or 0, 'items':[public(item) for item in items]}
+
+
+@app.post('/notifications/read-all')
+def notifications_read(auth: AUTH, db: DB):
+    for item in db.scalars(select(Notification).where(Notification.read == False, (Notification.user_id == '') | (Notification.user_id == auth['user_id']))): item.read = True
+    db.commit(); return {'ok':True}
+
+
+@app.get('/settings/telegram')
+def telegram_get(auth: OWNER, db: DB):
+    value = setting(db, 'telegram', {})
+    return {'enabled':bool(value.get('enabled')), 'chat_id':value.get('chat_id',''), 'configured':bool(db.get(Account,'telegram:bot'))}
+
+
+async def send_telegram(db, text_value):
+    value, row = setting(db, 'telegram', {}), db.get(Account, 'telegram:bot')
+    if not value.get('enabled') or not row: return False
+    token = decrypt_secret(row.encrypted_token)
+    await guard.request('telegram','send',url=f'https://api.telegram.org/bot{token}/sendMessage',body={'chat_id':value.get('chat_id'), 'text':text_value[:4000]})
+    return True
+
+
+@app.patch('/settings/telegram')
+def telegram_set(body: TelegramInput, auth: OWNER, db: DB):
+    if body.enabled and not body.chat_id.strip(): raise ValueError('Укажите Chat ID Telegram')
+    if body.bot_token: db.merge(Account(id='telegram:bot', encrypted_token=encrypt_secret(body.bot_token.strip())))
+    if body.enabled and not (body.bot_token or db.get(Account,'telegram:bot')): raise ValueError('Укажите токен Telegram-бота')
+    set_setting(db, 'telegram', {'enabled':body.enabled,'chat_id':body.chat_id.strip()}); db.commit()
+    return telegram_get(auth, db)
+
+
+@app.post('/settings/telegram/test')
+async def telegram_test(auth: OWNER, db: DB):
+    if not await send_telegram(db, 'WB Assistant: уведомления подключены.'): raise ValueError('Сначала включите Telegram и сохраните настройки')
+    return {'ok':True}
+
+
 @app.get('/stores')
 def stores(auth: AUTH, db: DB):
-    active = setting(db, 'active_store', 'owner')
-    return {'active': active, 'items': [{**public(s), 'connected': bool(db.get(Account, s.id)), 'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id)) or 0} for s in db.scalars(select(StoreProfile).order_by(StoreProfile.created_at))]}
+    active = active_store(db, auth)
+    allowed = auth.get('store_ids') or []
+    rows = list(db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)))
+    if auth['role'] != 'owner' and allowed and '*' not in allowed:
+        rows = [row for row in rows if row.id in allowed]
+    return {'active': active, 'items': [{**public(s), 'config': {k:v for k,v in (s.config or {}).items() if k in ('client_id','business_id')}, 'connected': bool(db.get(Account, s.id)), 'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id)) or 0} for s in rows]}
 
 
 @app.post('/stores')
 def create_store(body: StoreInput, auth: OWNER, db: DB):
-    store = StoreProfile(id='store-' + uuid4().hex[:12], name=body.name.strip())
+    store = StoreProfile(id='store-' + uuid4().hex[:12], name=body.name.strip(), provider=body.provider, config={'client_id':body.client_id.strip(), 'business_id':body.business_id.strip()})
     db.add(store)
     db.commit()
     return public(store)
 
 
 @app.post('/stores/{store_id}/activate')
-def activate_store(store_id: str, auth: OWNER, db: DB):
+def activate_store(store_id: str, auth: AUTH, db: DB):
     if not db.get(StoreProfile, store_id):
         raise HTTPException(404)
-    set_setting(db, 'active_store', store_id)
+    if auth['role'] != 'owner' and auth.get('store_ids') and store_id not in auth['store_ids']:
+        raise HTTPException(403, 'Этот магазин не назначен сотруднику')
+    set_setting(db, 'active_store:' + auth['user_id'], store_id)
+    if auth['role'] == 'owner': set_setting(db, 'active_store', store_id)
     db.commit()
     return {'active': store_id}
+
+
+@app.post('/stores/{store_id}/connection')
+def connect_store(store_id: str, body: StoreConnection, auth: OWNER, db: DB):
+    store = db.get(StoreProfile, store_id)
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    store.config = {'client_id':body.client_id.strip(), 'business_id':body.business_id.strip()}
+    db.merge(Account(id=store_id, encrypted_token=encrypt_secret(body.token)))
+    db.commit()
+    return {'ok':True, 'provider':store.provider, 'token':'ENCRYPTED'}
+
+
+@app.post('/stores/{store_id}/test')
+async def test_store(store_id: str, auth: AUTH, db: DB):
+    store = db.get(StoreProfile, store_id)
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
+    if store.provider == 'wb':
+        await guard.request('wb','reviews',token=wb_token(db,store.id),params={'isAnswered':'false','take':1,'skip':0})
+    else:
+        await provider_for(store).test(db, store.id)
+    return {'ok':True, 'provider':store.provider}
 
 
 @app.get('/settings/schedule')
@@ -551,14 +703,17 @@ def get_auto_replies_status(auth: AUTH, db: DB):
 
 
 @app.post('/auto-replies/start')
-async def start_auto_replies(background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
+async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB):
+    store = db.get(StoreProfile, active_store(db, auth))
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
     schedule = schedule_get(auth, db)
     since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time(), 'drafts_since': since})
     set_setting(db, 'automation_schedule', schedule)
     job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
     if not job:
-        active = setting(db, 'active_store', 'owner')
+        active = active_store(db, auth)
         job = Job(id=str(uuid4()), kind='drafts', priority=50, result={'account_id': active, 'since': since, 'message': 'Автоответы запущены: подготавливаем новые отзывы'})
         db.add(job)
     db.commit()
@@ -569,7 +724,10 @@ async def start_auto_replies(background: BackgroundTasks, auth: WB_OPERATOR, db:
 
 
 @app.post('/auto-replies/pause')
-def pause_auto_replies(auth: WB_OPERATOR, db: DB):
+def pause_auto_replies(auth: MARKET_OPERATOR, db: DB):
+    store = db.get(StoreProfile, active_store(db, auth))
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
     schedule = schedule_get(auth, db)
     schedule['drafts_enabled'] = False
     set_setting(db, 'automation_schedule', schedule)
@@ -650,16 +808,16 @@ async def run_sync_job(job_id):
                     if schedule.get('auto_propose'):
                         minimum = max(70, min(100, int(schedule.get('min_quality', 96))))
                         limit = max(1, min(100, int(schedule.get('max_proposals', 100))))
-                        candidates = list(db.scalars(
-                            select(Review.id).join(Draft, Draft.review_id == Review.id).where(
+                        candidate_rows = db.execute(
+                            select(Review.id, Draft.quality).join(Draft, Draft.review_id == Review.id).where(
                                 Review.wb_account_id == account_id,
                                 Review.is_answered == False,
                                 Review.status == 'draft_ready',
                                 Review.rating >= 4,
                                 Review.manual == False,
-                                func.json_extract(Draft.quality, '$.score') >= minimum,
-                            ).order_by(Review.created_at.desc()).limit(limit)
-                        ))
+                            ).order_by(Review.created_at.desc()).limit(limit * 5)
+                        ).all()
+                        candidates = [rid for rid, quality in candidate_rows if int((quality or {}).get('score', 0)) >= minimum][:limit]
                         if candidates:
                             proposal_id = propose_publish(db, candidates)['id']
                     job = db.get(Job, job_id)
@@ -675,15 +833,28 @@ async def run_sync_job(job_id):
                         'proposal_id': proposal_id,
                     }
                 else:
-                    operation = wb.sync_products if kind == 'products' else wb.sync_reviews
+                    store = db.get(StoreProfile, account_id)
+                    provider = provider_for(store) if store else None
+                    if not provider:
+                        raise ValueError('Провайдер магазина не поддерживается')
+                    if kind == 'products' and store.provider != 'wb':
+                        count = 0  # Ozon and Yandex products are learned from their review payloads.
+                        job.result = {'message':'Товары этого маркетплейса обновляются вместе с отзывами'}
+                        operation = None
+                    else:
+                        operation = provider.sync_products if kind == 'products' else provider.sync_reviews
                     try:
-                        count = await operation(db, account_id, update_progress, cancelled)
+                        if operation: count = await operation(db, account_id, update_progress, cancelled)
                     except TypeError as exc:
                         # Keep simple test/custom providers that implement the original (db) contract usable.
                         if 'positional' not in str(exc):
                             raise
                         count = await operation(db)
                     job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id}
+                    if kind == 'reviews':
+                        negative = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == False, Review.rating <= 2)) or 0
+                        if negative:
+                            add_notification(db, 'negative_reviews', 'Негативные отзывы требуют внимания', f'Без ответа осталось отзывов с оценкой 1–2★: {negative}.', 'warning', account_id)
                     schedule = setting(db, 'automation_schedule', {})
                     if kind == 'reviews' and schedule.get('enabled') and schedule.get('drafts_enabled') and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
                         db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
@@ -701,6 +872,7 @@ async def run_sync_job(job_id):
                 else:
                     message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind == 'drafts' else 'Синхронизация не завершена. Проверьте токен, доступ WB и журнал соединений.'
                     job.status, job.result = 'failed', {'message':message, 'account_id': account_id, 'error_type': type(error).__name__}
+                    add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
             db.commit()
 
 
@@ -743,7 +915,12 @@ async def scheduler_loop():
                 if current - float(schedule.get('last_backup', 0)) >= max(1, int(schedule.get('backup_hours', 24))) * 3600:
                     async with maintenance_lock:
                         await asyncio.to_thread(backup)
+                        if DATABASE_URL.startswith('sqlite:'): await asyncio.to_thread(recovery_snapshot)
                     schedule['last_backup'] = current
+                if current - float(schedule.get('last_database_check', 0)) >= 3600:
+                    health = await asyncio.to_thread(database_health)
+                    schedule['last_database_check'] = current
+                    if health.get('status') != 'ok': add_notification(db, 'database', 'Проверка базы не пройдена', str(health), 'error')
                 portable_sync = setting(db, 'portable_sync', {'enabled': False})
                 sync_account = db.get(Account, 'portable:sync')
                 if portable_sync.get('enabled') and sync_account and current - float(portable_sync.get('last_sync', 0)) >= max(1, int(portable_sync.get('hours', 24))) * 3600:
@@ -760,6 +937,14 @@ async def scheduler_loop():
                 set_setting(db, 'scheduler_status', {'state': 'ok', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': ''})
                 set_setting(db, 'automation_schedule', schedule)
                 db.commit()
+                pending_notifications = list(db.scalars(select(Notification).where(Notification.telegram_sent == False, Notification.severity.in_(['warning','error'])).order_by(Notification.created_at).limit(10)))
+                for notification in pending_notifications:
+                    try:
+                        if await send_telegram(db, f'{notification.title}\n{notification.message}'):
+                            notification.telegram_sent = True
+                            db.commit()
+                    except ValueError:
+                        break
             asyncio.create_task(run_job_queue())
         except Exception as error:
             # Keep the scheduler alive and expose a safe diagnostic in the interface.
@@ -772,11 +957,15 @@ async def scheduler_loop():
 
 
 @app.post('/jobs/sync/{kind}')
-async def schedule_sync(kind: str, background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
+async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: DB):
     if kind not in ('products','reviews'):
         raise HTTPException(404)
-    wb_token(db)
-    active = setting(db, 'active_store', 'owner')
+    active = active_store(db, auth)
+    store = db.get(StoreProfile, active)
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
+    if store.provider == 'wb': wb_token(db)
+    elif not db.get(Account, active): raise ValueError('Сначала подключите API выбранного магазина')
     job = Job(id=str(uuid4()), kind=kind, result={'account_id': active})
     db.add(job)
     db.commit()
@@ -785,8 +974,12 @@ async def schedule_sync(kind: str, background: BackgroundTasks, auth: WB_OPERATO
 
 
 @app.post('/jobs/drafts')
-async def schedule_all_drafts(background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
-    active = setting(db, 'active_store', 'owner')
+async def schedule_all_drafts(background: BackgroundTasks, auth: AUTH, db: DB):
+    can(auth, 'assistant:use')
+    active = active_store(db, auth)
+    store = db.get(StoreProfile, active)
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
     existing = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])))
     if existing:
         return public(existing)
@@ -799,7 +992,7 @@ async def schedule_all_drafts(background: BackgroundTasks, auth: WB_OPERATOR, db
 
 @app.get('/jobs/drafts/preview')
 def preview_all_drafts(auth: AUTH, db: DB):
-    active = setting(db, 'active_store', 'owner')
+    active = active_store(db, auth)
     base = select(func.count()).select_from(Review).outerjoin(Draft, Draft.review_id == Review.id).where(
         Review.wb_account_id == active,
         Review.is_answered == False,
@@ -865,12 +1058,12 @@ async def sync(kind: str, auth: WB_OPERATOR, db: DB):
 
 @app.get('/reviews')
 def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 100, attention: bool = False):
-    return reviews_search(db, q, unanswered, max_rating, days, product_id, limit, account_id=setting(db, 'active_store', 'owner'), attention=attention)
+    return reviews_search(db, q, unanswered, max_rating, days, product_id, limit, account_id=active_store(db, auth), attention=attention)
 
 
 @app.get('/reviews/page')
 def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False):
-    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=setting(db, 'active_store', 'owner'), attention=attention)
+    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention)
 
 
 @app.get('/products')
@@ -909,12 +1102,12 @@ def product_fact(pid: str, body: Fact, auth: AUTH, db: DB):
 
 @app.get('/analytics')
 def stats(auth: AUTH, db: DB, days: int = 0, product_id: str = ''):
-    return analytics(db, days, product_id, setting(db, 'active_store', 'owner'))
+    return analytics(db, days, product_id, active_store(db, auth))
 
 
 @app.get('/quality-report')
 def reply_quality(auth: AUTH, db: DB, days: int = 30):
-    return quality_report(db, days, setting(db, 'active_store', 'owner'))
+    return quality_report(db, days, active_store(db, auth))
 
 
 class DraftInput(Payload):
@@ -922,8 +1115,18 @@ class DraftInput(Payload):
 
 
 @app.post('/reviews/{rid}/draft')
-async def draft(rid: str, body: DraftInput, auth: WB_OPERATOR, db: DB):
-    return await generate_draft(db, rid, body.instruction)
+async def draft(rid: str, body: DraftInput, auth: MARKET_OPERATOR, db: DB):
+    review = db.get(Review, rid)
+    if not review: raise HTTPException(404, 'Отзыв не найден')
+    store = db.get(StoreProfile, review.wb_account_id)
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
+    result = await generate_draft(db, rid, body.instruction)
+    item = db.get(Draft, result['id'])
+    item.updated_by = auth['user_id']
+    if not item.created_by: item.created_by = auth['user_id']
+    db.commit()
+    return public(item)
 
 
 class DraftEdit(Payload):
@@ -932,8 +1135,10 @@ class DraftEdit(Payload):
 
 
 @app.patch('/drafts/{did}')
-def draft_edit(did: str, body: DraftEdit, auth: WB_OPERATOR, db: DB):
-    return edit_draft(db, did, body.text, body.revision)
+def draft_edit(did: str, body: DraftEdit, auth: MARKET_OPERATOR, db: DB):
+    result = edit_draft(db, did, body.text, body.revision)
+    item = db.get(Draft, did); item.updated_by = auth['user_id']; db.commit()
+    return public(item)
 
 
 class DraftFeedback(Payload):
@@ -942,7 +1147,7 @@ class DraftFeedback(Payload):
 
 
 @app.post('/drafts/{did}/feedback')
-def draft_feedback(did: str, body: DraftFeedback, auth: WB_OPERATOR, db: DB):
+def draft_feedback(did: str, body: DraftFeedback, auth: MARKET_OPERATOR, db: DB):
     draft = db.get(Draft, did)
     if not draft:
         raise HTTPException(404, 'Черновик не найден')
@@ -966,7 +1171,7 @@ class PublishInput(Payload):
 
 
 @app.post('/actions/publish')
-def publish_proposal(body: PublishInput, auth: WB_OPERATOR, db: DB):
+def publish_proposal(body: PublishInput, auth: MARKET_OPERATOR, db: DB):
     return propose_publish(db, body.review_ids)
 
 
@@ -1093,7 +1298,11 @@ chat_lock = asyncio.Lock()
 @app.post('/chat')
 async def chat(body: Chat, auth: AUTH, db: DB):
     async with chat_lock:
-        return await assistant.send(db, body.text, body.conversation_id, body.selection, body.voice_mode, auth['can_manage_wb'])
+        store_id = active_store(db, auth)
+        store = db.get(StoreProfile, store_id)
+        selection = {**body.selection, 'active_store_id':store_id}
+        allowed = '*' in auth.get('permissions', []) or bool(store and store.provider + ':operate' in auth.get('permissions', []))
+        return await assistant.send(db, body.text, body.conversation_id, selection, body.voice_mode, allowed)
 
 
 class VoiceText(Payload):

@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, case, text as sql_text
 from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint
-from .integrations import ollama, wb, web_research
+from .integrations import ollama, wb, web_research, provider_for
+from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
 
 
@@ -153,7 +154,7 @@ def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id=
         query = query.where((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL'))
     if days:
         start = datetime.now(timezone(timedelta(hours=3))).replace(hour=0, minute=0, second=0, microsecond=0) if days == 1 else datetime.now(timezone.utc) - timedelta(days=days)
-        query = query.where(func.julianday(Review.created_at) >= func.julianday(start.isoformat()))
+        query = query.where(Review.created_at >= start.isoformat())
     if product_id:
         query = query.where(Review.product_id == product_id)
     if account_id:
@@ -186,7 +187,7 @@ def reviews_page(db, **filters):
     if filters.get('account_id'):
         count_query = count_query.where(Review.wb_account_id == filters['account_id'])
     if filters.get('days'):
-        count_query = count_query.where(func.julianday(Review.created_at) >= func.julianday((datetime.now(timezone.utc) - timedelta(days=filters['days'])).isoformat()))
+        count_query = count_query.where(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=filters['days'])).isoformat())
     total = db.scalar(count_query) or 0
     return {'items': rows, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(rows) < total}
 
@@ -311,7 +312,7 @@ def learn_from_edit(db, draft, old, new):
 def quality_report(db, days=30, account_id=''):
     filters = []
     if days:
-        filters.append(func.julianday(Review.created_at) >= func.julianday((datetime.now(timezone.utc) - timedelta(days=days)).isoformat()))
+        filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
     if account_id:
         filters.append(Review.wb_account_id == account_id)
     drafts = list(db.scalars(select(Draft).join(Review).where(*filters)))
@@ -338,7 +339,7 @@ def quality_report(db, days=30, account_id=''):
 def analytics(db, days=0, product_id='', account_id=''):
     filters = []
     if days:
-        filters.append(func.julianday(Review.created_at) >= func.julianday((datetime.now(timezone.utc) - timedelta(days=days)).isoformat()))
+        filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
     if product_id:
         filters.append(Review.product_id == product_id)
     if account_id:
@@ -355,7 +356,7 @@ def analytics(db, days=0, product_id='', account_id=''):
     topic_where = []
     topic_params = {}
     if days:
-        topic_where.append('julianday(r.created_at) >= julianday(:topic_start)')
+        topic_where.append('r.created_at >= :topic_start')
         topic_params['topic_start'] = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     if product_id:
         topic_where.append('r.product_id = :topic_product_id')
@@ -553,7 +554,7 @@ async def generate_draft(db, review_id, instruction=''):
 
 def edit_draft(db, draft_id, value, revision):
     db.rollback()
-    db.execute(sql_text('BEGIN IMMEDIATE'))
+    db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
     draft = db.get(Draft, draft_id, populate_existing=True)
     if not draft or draft.revision != revision:
         raise ValueError('Черновик изменился. Обновите страницу')
@@ -599,7 +600,7 @@ def propose_publish(db, review_ids):
 async def confirm_action(db, action_id, manual_ack=False):
     # Reserve the action and unique per-review publication slots atomically.
     db.rollback()
-    db.execute(sql_text('BEGIN IMMEDIATE'))
+    db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
     action = db.get(Action, action_id, populate_existing=True)
     if not action:
         raise ValueError('Действие не найдено')
@@ -642,7 +643,10 @@ async def confirm_action(db, action_id, manual_ack=False):
         else:
             job = db.scalar(select(Publication).where(Publication.review_id == review.id))
             try:
-                await wb.publish(db, review, item['text'])
+                store = db.get(StoreProfile, review.wb_account_id)
+                provider = provider_for(store) if store else None
+                if not provider: raise ValueError('Провайдер магазина не поддерживается')
+                await provider.publish(db, review, item['text'])
                 review.status, review.is_answered, review.existing_answer = 'published', True, item['text']
                 job.status = 'published'
                 results.append({'review_id': review.id, 'status': 'published'})

@@ -3,6 +3,7 @@ import getpass
 import sqlite3
 import os
 import secrets
+import subprocess
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -10,8 +11,8 @@ from argon2 import PasswordHasher
 from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.exceptions import InvalidTag
-from .config import DATA, DATABASE
-from .db import Session, Setting, setting, set_setting
+from .config import DATA, DATABASE, DATABASE_URL
+from .db import Session, Setting, setting, set_setting, IS_SQLITE
 
 
 PORTABLE_MAGIC = b'WBAIPORT1'
@@ -25,6 +26,8 @@ def _portable_key(password, salt):
 
 
 def portable_backup(password):
+    if not IS_SQLITE:
+        raise ValueError('Переносимая копия доступна для SQLite. PostgreSQL копируется сервером через pg_dump')
     source_name = backup()
     source = DATA / 'backups' / source_name
     # Re-apply the allowlist immediately before encryption. This also protects
@@ -88,7 +91,7 @@ def _check_backup_database(path):
         if source.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Резервная копия повреждена')
         version = source.execute("SELECT version_num FROM alembic_version").fetchone() if source.execute("SELECT 1 FROM sqlite_master WHERE name='alembic_version'").fetchone() else None
-        if not version or version[0] not in ('0001','0002','0003','0004','0005','0006'):
+        if not version or version[0] not in ('0001','0002','0003','0004','0005','0006','0007'):
             raise ValueError('Версия резервной копии не поддерживается')
         users = source.execute('SELECT count(*) FROM users').fetchone()[0] if source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone() else 0
         if source.execute('SELECT count(*) FROM wb_accounts').fetchone()[0] or source.execute('SELECT count(*) FROM sessions').fetchone()[0] or users or source.execute("SELECT count(*) FROM app_settings WHERE key='password_hash'").fetchone()[0]:
@@ -103,13 +106,13 @@ def portable_restore(source_path, password):
         backup()
         with closing(sqlite3.connect(DATABASE)) as target:
             password_row = target.execute("SELECT value FROM app_settings WHERE key='password_hash'").fetchone()
-            users = target.execute('SELECT id,username,display_name,password_hash,role,position,enabled,must_change_password,created_at FROM users').fetchall() if target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone() else []
+            users = target.execute('SELECT id,username,display_name,password_hash,role,position,permissions,store_ids,enabled,must_change_password,created_at FROM users').fetchall() if target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone() else []
             sessions = target.execute('SELECT id,expires,csrf,user_id FROM sessions').fetchall()
         with closing(sqlite3.connect(temp_path)) as source, closing(sqlite3.connect(DATABASE)) as target:
             source.backup(target)
             if password_row:
                 target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('password_hash',?)", password_row)
-            target.executemany('INSERT OR REPLACE INTO users(id,username,display_name,password_hash,role,position,enabled,must_change_password,created_at) VALUES(?,?,?,?,?,?,?,?,?)', users)
+            target.executemany('INSERT OR REPLACE INTO users(id,username,display_name,password_hash,role,position,permissions,store_ids,enabled,must_change_password,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', users)
             target.executemany('INSERT OR REPLACE INTO sessions(id,expires,csrf,user_id) VALUES(?,?,?,?)', sessions)
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('test_mode','true')")
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('safe_mode','true')")
@@ -120,6 +123,15 @@ def portable_restore(source_path, password):
 
 
 def backup():
+    if not IS_SQLITE:
+        destination = DATA / 'backups' / (datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.dump')
+        try:
+            subprocess.run(['pg_dump', '--format=custom', '--no-owner', '--file', str(destination), DATABASE_URL.replace('postgresql+psycopg://','postgresql://',1)], check=True, timeout=600, capture_output=True)
+        except (OSError, subprocess.SubprocessError):
+            destination.unlink(missing_ok=True)
+            raise ValueError('Не удалось создать серверную копию PostgreSQL') from None
+        for obsolete in sorted((DATA / 'backups').glob('*.dump'), key=lambda p:p.stat().st_mtime, reverse=True)[10:]: obsolete.unlink(missing_ok=True)
+        return destination.name
     destination = DATA / 'backups' / (datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.db')
     with closing(sqlite3.connect(DATABASE)) as source, closing(sqlite3.connect(destination)) as target:
         source.backup(target)
@@ -152,7 +164,7 @@ def restore(name):
             raise ValueError('Резервная копия повреждена')
         if not source.execute("SELECT 1 FROM sqlite_master WHERE name='alembic_version'").fetchone():
             raise ValueError('Неизвестный формат резервной копии')
-        if source.execute('SELECT version_num FROM alembic_version').fetchone()[0] not in ('0001','0002','0003','0004','0005','0006'):
+        if source.execute('SELECT version_num FROM alembic_version').fetchone()[0] not in ('0001','0002','0003','0004','0005','0006','0007'):
             raise ValueError('Версия резервной копии не поддерживается')
         backup()
         with closing(sqlite3.connect(DATABASE)) as target:
@@ -178,6 +190,34 @@ def setup():
         set_setting(db, 'password_hash', PasswordHasher().hash(password))
         db.commit()
         print('Пароль сохранён локально в виде Argon2-хеша.')
+
+
+def database_health():
+    if not IS_SQLITE:
+        with Session() as db:
+            db.execute(__import__('sqlalchemy').text('SELECT 1'))
+        return {'status': 'ok', 'engine': 'postgresql'}
+    with closing(sqlite3.connect(DATABASE, timeout=30)) as db:
+        checkpoint = db.execute('PRAGMA wal_checkpoint(PASSIVE)').fetchone()
+        result = db.execute('PRAGMA quick_check').fetchone()[0]
+    return {'status': 'ok' if result == 'ok' else 'failed', 'engine': 'sqlite', 'check': result, 'checkpoint': list(checkpoint or ())}
+
+
+def recovery_snapshot(retain=5):
+    """Private server recovery copy. Unlike portable exports it keeps team accounts and encrypted tokens."""
+    if not IS_SQLITE:
+        raise ValueError('Для PostgreSQL используйте pg_dump; контейнер создаёт серверные копии отдельно')
+    folder = DATA / 'recovery-snapshots'
+    folder.mkdir(parents=True, exist_ok=True)
+    destination = folder / (datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.db')
+    with closing(sqlite3.connect(DATABASE, timeout=30)) as source, closing(sqlite3.connect(destination)) as target:
+        source.backup(target)
+        if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+            destination.unlink(missing_ok=True)
+            raise ValueError('Проверка аварийной копии не пройдена')
+    for obsolete in sorted(folder.glob('*.db'), key=lambda p: p.stat().st_mtime, reverse=True)[retain:]:
+        obsolete.unlink(missing_ok=True)
+    return destination.name
 
 
 if __name__ == '__main__':

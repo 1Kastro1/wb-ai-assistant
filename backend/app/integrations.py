@@ -5,7 +5,7 @@ import re
 from urllib.parse import parse_qs, unquote, urlsplit
 from sqlalchemy import select
 from .config import MODEL
-from .db import Account, Product, Review, Session, now, setting
+from .db import Account, Product, Review, StoreProfile, Session, now, setting
 from .safety import classify, mask_vin
 from .security import guard, decrypt_secret
 
@@ -228,3 +228,112 @@ class WildberriesProvider:
 
 
 wb = WildberriesProvider()
+
+
+def store_credentials(db, store_id):
+    store = db.get(StoreProfile, store_id)
+    account = db.get(Account, store_id)
+    if not store or not account:
+        raise ValueError('Сначала подключите API выбранного магазина')
+    return store, decrypt_secret(account.encrypted_token)
+
+
+def upsert_market_review(db, store, external_id, product_external_id, product_name, brand, rating, text, created_at, answered=False, answer=''):
+    product_id = f'{store.provider}:{store.id}:{product_external_id}'
+    product = db.get(Product, product_id) or Product(id=product_id, name=product_name or str(product_external_id), brand=brand or '', category='', marketplace=store.provider)
+    db.add(product)
+    db.flush()
+    row = db.scalar(select(Review).where(Review.wb_account_id == store.id, Review.wb_review_id == str(external_id)))
+    if not row:
+        row = Review(id=f'{store.id}:{external_id}', wb_account_id=store.id, wb_review_id=str(external_id), product_id=product_id, status='unanswered', marketplace=store.provider)
+    row.text, row.rating, row.created_at = mask_vin(text or ''), int(rating or 0), str(created_at or now())
+    row.is_answered, row.existing_answer = bool(answered), mask_vin(answer or '')
+    for key, value in classify(row.text, product.category).items():
+        setattr(row, key, value)
+    row.status = 'published' if row.is_answered else ('manual_review' if row.manual else row.status)
+    db.add(row)
+    return row
+
+
+class OzonProvider:
+    def headers(self, store, token):
+        client_id = str((store.config or {}).get('client_id', '')).strip()
+        if not client_id:
+            raise ValueError('Для Ozon укажите Client-Id')
+        return {'Client-Id': client_id, 'Api-Key': token}
+
+    async def test(self, db, store_id):
+        store, token = store_credentials(db, store_id)
+        await guard.request('ozon', 'reviews', headers=self.headers(store, token), body={'limit': 1, 'sort_dir': 'DESC'})
+        return True
+
+    async def sync_reviews(self, db, store_id, progress=None, cancelled=None):
+        store, token = store_credentials(db, store_id)
+        total, last_id = 0, ''
+        for _ in range(1000):
+            if cancelled and cancelled(): raise asyncio.CancelledError()
+            body = {'limit': 100, 'sort_dir': 'DESC'}
+            if last_id: body['last_id'] = last_id
+            result = await guard.request('ozon', 'reviews', headers=self.headers(store, token), body=body)
+            items = result.get('reviews') or result.get('result', {}).get('reviews') or []
+            for item in items:
+                content = '\n'.join(str(item.get(k) or '') for k in ('text','positive','negative')).strip()
+                comments = item.get('comments_amount', 0)
+                upsert_market_review(db, store, item.get('id'), item.get('sku') or item.get('product_id') or 'unknown', item.get('product_name') or item.get('sku_name'), '', item.get('rating'), content, item.get('published_at') or item.get('created_at'), bool(comments))
+                total += 1
+            db.commit()
+            if progress: progress(min(95, 5 + total // 100))
+            if len(items) < 100: break
+            last_id = str(result.get('last_id') or items[-1].get('id') or '')
+            if not last_id: break
+        return total
+
+    async def publish(self, db, review, text):
+        store, token = store_credentials(db, review.wb_account_id)
+        await guard.request('ozon', 'publish', headers=self.headers(store, token), body={'review_id': review.wb_review_id, 'text': text})
+
+
+class YandexProvider:
+    def target(self, store, operation):
+        business_id = str((store.config or {}).get('business_id', '')).strip()
+        if not business_id.isdigit(): raise ValueError('Для Яндекс Маркета укажите числовой Business ID')
+        suffix = '/comments/update' if operation == 'publish' else ''
+        return f'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback{suffix}'
+
+    async def test(self, db, store_id):
+        store, token = store_credentials(db, store_id)
+        await guard.request('yandex', 'reviews', token='Bearer ' + token, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
+        return True
+
+    async def sync_reviews(self, db, store_id, progress=None, cancelled=None):
+        store, token = store_credentials(db, store_id)
+        total, page = 0, ''
+        for _ in range(1000):
+            if cancelled and cancelled(): raise asyncio.CancelledError()
+            params = {'limit': 50}
+            if page: params['page_token'] = page
+            result = await guard.request('yandex', 'reviews', token='Bearer ' + token, url=self.target(store, 'reviews'), params=params, body={'reactionStatus':'ALL'})
+            payload = result.get('result', {})
+            items = payload.get('feedbacks') or []
+            for item in items:
+                description = item.get('description') or {}
+                identifiers = item.get('identifiers') or {}
+                content = '\n'.join(str(description.get(k) or '') for k in ('advantages','disadvantages','comment')).strip()
+                upsert_market_review(db, store, item.get('feedbackId'), identifiers.get('offerId') or 'unknown', identifiers.get('offerId'), '', (item.get('statistics') or {}).get('rating'), content, item.get('createdAt'), not item.get('needReaction', True))
+                total += 1
+            db.commit()
+            if progress: progress(min(95, 5 + total // 50))
+            page = str((payload.get('paging') or {}).get('nextPageToken') or '')
+            if not page: break
+        return total
+
+    async def publish(self, db, review, text):
+        store, token = store_credentials(db, review.wb_account_id)
+        await guard.request('yandex', 'publish', token='Bearer ' + token, url=self.target(store, 'publish'), body={'feedbackId': review.wb_review_id, 'comment': {'text': text[:4096]}})
+
+
+ozon, yandex = OzonProvider(), YandexProvider()
+
+
+def provider_for(store):
+    return {'wb': wb, 'ozon': ozon, 'yandex': yandex}.get(store.provider)

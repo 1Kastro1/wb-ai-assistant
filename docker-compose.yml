@@ -4,8 +4,26 @@ services:
     ports: ["127.0.0.1:8000:8000"]
     environment:
       OLLAMA_MODEL: qwen3:4b
+      DATABASE_URL: postgresql+psycopg://wb_assistant:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/wb_assistant
+      WB_CONTAINER: "1"
     volumes: ["wb_data:/data"]
     secrets: [wb_key]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: wb_assistant
+      POSTGRES_USER: wb_assistant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wb_assistant -d wb_assistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
   frontend:
     build: ./frontend
@@ -22,3 +40,4 @@ secrets:
 volumes:
   wb_data:
   ollama_models:
+  postgres_data:
