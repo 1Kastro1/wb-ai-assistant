@@ -65,6 +65,17 @@ class LoginSession(Base):
     user_id: Mapped[str] = mapped_column(String, default='owner')
 
 
+class Activity(Base):
+    __tablename__ = 'user_activity'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[str] = mapped_column(String, default=now)
+    user_id: Mapped[str] = mapped_column(String)
+    username: Mapped[str] = mapped_column(String)
+    method: Mapped[str] = mapped_column(String)
+    path: Mapped[str] = mapped_column(String)
+    status: Mapped[int] = mapped_column(Integer)
+
+
 class Product(Base):
     __tablename__ = 'products'
     id: Mapped[str] = mapped_column(String, primary_key=True)

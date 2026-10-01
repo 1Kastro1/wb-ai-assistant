@@ -88,7 +88,7 @@ def _check_backup_database(path):
         if source.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Резервная копия повреждена')
         version = source.execute("SELECT version_num FROM alembic_version").fetchone() if source.execute("SELECT 1 FROM sqlite_master WHERE name='alembic_version'").fetchone() else None
-        if not version or version[0] not in ('0001','0002','0003','0004','0005'):
+        if not version or version[0] not in ('0001','0002','0003','0004','0005','0006'):
             raise ValueError('Версия резервной копии не поддерживается')
         users = source.execute('SELECT count(*) FROM users').fetchone()[0] if source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone() else 0
         if source.execute('SELECT count(*) FROM wb_accounts').fetchone()[0] or source.execute('SELECT count(*) FROM sessions').fetchone()[0] or users or source.execute("SELECT count(*) FROM app_settings WHERE key='password_hash'").fetchone()[0]:
@@ -152,7 +152,7 @@ def restore(name):
             raise ValueError('Резервная копия повреждена')
         if not source.execute("SELECT 1 FROM sqlite_master WHERE name='alembic_version'").fetchone():
             raise ValueError('Неизвестный формат резервной копии')
-        if source.execute('SELECT version_num FROM alembic_version').fetchone()[0] not in ('0001','0002','0003','0004','0005'):
+        if source.execute('SELECT version_num FROM alembic_version').fetchone()[0] not in ('0001','0002','0003','0004','0005','0006'):
             raise ValueError('Версия резервной копии не поддерживается')
         backup()
         with closing(sqlite3.connect(DATABASE)) as target:

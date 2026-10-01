@@ -124,7 +124,10 @@ def speech_version(answer: str) -> str:
 class AssistantService:
     MAX_TOOL_CALLS_PER_MESSAGE = 10
 
-    async def send(self, db, text, conversation_id=None, selection=None, voice_mode=False):
+    async def send(self, db, text, conversation_id=None, selection=None, voice_mode=False, can_manage_wb=True):
+        def require_wb_operation(tool_name):
+            if not can_manage_wb and tool_name in ('reviews.generate_reply', 'reviews.create_draft', 'reviews.update_draft', 'reviews.publish'):
+                raise ValueError('Операции Wildberries доступны владельцу и менеджеру WB')
         conversation = db.get(Conversation, conversation_id) if conversation_id else None
         if not conversation:
             conversation = Conversation(id=str(uuid4()), title=mask_vin(text[:70]), context={})
@@ -151,12 +154,14 @@ class AssistantService:
                 tool = 'memory.propose'
                 answer = 'Предложено правило. Выберите область и подтвердите сохранение в разделе «Действия».'
             elif any(x in lower for x in ('публикуй', 'опубликуй', 'отправь ответы')):
+                require_wb_operation('reviews.publish')
                 ids = context.get('drafted_ids') or context.get('last_result_ids', [])
                 data = propose_publish(db, ids)
                 context['pending_action_id'] = data['id']
                 tool = 'reviews.publish'
                 answer = f"Подготовлено подтверждение: {len(data['payload']['items'])} ответов. Откройте «Действия», проверьте тексты и подтвердите."
             elif any(x in lower for x in ('подготовь ответ', 'ответь на', 'создай ответ', 'сделай короче')):
+                require_wb_operation('reviews.generate_reply')
                 if 'отзыв' in lower and any(x in lower for x in ('найди', 'негатив', 'без ответа')):
                     args = ToolArgs(unanswered='без ответа' in lower, max_rating=3 if 'негатив' in lower else 5, days=7 if 'недел' in lower else 0, limit=9)
                     data = await registry.dispatch(db, 'reviews.search', args.model_dump(), context)
@@ -233,6 +238,7 @@ class AssistantService:
                     tool = 'system.status'
                     answer = str(plan.get('answer','Уточните запрос.'))
                 else:
+                    require_wb_operation(tool)
                     data = await registry.dispatch(db, tool, plan.get('arguments') or {}, context)
                     calls += 1
                     if tool.startswith('reviews.') and isinstance(data, list):

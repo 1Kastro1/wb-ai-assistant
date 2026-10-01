@@ -87,6 +87,14 @@ async def boundary(request, call_next):
     if request.method in ('POST', 'PATCH', 'DELETE') and not allowed_origin(origin):
         return JSONResponse({'detail': 'Нужен локальный Origin'}, 403)
     response = await call_next(request)
+    actor = getattr(request.state, 'actor', None)
+    if actor and request.method in ('POST', 'PATCH', 'DELETE') and response.status_code < 400:
+        try:
+            with Session() as audit_db:
+                audit_db.add(Activity(user_id=actor['user_id'], username=actor['username'], method=request.method, path=request.url.path[:300], status=response.status_code))
+                audit_db.commit()
+        except Exception:
+            pass
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'no-referrer'
@@ -123,7 +131,8 @@ def authorize(request: Request):
             raise HTTPException(403, 'Сначала замените временный пароль')
         if request.method not in ('GET', 'HEAD') and not secrets.compare_digest(session.csrf, request.headers.get('x-csrf-token', '')):
             raise HTTPException(403, 'Неверный CSRF-токен')
-        return {'csrf': session.csrf, 'user_id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password}
+        request.state.actor = {'user_id': user.id, 'username': user.username}
+        return {'csrf': session.csrf, 'user_id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password, 'can_manage_wb': user.role == 'owner' or user.position == 'Менеджер WB'}
 
 
 AUTH = Annotated[dict, Depends(authorize)]
@@ -136,6 +145,15 @@ def owner(auth: AUTH):
 
 
 OWNER = Annotated[dict, Depends(owner)]
+
+
+def wb_operator(auth: AUTH):
+    if auth['role'] != 'owner' and auth['position'] != 'Менеджер WB':
+        raise HTTPException(403, 'Операции Wildberries доступны владельцу и менеджеру WB')
+    return auth
+
+
+WB_OPERATOR = Annotated[dict, Depends(wb_operator)]
 
 
 class Payload(BaseModel):
@@ -168,7 +186,7 @@ def normalized_username(value):
 
 
 def session_response(user, csrf):
-    return {'csrf': csrf, 'user': {'id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password}}
+    return {'csrf': csrf, 'user': {'id': user.id, 'username': user.username, 'display_name': user.display_name, 'role': user.role, 'position': user.position, 'must_change_password': user.must_change_password, 'can_manage_wb': user.role == 'owner' or user.position == 'Менеджер WB'}}
 
 
 def set_session_cookie(response, request, token):
@@ -242,7 +260,7 @@ async def auth_setup(body: SetupPassword, response: Response, request: Request, 
 
 @app.get('/auth/session')
 def session(auth: AUTH):
-    return {'csrf': auth['csrf'], 'user': {'id': auth['user_id'], 'username': auth['username'], 'display_name': auth['display_name'], 'role': auth['role'], 'position': auth['position'], 'must_change_password': auth['must_change_password']}}
+    return {'csrf': auth['csrf'], 'user': {'id': auth['user_id'], 'username': auth['username'], 'display_name': auth['display_name'], 'role': auth['role'], 'position': auth['position'], 'must_change_password': auth['must_change_password'], 'can_manage_wb': auth['can_manage_wb']}}
 
 
 @app.post('/auth/logout')
@@ -282,6 +300,11 @@ def public_user(user):
 @app.get('/users')
 def users_list(auth: OWNER, db: DB):
     return [public_user(user) for user in db.scalars(select(User).order_by(User.role.desc(), User.username)).all()]
+
+
+@app.get('/team/activity')
+def team_activity(auth: OWNER, db: DB):
+    return [public(item) for item in db.scalars(select(Activity).order_by(Activity.id.desc()).limit(200)).all()]
 
 
 @app.post('/users')
@@ -383,7 +406,7 @@ def performance_get(auth: AUTH, db: DB):
 
 
 @app.patch('/settings/performance')
-def performance_set(body: Performance, auth: AUTH, db: DB):
+def performance_set(body: Performance, auth: OWNER, db: DB):
     from .model_router import ModelRouter
     if body.mode not in ModelRouter.PROFILES:
         raise ValueError('Неизвестный режим производительности')
@@ -393,7 +416,7 @@ def performance_set(body: Performance, auth: AUTH, db: DB):
 
 
 @app.patch('/settings/modes')
-def modes(body: Modes, auth: AUTH, db: DB):
+def modes(body: Modes, auth: OWNER, db: DB):
     if not body.test_mode and not REAL_PUBLISH:
         raise ValueError('Сначала отдельно разрешите реальную публикацию при запуске')
     set_setting(db, 'safe_mode', body.safe_mode)
@@ -439,7 +462,7 @@ def token(body: Token, auth: OWNER, db: DB):
 
 
 @app.post('/settings/wb-test')
-async def wb_test(auth: AUTH, db: DB):
+async def wb_test(auth: WB_OPERATOR, db: DB):
     await guard.request('wb', 'reviews', token=wb_token(db), params={'isAnswered': 'false', 'take': 1, 'skip': 0})
     return {'ok': True}
 
@@ -493,7 +516,7 @@ def schedule_get(auth: AUTH, db: DB):
 
 
 @app.patch('/settings/schedule')
-def schedule_set(body: ScheduleInput, auth: AUTH, db: DB):
+def schedule_set(body: ScheduleInput, auth: OWNER, db: DB):
     current = setting(db, 'automation_schedule', {})
     value = {**current, **body.model_dump()}
     if value.get('drafts_enabled'):
@@ -528,7 +551,7 @@ def get_auto_replies_status(auth: AUTH, db: DB):
 
 
 @app.post('/auto-replies/start')
-async def start_auto_replies(background: BackgroundTasks, auth: AUTH, db: DB):
+async def start_auto_replies(background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
     schedule = schedule_get(auth, db)
     since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time(), 'drafts_since': since})
@@ -546,7 +569,7 @@ async def start_auto_replies(background: BackgroundTasks, auth: AUTH, db: DB):
 
 
 @app.post('/auto-replies/pause')
-def pause_auto_replies(auth: AUTH, db: DB):
+def pause_auto_replies(auth: WB_OPERATOR, db: DB):
     schedule = schedule_get(auth, db)
     schedule['drafts_enabled'] = False
     set_setting(db, 'automation_schedule', schedule)
@@ -749,7 +772,7 @@ async def scheduler_loop():
 
 
 @app.post('/jobs/sync/{kind}')
-async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: DB):
+async def schedule_sync(kind: str, background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
     if kind not in ('products','reviews'):
         raise HTTPException(404)
     wb_token(db)
@@ -762,7 +785,7 @@ async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: 
 
 
 @app.post('/jobs/drafts')
-async def schedule_all_drafts(background: BackgroundTasks, auth: AUTH, db: DB):
+async def schedule_all_drafts(background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
     active = setting(db, 'active_store', 'owner')
     existing = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])))
     if existing:
@@ -796,7 +819,7 @@ def jobs(auth: AUTH, db: DB):
 
 
 @app.post('/jobs/{jid}/cancel')
-def cancel_job(jid: str, auth: AUTH, db: DB):
+def cancel_job(jid: str, auth: WB_OPERATOR, db: DB):
     job = db.get(Job, jid)
     if not job or job.status not in ('queued', 'running'):
         raise ValueError('Это задание уже завершено')
@@ -808,7 +831,7 @@ def cancel_job(jid: str, auth: AUTH, db: DB):
 
 
 @app.post('/jobs/{jid}/retry')
-async def retry_job(jid: str, background: BackgroundTasks, auth: AUTH, db: DB):
+async def retry_job(jid: str, background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
     job = db.get(Job, jid)
     if not job or job.status not in ('failed', 'interrupted', 'cancelled'):
         raise ValueError('Повтор доступен только для незавершённого задания')
@@ -827,7 +850,7 @@ def get_job(jid: str, auth: AUTH, db: DB):
 
 
 @app.post('/sync/{kind}')
-async def sync(kind: str, auth: AUTH, db: DB):
+async def sync(kind: str, auth: WB_OPERATOR, db: DB):
     if sync_lock.locked():
         raise ValueError('Синхронизация уже выполняется')
     async with sync_lock:
@@ -899,7 +922,7 @@ class DraftInput(Payload):
 
 
 @app.post('/reviews/{rid}/draft')
-async def draft(rid: str, body: DraftInput, auth: AUTH, db: DB):
+async def draft(rid: str, body: DraftInput, auth: WB_OPERATOR, db: DB):
     return await generate_draft(db, rid, body.instruction)
 
 
@@ -909,7 +932,7 @@ class DraftEdit(Payload):
 
 
 @app.patch('/drafts/{did}')
-def draft_edit(did: str, body: DraftEdit, auth: AUTH, db: DB):
+def draft_edit(did: str, body: DraftEdit, auth: WB_OPERATOR, db: DB):
     return edit_draft(db, did, body.text, body.revision)
 
 
@@ -919,7 +942,7 @@ class DraftFeedback(Payload):
 
 
 @app.post('/drafts/{did}/feedback')
-def draft_feedback(did: str, body: DraftFeedback, auth: AUTH, db: DB):
+def draft_feedback(did: str, body: DraftFeedback, auth: WB_OPERATOR, db: DB):
     draft = db.get(Draft, did)
     if not draft:
         raise HTTPException(404, 'Черновик не найден')
@@ -943,7 +966,7 @@ class PublishInput(Payload):
 
 
 @app.post('/actions/publish')
-def publish_proposal(body: PublishInput, auth: AUTH, db: DB):
+def publish_proposal(body: PublishInput, auth: WB_OPERATOR, db: DB):
     return propose_publish(db, body.review_ids)
 
 
@@ -954,7 +977,7 @@ def actions(auth: AUTH, db: DB):
 
 
 @app.post('/publications/reconcile')
-async def reconcile_publications(auth: AUTH, db: DB):
+async def reconcile_publications(auth: WB_OPERATOR, db: DB):
     active = setting(db, 'active_store', 'owner')
     wb_token(db, active)
     await wb.sync_reviews(db, active)
@@ -994,6 +1017,9 @@ action_lock = asyncio.Lock()
 
 @app.post('/actions/{aid}/confirm')
 async def confirmation(aid: str, body: Confirm, auth: AUTH, db: DB):
+    action = db.get(Action, aid)
+    if action and action.kind == 'publish':
+        wb_operator(auth)
     async with action_lock:
         return await confirm_action(db, aid, body.manual_ack)
 
@@ -1003,6 +1029,8 @@ def cancel(aid: str, auth: AUTH, db: DB):
     action = db.get(Action, aid)
     if not action or action.status != 'pending':
         raise ValueError('Действие уже обработано')
+    if action.kind == 'publish':
+        wb_operator(auth)
     action.status = 'cancelled'
     if action.kind == 'publish':
         for item in action.payload['items']:
@@ -1065,7 +1093,7 @@ chat_lock = asyncio.Lock()
 @app.post('/chat')
 async def chat(body: Chat, auth: AUTH, db: DB):
     async with chat_lock:
-        return await assistant.send(db, body.text, body.conversation_id, body.selection, body.voice_mode)
+        return await assistant.send(db, body.text, body.conversation_id, body.selection, body.voice_mode, auth['can_manage_wb'])
 
 
 class VoiceText(Payload):
@@ -1243,7 +1271,7 @@ def portable_sync_get(auth: AUTH, db: DB):
 
 
 @app.patch('/settings/portable-sync')
-def portable_sync_set(body: PortableSyncInput, auth: AUTH, db: DB):
+def portable_sync_set(body: PortableSyncInput, auth: OWNER, db: DB):
     destination = Path(body.directory).expanduser().resolve() if body.directory else None
     if body.enabled and (not destination or not destination.is_dir()):
         raise ValueError('Выберите существующую папку Google Drive, OneDrive или другую папку синхронизации')
@@ -1262,7 +1290,7 @@ def portable_sync_set(body: PortableSyncInput, auth: AUTH, db: DB):
 
 
 @app.post('/portable/sync-now')
-async def portable_sync_now(auth: AUTH, db: DB):
+async def portable_sync_now(auth: OWNER, db: DB):
     config=setting(db,'portable_sync',{})
     account=db.get(Account,'portable:sync')
     destination=Path(str(config.get('directory',''))).expanduser().resolve()

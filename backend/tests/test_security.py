@@ -5,7 +5,7 @@ import pytest
 import httpx
 from app.security import EgressGuard, encrypt_secret, decrypt_secret, redact
 from app.assistant import registry
-from app.db import Session, Account, Audit, User, set_setting
+from app.db import Session, Account, Activity, Audit, User, set_setting
 from sqlalchemy import select
 from app.config import DATA
 
@@ -86,6 +86,59 @@ def test_owner_can_change_position_and_invalid_position_is_rejected(client):
     assert changed.status_code == 200
     assert changed.json()['position'] == 'Менеджер Яндекс Маркет'
     assert client.patch('/users/'+user['id'], json={'position':'Администратор'}).status_code == 422
+
+
+def colleague_client(client, username, position):
+    temporary = username + '-temporary-password-123'
+    personal = username + '-personal-password-456'
+    created = client.post('/users', json={'username':username,'display_name':username.title(),'password':temporary,'position':position})
+    assert created.status_code == 200
+    from fastapi.testclient import TestClient
+    from app.main import app
+    colleague = TestClient(app, headers={'Origin':'http://127.0.0.1:3000'})
+    logged = colleague.post('/auth/login', json={'username':username,'password':temporary})
+    colleague.headers['X-CSRF-Token'] = logged.json()['csrf']
+    assert colleague.post('/auth/password', json={'current_password':temporary,'new_password':personal}).status_code == 200
+    logged = colleague.post('/auth/login', json={'username':username,'password':personal})
+    colleague.headers['X-CSRF-Token'] = logged.json()['csrf']
+    return colleague
+
+
+def test_marketplace_positions_have_real_wb_permissions(client):
+    ozon = colleague_client(client, 'ozon-manager', 'Менеджер Ozon')
+    try:
+        session = ozon.get('/auth/session').json()['user']
+        assert session['can_manage_wb'] is False
+        assert ozon.get('/reviews').status_code == 200
+        assert ozon.post('/jobs/sync/reviews').status_code == 403
+        assert ozon.post('/auto-replies/start').status_code == 403
+        assert ozon.patch('/settings/schedule', json={}).status_code == 403
+        chat = ozon.post('/chat', json={'text':'подготовь ответ покупателю'})
+        assert chat.status_code == 200
+        assert 'менеджеру WB' in chat.json()['text']
+    finally:
+        ozon.close()
+
+    wb = colleague_client(client, 'wb-manager', 'Менеджер WB')
+    try:
+        assert wb.get('/auth/session').json()['user']['can_manage_wb'] is True
+        assert wb.post('/auto-replies/pause').status_code == 200
+        assert wb.patch('/settings/schedule', json={}).status_code == 403
+    finally:
+        wb.close()
+
+
+def test_owner_activity_log_records_actions_without_payloads(client):
+    password = 'never-store-this-password-123'
+    created = client.post('/users', json={'username':'audit-user','display_name':'Аудит','password':password,'position':'Менеджер WB'})
+    assert created.status_code == 200
+    activity = client.get('/team/activity')
+    assert activity.status_code == 200
+    rows = activity.json()
+    assert any(row['path'] == '/users' and row['username'] == 'owner' for row in rows)
+    assert password not in json.dumps(rows, ensure_ascii=False)
+    with Session() as db:
+        assert db.scalar(select(Activity).where(Activity.path == '/users')) is not None
 
 
 def test_disabling_colleague_revokes_sessions(client):
