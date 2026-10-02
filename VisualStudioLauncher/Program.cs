@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 
 var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
 var url = "http://127.0.0.1:3000";
@@ -9,7 +10,14 @@ try
     using var response = await client.GetAsync(url);
     if (response.IsSuccessStatusCode)
     {
-        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Win32Exception)
+        {
+            Console.WriteLine($"Приложение уже работает: {url}");
+        }
         return;
     }
 }
@@ -24,8 +32,17 @@ if (!File.Exists(launcher))
     return;
 }
 
-Process.Start(new ProcessStartInfo(launcher)
+try
 {
-    WorkingDirectory = root,
-    UseShellExecute = true
-});
+    Process.Start(new ProcessStartInfo(launcher)
+    {
+        WorkingDirectory = root,
+        UseShellExecute = true
+    });
+}
+catch (Win32Exception error)
+{
+    Console.Error.WriteLine($"Не удалось запустить приложение: {error.Message}");
+    Console.Error.WriteLine($"Запустите вручную: {launcher}");
+    Environment.ExitCode = 1;
+}
