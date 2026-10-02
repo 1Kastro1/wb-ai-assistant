@@ -391,25 +391,57 @@ def analytics(db, days=0, product_id='', account_id=''):
     }
 
 
-def assess_question_answer(question, product, answer):
+def question_intent(text):
+    value = (text or '').lower().replace('ё', 'е')
+    patterns = (
+        ('применение', r'как (?:использ|примен)|инструкц|сколько нанос|разводит|дозиров'),
+        ('совместимость', r'подойд|совмест|можно ли.*(?:авто|машин|модел|материал|поверхност)'),
+        ('комплектность', r'комплект|входит|сколько штук|насадк|упаковк'),
+        ('размер', r'размер|длин|ширин|высот|объ[её]м|вес'),
+        ('состав', r'состав|материал|содержит|безопасен'),
+        ('наличие', r'налич|когда будет|цвет|вариант|запах'),
+    )
+    for label, pattern in patterns:
+        if re.search(pattern, value):
+            return label
+    return 'общее'
+
+
+def assess_question_answer(question, product, answer, sources=None):
     question_words = set(WORDS.findall(question.text.lower()))
     answer_words = set(WORDS.findall(answer.lower()))
     overlap = len(question_words & answer_words)
-    issues = []
-    score = 70
+    issues, score = [], 30
+    breakdown = {
+        'safety': {'label': 'Безопасность', 'score': 30, 'max': 30},
+        'relevance': {'label': 'Ответ по существу', 'score': 0, 'max': 25},
+        'facts': {'label': 'Опора на факты', 'score': 0, 'max': 20},
+        'clarity': {'label': 'Ясность', 'score': 0, 'max': 15},
+        'courtesy': {'label': 'Дружелюбность', 'score': 0, 'max': 10},
+    }
     if 60 <= len(answer) <= 900:
-        score += 15
+        score += 15; breakdown['clarity']['score'] = 15
     else:
         issues.append('ответ должен быть содержательным и без лишней длины')
     if answer.lower().startswith(('здравствуйте', 'добрый день')):
-        score += 5
+        score += 10; breakdown['courtesy']['score'] = 10
     else:
         issues.append('добавить дружелюбное приветствие')
     if overlap or any(word in answer.lower() for word in WORDS.findall(product.name.lower())):
-        score += 10
+        score += 25; breakdown['relevance']['score'] = 25
     else:
         issues.append('ответить именно на заданный вопрос')
-    return {'score': min(100, score), 'passed': score >= 90 and not issues, 'issues': issues, 'intent_label': 'вопрос о товаре', 'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION}
+    confirmed = [source for source in (sources or []) if source.get('verification_status') == 'VERIFIED']
+    cautious = any(phrase in answer.lower() for phrase in ('недостаточно подтвержден', 'не хотим вводить', 'уточняем информац'))
+    factual_restraint = not (sources or []) and not re.search(r'\b\d+(?:[.,]\d+)?\s*(?:мл|л|см|мм|мин|час|%|г|кг)\b|гарантир|точно подойд|абсолютно безопас', answer.lower())
+    if confirmed or factual_restraint:
+        score += 20; breakdown['facts']['score'] = 20
+    elif cautious:
+        score += 10; breakdown['facts']['score'] = 10
+    else:
+        issues.append('нужна опора на подтверждённые сведения о товаре')
+    intent = question_intent(question.text)
+    return {'score': min(100, score), 'passed': score >= 90 and not issues, 'issues': issues, 'intent_label': intent, 'breakdown': breakdown, 'sources': sources or [], 'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION}
 
 
 async def generate_question_draft(db, question, instruction=''):
@@ -419,10 +451,26 @@ async def generate_question_draft(db, question, instruction=''):
     existing = db.scalar(select(Draft).where(Draft.review_id == question.id))
     expected_revision = existing.revision if existing else None
     verified_facts = [fact for fact in (product.facts or []) if fact.get('verification_status') == 'VERIFIED']
+    sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
+    intent = question_intent(question.text)
+    if intent == 'применение' and not has_usage_instruction(verified_facts):
+        try:
+            found = cached_web_instruction_sources(product) or await web_research.search_instructions(product, db)
+            if found:
+                remember_web_instruction_sources(product, found)
+                db.commit()
+                sources.extend([{**item, 'verification_status':'WEB_UNVERIFIED'} for item in found[:3]])
+        except ValueError:
+            pass
+    examples = []
+    previous = db.scalars(select(Review).where(Review.marketplace == 'wb_question', Review.product_id == question.product_id, Review.is_answered == True, Review.id != question.id).order_by(Review.created_at.desc()).limit(5))
+    for item in previous:
+        if item.existing_answer:
+            examples.append({'question': item.text, 'answer': item.existing_answer})
     memories = [memory.text for memory in db.scalars(select(Memory).where(Memory.enabled == True)) if memory.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
     messages = [
         {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
-        {'role': 'user', 'content': json.dumps({'question': question.text, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
+        {'role': 'user', 'content': json.dumps({'question': question.text, 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'research_sources_for_owner_review': sources, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
     try:
@@ -434,7 +482,7 @@ async def generate_question_draft(db, question, instruction=''):
         try:
             value = validate_reply(mask_vin(candidate))
             if not existing or value.strip() != existing.text.strip():
-                checked.append((value, assess_question_answer(question, product, value)))
+                checked.append((value, assess_question_answer(question, product, value, sources)))
         except ValueError:
             continue
     if checked:
@@ -443,11 +491,11 @@ async def generate_question_draft(db, question, instruction=''):
         quality['selection_note'] = f'Выбран лучший из {len(checked)} безопасных вариантов'
     else:
         reply = 'Здравствуйте! Спасибо за вопрос. В карточке товара пока недостаточно подтверждённых данных для точного ответа, поэтому не хотим вводить вас в заблуждение.'
-        quality = assess_question_answer(question, product, reply)
+        quality = assess_question_answer(question, product, reply, sources)
         quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
         model = 'question-safety-1.0'
     quality['candidates_evaluated'] = len(checked)
-    quality['analysis_summary'] = 'Вопрос сопоставлен с товаром и проверенными фактами карточки. Ответ проверен на безопасность и отсутствие выдуманных характеристик.'
+    quality['analysis_summary'] = f'Определён тип вопроса: {intent}. Ответ проверен на соответствие вопросу, подтверждённым фактам и правилам безопасности.'
     db.refresh(question)
     if question.is_answered:
         raise ValueError('Вопрос изменился во время генерации')
@@ -644,7 +692,11 @@ def edit_draft(db, draft_id, value, revision):
     draft.edits = draft.edits + [{'old': old, 'new': value, 'diff': '\n'.join(difflib.ndiff(old.splitlines(), value.splitlines())), 'at': now()}]
     draft.text, draft.revision = value, draft.revision + 1
     product = db.get(Product, review.product_id)
-    draft.quality = assess_question_answer(review, product, value) if review.marketplace == 'wb_question' else assess_reply(review, product, value)
+    if review.marketplace == 'wb_question':
+        sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in (product.facts or []) if fact.get('verification_status') == 'VERIFIED']
+        draft.quality = assess_question_answer(review, product, value, sources)
+    else:
+        draft.quality = assess_reply(review, product, value)
     learn_from_edit(db, draft, old, value)
     review.status = 'manual_review' if review.manual else 'draft_ready'
     db.commit()

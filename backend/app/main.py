@@ -21,7 +21,7 @@ from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for
-from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action
+from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
@@ -490,7 +490,7 @@ def assistant_toggle(body: AssistantEnabled, auth: OWNER, db: DB):
         schedule = setting(db, 'automation_schedule', {})
         schedule['drafts_enabled'] = False
         set_setting(db, 'automation_schedule', schedule)
-        for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
+        for job in db.scalars(select(Job).where(Job.kind.in_(['drafts','question_drafts']), Job.status.in_(['queued', 'running']))):
             job.cancel_requested = True
             if job.status == 'queued':
                 job.status = 'cancelled'
@@ -540,9 +540,11 @@ class ScheduleInput(Payload):
     enabled: bool = False
     reviews_hours: int = Field(default=3, ge=1, le=168)
     products_hours: int = Field(default=24, ge=1, le=720)
+    questions_hours: int = Field(default=3, ge=1, le=168)
     backup_hours: int = Field(default=24, ge=1, le=720)
     drafts_enabled: bool = False
     drafts_hours: int = Field(default=6, ge=1, le=168)
+    question_drafts_enabled: bool = False
     auto_propose: bool = False
     min_quality: int = Field(default=96, ge=70, le=100)
     max_proposals: int = Field(default=100, ge=1, le=100)
@@ -552,8 +554,9 @@ class ScheduleInput(Payload):
 @app.post('/settings/wb-token')
 def token(body: Token, auth: OWNER, db: DB):
     active = active_store(db, auth)
-    if db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == active)):
-        raise ValueError('В этом профиле уже есть отзывы. Создайте новый профиль магазина для другого токена')
+    # Re-saving a rotated or restored token must not be blocked by data that already
+    # belongs to this explicit store profile. This also prevents the shared team
+    # connection from appearing to "fall off" after the first synchronization.
     db.merge(Account(id=active, encrypted_token=encrypt_secret(body.token)))
     db.commit()
     return {'token': 'ENCRYPTED'}
@@ -687,7 +690,7 @@ async def test_store(store_id: str, auth: AUTH, db: DB):
 
 @app.get('/settings/schedule')
 def schedule_get(auth: AUTH, db: DB):
-    defaults = {'enabled': False, 'reviews_hours': 3, 'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False, 'min_quality': 96, 'max_proposals': 100, 'drafts_days': 7}
+    defaults = {'enabled': False, 'reviews_hours': 3, 'questions_hours': 3, 'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False, 'question_drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False, 'min_quality': 96, 'max_proposals': 100, 'drafts_days': 7}
     return {**defaults, **setting(db, 'automation_schedule', {})}
 
 
@@ -801,14 +804,19 @@ async def run_sync_job(job_id):
                 db.refresh(job)
                 return job.cancel_requested
             try:
-                if kind == 'drafts':
+                if kind in ('drafts', 'question_drafts'):
                     since = (job.result or {}).get('since', '')
+                    is_questions = kind == 'question_drafts'
                     conditions = [
                         Review.wb_account_id == account_id,
                         Review.is_answered == False,
                         Review.status != 'publishing',
                         Draft.id.is_(None),
+                        Review.marketplace == 'wb_question' if is_questions else Review.marketplace != 'wb_question',
                     ]
+                    selected_ids = list((job.result or {}).get('selected_ids') or [])
+                    if selected_ids:
+                        conditions.append(Review.id.in_(selected_ids))
                     if since:
                         conditions.append(Review.created_at >= since)
                     ids = list(db.scalars(
@@ -831,7 +839,7 @@ async def run_sync_job(job_id):
                         update_progress(round(index / max(1, total) * 100))
                     schedule = setting(db, 'automation_schedule', {})
                     proposal_id = None
-                    if schedule.get('auto_propose'):
+                    if schedule.get('auto_propose') and not is_questions:
                         minimum = max(70, min(100, int(schedule.get('min_quality', 96))))
                         limit = max(1, min(100, int(schedule.get('max_proposals', 100))))
                         candidate_rows = db.execute(
@@ -855,7 +863,7 @@ async def run_sync_job(job_id):
                         'account_id': account_id,
                         'since': since,
                         'failures': failures,
-                        'message': f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
+                        'message': f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
                         'proposal_id': proposal_id,
                     }
                 else:
@@ -888,6 +896,10 @@ async def run_sync_job(job_id):
                         db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
                         schedule['last_drafts'] = time.time()
                         set_setting(db, 'automation_schedule', schedule)
+                    if kind == 'questions' and schedule.get('enabled') and schedule.get('question_drafts_enabled') and setting(db, 'assistant_enabled', True) and not db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued', 'running']))):
+                        db.add(Job(id=str(uuid4()), kind='question_drafts', priority=250, result={'account_id': account_id, 'scheduled': True, 'message': 'Подготовка ответов после получения новых вопросов'}))
+                        schedule['last_question_drafts'] = time.time()
+                        set_setting(db, 'automation_schedule', schedule)
             except asyncio.CancelledError:
                 db.rollback()
                 job = db.get(Job, job_id)
@@ -898,7 +910,7 @@ async def run_sync_job(job_id):
                 if job.attempts < job.max_attempts and not job.cancel_requested:
                     job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
                 else:
-                    message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind == 'drafts' else 'Синхронизация не завершена. Проверьте токен, доступ WB и журнал соединений.'
+                    message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts') else 'Синхронизация не завершена. Проверьте токен, доступ WB и журнал соединений.'
                     job.status, job.result = 'failed', {'message':message, 'account_id': account_id, 'error_type': type(error).__name__}
                     add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
             db.commit()
@@ -929,7 +941,10 @@ async def scheduler_loop():
                     continue
                 current = time.time()
                 active = setting(db, 'active_store', 'owner')
-                for kind, hours in (('products', int(schedule.get('products_hours', 24))), ('reviews', int(schedule.get('reviews_hours', 3)))):
+                store = db.get(StoreProfile, active)
+                for kind, hours in (('products', int(schedule.get('products_hours', 24))), ('reviews', int(schedule.get('reviews_hours', 3))), ('questions', int(schedule.get('questions_hours', 3)))):
+                    if kind == 'questions' and store and (store.provider or 'wb') != 'wb':
+                        continue
                     last = float(schedule.get('last_' + kind, 0))
                     if current - last >= max(1, hours) * 3600 and not db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
                         db.add(Job(id=str(uuid4()), kind=kind, priority=200, result={'account_id': active, 'scheduled': True}))
@@ -940,6 +955,12 @@ async def scheduler_loop():
                     if current - last >= hours * 3600 and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
                         db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': active, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Плановая подготовка автоответов'}))
                         schedule['last_drafts'] = current
+                if schedule.get('question_drafts_enabled') and setting(db, 'assistant_enabled', True):
+                    last = float(schedule.get('last_question_drafts', 0))
+                    hours = max(1, int(schedule.get('drafts_hours', 6)))
+                    if current - last >= hours * 3600 and not db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued', 'running']))):
+                        db.add(Job(id=str(uuid4()), kind='question_drafts', priority=250, result={'account_id': active, 'scheduled': True, 'message': 'Плановая подготовка ответов на вопросы'}))
+                        schedule['last_question_drafts'] = current
                 if current - float(schedule.get('last_backup', 0)) >= max(1, int(schedule.get('backup_hours', 24))) * 3600:
                     async with maintenance_lock:
                         await asyncio.to_thread(backup)
@@ -1097,24 +1118,53 @@ def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False,
 
 
 @app.get('/questions/page')
-def questions_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, limit: int = 30, offset: int = 0):
+def questions_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, status: str = '', kind: str = '', limit: int = 30, offset: int = 0):
     limit, offset = min(200, max(1, limit)), max(0, offset)
     conditions = [Review.wb_account_id == active_store(db, auth), Review.marketplace == 'wb_question']
     if q:
         conditions.append(Review.text.contains(q, autoescape=True) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
     if unanswered:
         conditions.append(Review.is_answered == False)
+    if status == 'answered':
+        conditions.append(Review.is_answered == True)
+    elif status == 'draft':
+        conditions.extend((Review.is_answered == False, Review.status.in_(['draft_ready','pending_confirmation'])))
     query = select(Review).join(Product).where(*conditions)
-    rows = list(db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(offset).limit(limit)))
+    ordered = query.order_by(Review.created_at.desc(), Review.id)
+    if kind:
+        matching = [row for row in db.scalars(ordered) if question_intent(row.text) == kind]
+        total = len(matching)
+        rows = matching[offset:offset + limit]
+    else:
+        total = db.scalar(select(func.count()).select_from(Review).join(Product).where(*conditions)) or 0
+        rows = list(db.scalars(ordered.offset(offset).limit(limit)))
     items = []
     for row in rows:
         item = public(row)
         item['product'] = public(db.get(Product, row.product_id))
         draft = db.scalar(select(Draft).where(Draft.review_id == row.id))
         item['draft'] = public(draft) if draft else None
+        item['question_type'] = question_intent(row.text)
         items.append(item)
-    total = db.scalar(select(func.count()).select_from(Review).join(Product).where(*conditions)) or 0
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total}
+
+
+@app.get('/questions/stats')
+def question_stats(auth: AUTH, db: DB):
+    active = active_store(db, auth)
+    base = [Review.wb_account_id == active, Review.marketplace == 'wb_question']
+    rows = list(db.scalars(select(Review).where(*base)))
+    types = {}
+    for row in rows:
+        label = question_intent(row.text)
+        types[label] = types.get(label, 0) + 1
+    return {
+        'total': len(rows),
+        'unanswered': sum(not row.is_answered for row in rows),
+        'drafts': sum(row.status in ('draft_ready','pending_confirmation') and not row.is_answered for row in rows),
+        'answered': sum(row.is_answered for row in rows),
+        'types': types,
+    }
 
 
 @app.get('/products')
@@ -1149,6 +1199,20 @@ def product_fact(pid: str, body: Fact, auth: AUTH, db: DB):
     product.facts = product.facts + [{**body.model_dump(), 'verified_at': now(), 'verification_status': 'VERIFIED'}]
     db.commit()
     return public(product)
+
+
+@app.delete('/products/{pid}/facts/{fact_index}')
+def product_fact_delete(pid: str, fact_index: int, auth: MARKET_OPERATOR, db: DB):
+    product = db.get(Product, pid)
+    if not product:
+        raise HTTPException(404, 'Товар не найден')
+    facts = list(product.facts or [])
+    if fact_index < 0 or fact_index >= len(facts):
+        raise HTTPException(404, 'Факт не найден')
+    removed = facts.pop(fact_index)
+    product.facts = facts
+    db.commit()
+    return {'removed': removed, 'facts': facts}
 
 
 @app.get('/analytics')
@@ -1202,6 +1266,36 @@ def question_publish(qid: str, auth: MARKET_OPERATOR, db: DB):
         raise HTTPException(404, 'Вопрос не найден')
     can(auth, 'wb:operate')
     return propose_publish(db, [qid])
+
+
+class QuestionDraftBatch(Payload):
+    question_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+@app.post('/jobs/question-drafts')
+async def schedule_question_drafts(body: QuestionDraftBatch, background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB):
+    if not setting(db, 'assistant_enabled', True):
+        raise ValueError('Сначала включите ассистента')
+    can(auth, 'wb:operate')
+    active = active_store(db, auth)
+    selected = list(dict.fromkeys(body.question_ids))
+    if selected:
+        valid = set(db.scalars(select(Review.id).where(Review.id.in_(selected), Review.wb_account_id == active, Review.marketplace == 'wb_question', Review.is_answered == False)))
+        if valid != set(selected):
+            raise ValueError('В выборке есть недоступные или уже отвеченные вопросы')
+    existing = db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued','running'])))
+    if existing:
+        return public(existing)
+    job = Job(id=str(uuid4()), kind='question_drafts', priority=50, result={'account_id': active, 'selected_ids': selected, 'message': 'Подготовка ответов на вопросы поставлена в очередь'})
+    db.add(job); db.commit(); background.add_task(run_job_queue)
+    return public(job)
+
+
+@app.get('/jobs/question-drafts/preview')
+def preview_question_drafts(auth: AUTH, db: DB):
+    active = active_store(db, auth)
+    total = db.scalar(select(func.count()).select_from(Review).outerjoin(Draft, Draft.review_id == Review.id).where(Review.wb_account_id == active, Review.marketplace == 'wb_question', Review.is_answered == False, Review.status != 'publishing', Draft.id.is_(None))) or 0
+    return {'total': total, 'estimated_minutes': max(1, round(total * 25 / 60)) if total else 0}
 
 
 class DraftEdit(Payload):

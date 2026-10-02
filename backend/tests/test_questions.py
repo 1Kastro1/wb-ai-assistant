@@ -36,7 +36,8 @@ def test_questions_are_separate_and_have_their_own_draft_flow(client, seeded, mo
     assert response.status_code == 200, response.text
     draft = response.json()
     assert draft['text'].startswith(('Здравствуйте', 'Добрый день'))
-    assert draft['quality']['intent_label'] == 'вопрос о товаре'
+    assert draft['quality']['intent_label'] == 'совместимость'
+    assert draft['quality']['score'] >= 90
 
     action = client.post('/questions/owner:question:q-1/publish').json()
     assert action['payload']['items'][0]['kind'] == 'question'
@@ -76,7 +77,8 @@ def test_wb_questions_sync_is_idempotent(client, monkeypatch):
         raise AssertionError('unexpected operation: ' + operation)
 
     monkeypatch.setattr(guard, 'request', request)
-    client.post('/settings/wb-token', json={'token': 'fake-token-for-question-tests'})
+    saved = client.post('/settings/wb-token', json={'token': 'fake-token-for-question-tests-with-safe-length-1234567890'})
+    assert saved.status_code == 200, saved.text
     for _ in range(2):
         response = client.post('/sync/questions')
         assert response.status_code == 200, response.text
@@ -85,3 +87,27 @@ def test_wb_questions_sync_is_idempotent(client, monkeypatch):
     assert page['total'] == 1
     assert page['items'][0]['wb_review_id'] == 'question:remote-question'
     assert calls.count('questions') == 4
+
+
+def test_question_stats_filters_and_batch_job(client, seeded, monkeypatch):
+    async def variants(*args, **kwargs):
+        return [
+            'Здравствуйте! Да, товар подходит для ежедневного использования при соблюдении инструкции.',
+            'Добрый день! Товар можно использовать ежедневно по инструкции из карточки товара.',
+            'Здравствуйте! Для ежедневного применения соблюдайте рекомендации производителя.',
+        ]
+    monkeypatch.setattr(ollama, 'reply_variants', variants)
+    add_question()
+    stats = client.get('/questions/stats').json()
+    assert stats['total'] == 1
+    assert stats['unanswered'] == 1
+    assert stats['types']['совместимость'] == 1
+
+    page = client.get('/questions/page?kind=совместимость&limit=1').json()
+    assert page['total'] == 1
+    assert page['items'][0]['question_type'] == 'совместимость'
+    assert client.get('/questions/page?kind=применение').json()['total'] == 0
+
+    response = client.post('/jobs/question-drafts', json={'question_ids': ['owner:question:q-1']})
+    assert response.status_code == 200, response.text
+    assert response.json()['kind'] == 'question_drafts'
