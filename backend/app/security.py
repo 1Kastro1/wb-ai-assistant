@@ -74,8 +74,11 @@ class EgressGuard:
         ('ollama', 'chat'): ('POST', 'http://127.0.0.1:11434/api/chat'),
         ('wb', 'reviews'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/feedbacks'),
         ('wb', 'review'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/feedback'),
+        ('wb', 'questions'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/questions'),
+        ('wb', 'question'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/question'),
         ('wb', 'products'): ('POST', 'https://content-api.wildberries.ru/content/v2/get/cards/list'),
         ('wb', 'publish'): ('POST', 'https://feedbacks-api.wildberries.ru/api/v1/feedbacks/answer'),
+        ('wb', 'question_publish'): ('PATCH', 'https://feedbacks-api.wildberries.ru/api/v1/questions'),
         ('ozon', 'reviews'): ('POST', 'https://api-seller.ozon.ru/v2/review/list'),
         ('ozon', 'review'): ('POST', 'https://api-seller.ozon.ru/v2/review/info'),
         ('ozon', 'publish'): ('POST', 'https://api-seller.ozon.ru/v1/review/comment/create'),
@@ -96,7 +99,7 @@ class EgressGuard:
         endpoint = self.ENDPOINTS.get((provider, operation))
         if not endpoint or (url is not None and url != endpoint[1]):
             raise ValueError('Соединение заблокировано: неизвестный провайдер или операция')
-        if operation == 'publish':
+        if operation in ('publish', 'question_publish'):
             from .config import REAL_PUBLISH
             with Session() as db:
                 if setting(db, 'safe_mode', False) or setting(db, 'test_mode', True) or not REAL_PUBLISH:
@@ -118,7 +121,7 @@ class EgressGuard:
             host = urlsplit(url).hostname
             # Ignore environment proxies; never follow redirects with a secret.
             async with httpx.AsyncClient(timeout=120 if provider == 'ollama' else 30, follow_redirects=False, trust_env=False, transport=self.transport) as client:
-                attempts = 1 if operation == 'publish' else 3
+                attempts = 1 if operation in ('publish', 'question_publish') else 3
                 for attempt in range(attempts):
                     safe_headers = dict(headers or {})
                     if token:

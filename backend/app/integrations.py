@@ -5,7 +5,7 @@ import re
 from urllib.parse import parse_qs, unquote, urlsplit
 from sqlalchemy import select
 from .config import MODEL
-from .db import Account, Product, Review, StoreProfile, Session, now, setting
+from .db import Account, Draft, Product, Review, StoreProfile, Session, now, setting
 from .safety import classify, mask_vin
 from .security import guard, decrypt_secret
 
@@ -217,8 +217,62 @@ class WildberriesProvider:
                 await asyncio.sleep(0.4)
         return total
 
+    async def sync_questions(self, db, account_id=None, progress=None, cancelled=None):
+        account_id = account_id or setting(db, 'active_store', 'owner')
+        token, total = wb_token(db, account_id), 0
+        for answered in (False, True):
+            for skip in range(0, 200000, 5000):
+                if cancelled and cancelled():
+                    raise asyncio.CancelledError()
+                result = await guard.request('wb', 'questions', token=token, params={'isAnswered': str(answered).lower(), 'take': 5000, 'skip': skip, 'order': 'dateDesc'})
+                if result.get('error'):
+                    raise ValueError('WB сообщил об ошибке получения вопросов')
+                items = result.get('data', {}).get('questions', [])
+                for item in items:
+                    details = item.get('productDetails') or {}
+                    pid = str(details.get('nmId') or item.get('nmId') or '')
+                    if not pid:
+                        continue
+                    product = db.get(Product, pid)
+                    if not product:
+                        product = Product(id=pid, name=details.get('productName', ''), brand=details.get('brandName', ''), category='')
+                        db.add(product)
+                        db.flush()
+                    external_id = str(item.get('id') or '')
+                    if not external_id:
+                        continue
+                    stored_id = 'question:' + external_id
+                    row = db.scalar(select(Review).where(Review.wb_account_id == account_id, Review.wb_review_id == stored_id))
+                    if not row:
+                        row = Review(id=account_id + ':' + stored_id, wb_account_id=account_id, wb_review_id=stored_id, product_id=pid, rating=0, text='', status='unanswered', marketplace='wb_question')
+                    answer = item.get('answer') or {}
+                    row.text = mask_vin(str(item.get('text') or '').strip())
+                    row.created_at = str(item.get('createdDate') or now())
+                    row.is_answered = bool(answer and answer.get('text'))
+                    row.existing_answer = mask_vin(str(answer.get('text') or ''))
+                    row.status = 'published' if row.is_answered else ('draft_ready' if db.scalar(select(Draft).where(Draft.review_id == row.id)) else 'unanswered')
+                    row.marketplace = 'wb_question'
+                    db.add(row)
+                    total += 1
+                db.commit()
+                if progress:
+                    progress(min(95, 5 + total // 2500))
+                if len(items) < 5000:
+                    break
+                await asyncio.sleep(0.4)
+        return total
+
     async def publish(self, db, review, text):
         token = wb_token(db, review.wb_account_id)
+        if review.marketplace == 'wb_question':
+            question_id = review.wb_review_id.removeprefix('question:')
+            current = await guard.request('wb', 'question', token=token, params={'id': question_id})
+            if current.get('error') or str(current.get('data', {}).get('id')) != question_id:
+                raise ValueError('WB не подтвердил существование выбранного вопроса')
+            if (current.get('data', {}).get('answer') or {}).get('text'):
+                raise ValueError('На вопрос уже есть ответ в WB')
+            await guard.request('wb', 'question_publish', token=token, body={'id': question_id, 'text': text, 'state': 'wbRu'})
+            return
         current = await guard.request('wb', 'review', token=token, params={'id': review.wb_review_id})
         if current.get('error') or current.get('data', {}).get('id') != review.wb_review_id:
             raise ValueError('WB не подтвердил существование выбранного отзыва')

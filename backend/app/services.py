@@ -145,7 +145,7 @@ def remember_web_instruction_sources(product, sources):
 
 
 def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False):
-    query = select(Review).join(Product).where(Review.rating <= max_rating)
+    query = select(Review).join(Product).where(Review.rating <= max_rating, Review.marketplace != 'wb_question')
     if q:
         query = query.where((Review.text.contains(q, autoescape=True)) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
     if unanswered:
@@ -174,7 +174,7 @@ def reviews_page(db, **filters):
     limit = min(200, max(1, int(filters.get('limit', 50))))
     offset = max(0, int(filters.get('offset', 0)))
     rows = reviews_search(db, **{**filters, 'limit': limit, 'offset': offset})
-    count_query = select(func.count()).select_from(Review).join(Product).where(Review.rating <= filters.get('max_rating', 5))
+    count_query = select(func.count()).select_from(Review).join(Product).where(Review.rating <= filters.get('max_rating', 5), Review.marketplace != 'wb_question')
     if filters.get('q'):
         q = filters['q']
         count_query = count_query.where((Review.text.contains(q, autoescape=True)) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
@@ -310,7 +310,7 @@ def learn_from_edit(db, draft, old, new):
 
 
 def quality_report(db, days=30, account_id=''):
-    filters = []
+    filters = [Review.marketplace != 'wb_question']
     if days:
         filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
     if account_id:
@@ -337,7 +337,7 @@ def quality_report(db, days=30, account_id=''):
 
 
 def analytics(db, days=0, product_id='', account_id=''):
-    filters = []
+    filters = [Review.marketplace != 'wb_question']
     if days:
         filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
     if product_id:
@@ -391,8 +391,86 @@ def analytics(db, days=0, product_id='', account_id=''):
     }
 
 
+def assess_question_answer(question, product, answer):
+    question_words = set(WORDS.findall(question.text.lower()))
+    answer_words = set(WORDS.findall(answer.lower()))
+    overlap = len(question_words & answer_words)
+    issues = []
+    score = 70
+    if 60 <= len(answer) <= 900:
+        score += 15
+    else:
+        issues.append('ответ должен быть содержательным и без лишней длины')
+    if answer.lower().startswith(('здравствуйте', 'добрый день')):
+        score += 5
+    else:
+        issues.append('добавить дружелюбное приветствие')
+    if overlap or any(word in answer.lower() for word in WORDS.findall(product.name.lower())):
+        score += 10
+    else:
+        issues.append('ответить именно на заданный вопрос')
+    return {'score': min(100, score), 'passed': score >= 90 and not issues, 'issues': issues, 'intent_label': 'вопрос о товаре', 'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION}
+
+
+async def generate_question_draft(db, question, instruction=''):
+    if question.is_answered:
+        raise ValueError('На вопрос уже есть ответ')
+    product = db.get(Product, question.product_id)
+    existing = db.scalar(select(Draft).where(Draft.review_id == question.id))
+    expected_revision = existing.revision if existing else None
+    verified_facts = [fact for fact in (product.facts or []) if fact.get('verification_status') == 'VERIFIED']
+    memories = [memory.text for memory in db.scalars(select(Memory).where(Memory.enabled == True)) if memory.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
+    messages = [
+        {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
+        {'role': 'user', 'content': json.dumps({'question': question.text, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
+    ]
+    candidates = []
+    try:
+        candidates = await ollama.reply_variants(messages, MIN_AI_CANDIDATES)
+    except Exception:
+        candidates = []
+    checked = []
+    for candidate in candidates:
+        try:
+            value = validate_reply(mask_vin(candidate))
+            if not existing or value.strip() != existing.text.strip():
+                checked.append((value, assess_question_answer(question, product, value)))
+        except ValueError:
+            continue
+    if checked:
+        reply, quality = max(checked, key=lambda item: item[1]['score'])
+        model = MODEL
+        quality['selection_note'] = f'Выбран лучший из {len(checked)} безопасных вариантов'
+    else:
+        reply = 'Здравствуйте! Спасибо за вопрос. В карточке товара пока недостаточно подтверждённых данных для точного ответа, поэтому не хотим вводить вас в заблуждение.'
+        quality = assess_question_answer(question, product, reply)
+        quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
+        model = 'question-safety-1.0'
+    quality['candidates_evaluated'] = len(checked)
+    quality['analysis_summary'] = 'Вопрос сопоставлен с товаром и проверенными фактами карточки. Ответ проверен на безопасность и отсутствие выдуманных характеристик.'
+    db.refresh(question)
+    if question.is_answered:
+        raise ValueError('Вопрос изменился во время генерации')
+    draft = db.scalar(select(Draft).where(Draft.review_id == question.id).execution_options(populate_existing=True))
+    if (draft.revision if draft else None) != expected_revision:
+        raise ValueError('Черновик изменён во время генерации')
+    if draft:
+        draft.edits = draft.edits + [{'old': draft.text, 'new': reply, 'at': now()}]
+        draft.text, draft.revision, draft.model, draft.quality = reply, draft.revision + 1, model, quality
+    else:
+        draft = Draft(id=str(uuid4()), review_id=question.id, text=reply, original=reply, model=model, quality=quality)
+        db.add(draft)
+    question.status = 'draft_ready'
+    db.commit()
+    return public(draft)
+
+
 async def generate_draft(db, review_id, instruction=''):
+    if not setting(db, 'assistant_enabled', True):
+        raise ValueError('Ассистент отключён владельцем')
     review = db.get(Review, review_id)
+    if review and review.marketplace == 'wb_question':
+        return await generate_question_draft(db, review, instruction)
     if not review or review.is_answered:
         raise ValueError('Отзыв не найден или уже имеет ответ')
     if review.status == 'publishing':
@@ -566,7 +644,7 @@ def edit_draft(db, draft_id, value, revision):
     draft.edits = draft.edits + [{'old': old, 'new': value, 'diff': '\n'.join(difflib.ndiff(old.splitlines(), value.splitlines())), 'at': now()}]
     draft.text, draft.revision = value, draft.revision + 1
     product = db.get(Product, review.product_id)
-    draft.quality = assess_reply(review, product, value)
+    draft.quality = assess_question_answer(review, product, value) if review.marketplace == 'wb_question' else assess_reply(review, product, value)
     learn_from_edit(db, draft, old, value)
     review.status = 'manual_review' if review.manual else 'draft_ready'
     db.commit()
@@ -583,11 +661,12 @@ def propose_publish(db, review_ids):
         draft = db.scalar(select(Draft).where(Draft.review_id == rid))
         if not review or not draft or review.is_answered or review.status == 'publishing':
             raise ValueError('Для каждого выбранного отзыва нужен доступный черновик')
-        if len(ids) > 1 and (review.rating <= 3 or review.manual):
+        is_question = review.marketplace == 'wb_question'
+        if len(ids) > 1 and not is_question and (review.rating <= 3 or review.manual):
             excluded.append(rid)
             continue
         validate_reply(draft.text)
-        items.append({'review_id': rid, 'draft_id': draft.id, 'revision': draft.revision, 'text': draft.text, 'rating': review.rating, 'manual': review.manual})
+        items.append({'review_id': rid, 'draft_id': draft.id, 'revision': draft.revision, 'text': draft.text, 'rating': review.rating, 'manual': review.manual, 'kind': 'question' if is_question else 'review'})
         review.status = 'pending_confirmation'
     if not items:
         raise ValueError('Массовая публикация исключает 1–3★ и опасные отзывы. Проверьте и подтвердите каждый отдельно')

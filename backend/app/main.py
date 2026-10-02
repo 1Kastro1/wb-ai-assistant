@@ -430,7 +430,7 @@ def security(auth: AUTH, db: DB):
 def system_status(auth: AUTH, db: DB):
     schedule = setting(db, 'automation_schedule', {})
     latest = {}
-    for kind in ('reviews', 'products', 'drafts'):
+    for kind in ('reviews', 'questions', 'products', 'drafts'):
         job = db.scalar(select(Job).where(Job.kind == kind, Job.status == 'completed').order_by(Job.created_at.desc()))
         latest[kind] = public(job) if job else None
     backups = sorted((DATA / 'backups').glob('*.db'), key=lambda path: path.stat().st_mtime, reverse=True)[:10]
@@ -472,6 +472,30 @@ def performance_set(body: Performance, auth: OWNER, db: DB):
     set_setting(db,'performance_mode',body.mode)
     db.commit()
     return {'mode':body.mode}
+
+
+class AssistantEnabled(Payload):
+    enabled: bool
+
+
+@app.get('/settings/assistant')
+def assistant_status(auth: AUTH, db: DB):
+    return {'enabled': bool(setting(db, 'assistant_enabled', True))}
+
+
+@app.patch('/settings/assistant')
+def assistant_toggle(body: AssistantEnabled, auth: OWNER, db: DB):
+    set_setting(db, 'assistant_enabled', body.enabled)
+    if not body.enabled:
+        schedule = setting(db, 'automation_schedule', {})
+        schedule['drafts_enabled'] = False
+        set_setting(db, 'automation_schedule', schedule)
+        for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
+            job.cancel_requested = True
+            if job.status == 'queued':
+                job.status = 'cancelled'
+    db.commit()
+    return {'enabled': body.enabled}
 
 
 @app.patch('/settings/modes')
@@ -704,6 +728,8 @@ def get_auto_replies_status(auth: AUTH, db: DB):
 
 @app.post('/auto-replies/start')
 async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB):
+    if not setting(db, 'assistant_enabled', True):
+        raise ValueError('Сначала включите ассистента')
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
     can(auth, store.provider + ':operate')
@@ -837,12 +863,14 @@ async def run_sync_job(job_id):
                     provider = provider_for(store) if store else None
                     if not provider:
                         raise ValueError('Провайдер магазина не поддерживается')
+                    if kind == 'questions' and store.provider != 'wb':
+                        raise ValueError('Вопросы покупателей сейчас поддерживаются для Wildberries')
                     if kind == 'products' and store.provider != 'wb':
                         count = 0  # Ozon and Yandex products are learned from their review payloads.
                         job.result = {'message':'Товары этого маркетплейса обновляются вместе с отзывами'}
                         operation = None
                     else:
-                        operation = provider.sync_products if kind == 'products' else provider.sync_reviews
+                        operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
                     try:
                         if operation: count = await operation(db, account_id, update_progress, cancelled)
                     except TypeError as exc:
@@ -958,7 +986,7 @@ async def scheduler_loop():
 
 @app.post('/jobs/sync/{kind}')
 async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: DB):
-    if kind not in ('products','reviews'):
+    if kind not in ('products','reviews','questions'):
         raise HTTPException(404)
     active = active_store(db, auth)
     store = db.get(StoreProfile, active)
@@ -1051,6 +1079,8 @@ async def sync(kind: str, auth: WB_OPERATOR, db: DB):
             count = await wb.sync_products(db)
         elif kind == 'reviews':
             count = await wb.sync_reviews(db)
+        elif kind == 'questions':
+            count = await wb.sync_questions(db)
         else:
             raise HTTPException(404)
     return {'processed': count}
@@ -1064,6 +1094,27 @@ def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_ratin
 @app.get('/reviews/page')
 def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False):
     return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention)
+
+
+@app.get('/questions/page')
+def questions_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, limit: int = 30, offset: int = 0):
+    limit, offset = min(200, max(1, limit)), max(0, offset)
+    conditions = [Review.wb_account_id == active_store(db, auth), Review.marketplace == 'wb_question']
+    if q:
+        conditions.append(Review.text.contains(q, autoescape=True) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
+    if unanswered:
+        conditions.append(Review.is_answered == False)
+    query = select(Review).join(Product).where(*conditions)
+    rows = list(db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(offset).limit(limit)))
+    items = []
+    for row in rows:
+        item = public(row)
+        item['product'] = public(db.get(Product, row.product_id))
+        draft = db.scalar(select(Draft).where(Draft.review_id == row.id))
+        item['draft'] = public(draft) if draft else None
+        items.append(item)
+    total = db.scalar(select(func.count()).select_from(Review).join(Product).where(*conditions)) or 0
+    return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total}
 
 
 @app.get('/products')
@@ -1127,6 +1178,30 @@ async def draft(rid: str, body: DraftInput, auth: MARKET_OPERATOR, db: DB):
     if not item.created_by: item.created_by = auth['user_id']
     db.commit()
     return public(item)
+
+
+@app.post('/questions/{qid}/draft')
+async def question_draft(qid: str, body: DraftInput, auth: MARKET_OPERATOR, db: DB):
+    question = db.get(Review, qid)
+    if not question or question.marketplace != 'wb_question':
+        raise HTTPException(404, 'Вопрос не найден')
+    can(auth, 'wb:operate')
+    result = await generate_draft(db, qid, body.instruction)
+    item = db.get(Draft, result['id'])
+    item.updated_by = auth['user_id']
+    if not item.created_by:
+        item.created_by = auth['user_id']
+    db.commit()
+    return public(item)
+
+
+@app.post('/questions/{qid}/publish')
+def question_publish(qid: str, auth: MARKET_OPERATOR, db: DB):
+    question = db.get(Review, qid)
+    if not question or question.marketplace != 'wb_question':
+        raise HTTPException(404, 'Вопрос не найден')
+    can(auth, 'wb:operate')
+    return propose_publish(db, [qid])
 
 
 class DraftEdit(Payload):
@@ -1297,6 +1372,8 @@ chat_lock = asyncio.Lock()
 
 @app.post('/chat')
 async def chat(body: Chat, auth: AUTH, db: DB):
+    if not setting(db, 'assistant_enabled', True):
+        raise ValueError('Ассистент отключён владельцем')
     async with chat_lock:
         store_id = active_store(db, auth)
         store = db.get(StoreProfile, store_id)
