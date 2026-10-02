@@ -964,7 +964,7 @@ async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: 
     store = db.get(StoreProfile, active)
     if not store: raise HTTPException(404, 'Магазин не найден')
     can(auth, store.provider + ':operate')
-    if store.provider == 'wb': wb_token(db)
+    if store.provider == 'wb': wb_token(db, active)
     elif not db.get(Account, active): raise ValueError('Сначала подключите API выбранного магазина')
     job = Job(id=str(uuid4()), kind=kind, result={'account_id': active})
     db.add(job)

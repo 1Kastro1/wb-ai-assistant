@@ -157,7 +157,7 @@ def test_auto_replies_process_reviews_after_sync(client, seeded, monkeypatch):
         progress(100)
         return 0
     monkeypatch.setattr('app.main.wb.sync_reviews', sync_reviews)
-    monkeypatch.setattr('app.main.wb_token', lambda db: 'test-token')
+    monkeypatch.setattr('app.main.wb_token', lambda db, account_id=None: 'test-token')
     with Session() as db:
         set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True, 'drafts_hours': 6})
         db.commit()
