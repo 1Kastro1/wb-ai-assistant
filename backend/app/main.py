@@ -564,7 +564,7 @@ def token(body: Token, auth: OWNER, db: DB):
 
 @app.post('/settings/wb-test')
 async def wb_test(auth: WB_OPERATOR, db: DB):
-    await guard.request('wb', 'reviews', token=wb_token(db, active_store(db, auth)), params={'isAnswered': 'false', 'take': 1, 'skip': 0})
+    await guard.request('wb', 'ping', token=wb_token(db, active_store(db, auth)))
     return {'ok': True}
 
 
@@ -682,7 +682,7 @@ async def test_store(store_id: str, auth: AUTH, db: DB):
     if not store: raise HTTPException(404, 'Магазин не найден')
     can(auth, store.provider + ':operate')
     if store.provider == 'wb':
-        await guard.request('wb','reviews',token=wb_token(db,store.id),params={'isAnswered':'false','take':1,'skip':0})
+        await guard.request('wb','ping',token=wb_token(db,store.id))
     else:
         await provider_for(store).test(db, store.id)
     return {'ok':True, 'provider':store.provider}
@@ -910,8 +910,10 @@ async def run_sync_job(job_id):
                 if job.attempts < job.max_attempts and not job.cancel_requested:
                     job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
                 else:
-                    message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts') else 'Синхронизация не завершена. Проверьте токен, доступ WB и журнал соединений.'
-                    job.status, job.result = 'failed', {'message':message, 'account_id': account_id, 'error_type': type(error).__name__}
+                    default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts') else 'Синхронизация не завершена.'
+                    detail = (str(error) or type(error).__name__)[:500]
+                    message = f'{default_message} {detail}'
+                    job.status, job.result = 'failed', {'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail}
                     add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
             db.commit()
 

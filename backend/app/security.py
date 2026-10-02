@@ -73,6 +73,7 @@ class EgressGuard:
         ('ollama', 'health'): ('GET', 'http://127.0.0.1:11434/api/tags'),
         ('ollama', 'chat'): ('POST', 'http://127.0.0.1:11434/api/chat'),
         ('wb', 'reviews'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/feedbacks'),
+        ('wb', 'ping'): ('GET', 'https://feedbacks-api.wildberries.ru/ping'),
         ('wb', 'review'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/feedback'),
         ('wb', 'questions'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/questions'),
         ('wb', 'question'): ('GET', 'https://feedbacks-api.wildberries.ru/api/v1/question'),
@@ -120,13 +121,21 @@ class EgressGuard:
                 raise ValueError('Соединение заблокировано: неверный адрес Telegram')
             host = urlsplit(url).hostname
             # Ignore environment proxies; never follow redirects with a secret.
-            async with httpx.AsyncClient(timeout=120 if provider == 'ollama' else 30, follow_redirects=False, trust_env=False, transport=self.transport) as client:
+            timeout = 120 if provider == 'ollama' else httpx.Timeout(60, connect=10, write=30, pool=10)
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, transport=self.transport) as client:
                 attempts = 1 if operation in ('publish', 'question_publish') else 3
                 for attempt in range(attempts):
                     safe_headers = dict(headers or {})
                     if token:
                         safe_headers['Authorization'] = token
-                    response = await client.request(method, url, params=params, json=body, headers=safe_headers)
+                    try:
+                        response = await client.request(method, url, params=params, json=body, headers=safe_headers)
+                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as error:
+                        if attempt + 1 >= attempts:
+                            raise
+                        import asyncio
+                        await asyncio.sleep(min(8, 2 ** (attempt + 1)))
+                        continue
                     status = str(response.status_code)
                     if response.status_code in (429, 502, 503, 504) and attempt + 1 < attempts:
                         import asyncio
@@ -138,9 +147,10 @@ class EgressGuard:
                 if return_text:
                     return response.text
                 return response.json() if response.content else {}
-        except httpx.HTTPError:
+        except httpx.HTTPError as error:
             status = 'NETWORK_ERROR'
-            raise ValueError('Сервис недоступен; данные не отправлены в другие сервисы') from None
+            service = 'сервер Wildberries' if provider == 'wb' else 'внешний сервис'
+            raise ValueError(f'Не удалось установить соединение с {service} ({type(error).__name__}). Проверьте интернет или повторите позже; данные не отправлены.') from None
         finally:
             with Session() as db:
                 db.add(Audit(provider=provider if provider in ('wb', 'ozon', 'yandex', 'telegram', 'ollama', 'web', 'tavily') else 'unknown', host=host, operation=operation if (provider, operation) in self.ENDPOINTS else 'blocked', status=status, duration_ms=int((time.monotonic() - start) * 1000)))
