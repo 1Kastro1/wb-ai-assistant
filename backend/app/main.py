@@ -939,9 +939,24 @@ async def scheduler_loop():
         try:
             with Session() as db:
                 schedule = setting(db, 'automation_schedule', {'enabled': False})
-                if not schedule.get('enabled'):
-                    continue
                 current = time.time()
+                # Database protection must keep running even when business
+                # automation is paused. Otherwise a paused shop receives no
+                # integrity checks and no private recovery snapshots.
+                if current - float(schedule.get('last_database_check', 0)) >= 3600:
+                    health = await asyncio.to_thread(database_health)
+                    schedule['last_database_check'] = current
+                    if health.get('status') != 'ok':
+                        add_notification(db, 'database', 'Проверка базы не пройдена', str(health), 'error')
+                if DATABASE_URL.startswith('sqlite:') and current - float(schedule.get('last_recovery_snapshot', 0)) >= 6 * 3600:
+                    async with maintenance_lock:
+                        await asyncio.to_thread(recovery_snapshot, 10)
+                    schedule['last_recovery_snapshot'] = current
+                if not schedule.get('enabled'):
+                    set_setting(db, 'scheduler_status', {'state': 'ok', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': ''})
+                    set_setting(db, 'automation_schedule', schedule)
+                    db.commit()
+                    continue
                 active = setting(db, 'active_store', 'owner')
                 store = db.get(StoreProfile, active)
                 for kind, hours in (('products', int(schedule.get('products_hours', 24))), ('reviews', int(schedule.get('reviews_hours', 3))), ('questions', int(schedule.get('questions_hours', 3)))):
@@ -968,10 +983,6 @@ async def scheduler_loop():
                         await asyncio.to_thread(backup)
                         if DATABASE_URL.startswith('sqlite:'): await asyncio.to_thread(recovery_snapshot)
                     schedule['last_backup'] = current
-                if current - float(schedule.get('last_database_check', 0)) >= 3600:
-                    health = await asyncio.to_thread(database_health)
-                    schedule['last_database_check'] = current
-                    if health.get('status') != 'ok': add_notification(db, 'database', 'Проверка базы не пройдена', str(health), 'error')
                 portable_sync = setting(db, 'portable_sync', {'enabled': False})
                 sync_account = db.get(Account, 'portable:sync')
                 if portable_sync.get('enabled') and sync_account and current - float(portable_sync.get('last_sync', 0)) >= max(1, int(portable_sync.get('hours', 24))) * 3600:

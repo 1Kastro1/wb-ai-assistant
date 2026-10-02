@@ -36,6 +36,17 @@ function Run-Package([string[]]$Arguments){ & $PackageManager @Arguments; if($LA
 function Stop-App {
   if(Test-Path -LiteralPath $StateFile){
     $entries=Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+    # The SQLite online-backup API produces a consistent snapshot even while
+    # the server is running. Keep it before a forced Windows process stop.
+    try {
+      Push-Location (Join-Path $ProjectRoot 'backend')
+      & $PythonExe -c "from app.maintenance import recovery_snapshot; print(recovery_snapshot(10))"
+      if($LASTEXITCODE -ne 0){throw 'Recovery snapshot failed'}
+    } catch {
+      Write-Warning 'Could not create the pre-stop recovery snapshot. Existing snapshots were preserved.'
+    } finally {
+      Pop-Location
+    }
     foreach($entry in $entries){
       $proc=Get-Process -Id $entry.id -ErrorAction SilentlyContinue
       if($proc -and $proc.StartTime.ToUniversalTime().Ticks.ToString() -eq $entry.start){

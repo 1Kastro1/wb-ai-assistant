@@ -9,6 +9,7 @@ obj/
 out/
 __pycache__/
 .pytest_cache/
+.test-tmp-*/
 *.pyc
 .env
 data/

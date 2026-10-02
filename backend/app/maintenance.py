@@ -203,7 +203,7 @@ def database_health():
     return {'status': 'ok' if result == 'ok' else 'failed', 'engine': 'sqlite', 'check': result, 'checkpoint': list(checkpoint or ())}
 
 
-def recovery_snapshot(retain=5):
+def recovery_snapshot(retain=10):
     """Private server recovery copy. Unlike portable exports it keeps team accounts and encrypted tokens."""
     if not IS_SQLITE:
         raise ValueError('Для PostgreSQL используйте pg_dump; контейнер создаёт серверные копии отдельно')

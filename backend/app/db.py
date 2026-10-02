@@ -22,6 +22,11 @@ def pragmas(connection, _):
         return
     connection.execute('PRAGMA foreign_keys=ON')
     connection.execute('PRAGMA journal_mode=WAL')
+    # Prefer durability over a small write-speed gain. FULL makes SQLite wait
+    # until committed WAL frames reach durable storage before reporting success.
+    connection.execute('PRAGMA synchronous=FULL')
+    connection.execute('PRAGMA wal_autocheckpoint=250')
+    connection.execute('PRAGMA journal_size_limit=33554432')
     connection.execute('PRAGMA busy_timeout=30000')
 
 
