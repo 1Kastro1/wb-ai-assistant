@@ -96,7 +96,17 @@ try {
       exit 0
     }
   } finally {Pop-Location}
-  if(Test-Path -LiteralPath $StateFile){throw 'Application may already be running. Use stop.bat first.'}
+  if(Test-Path -LiteralPath $StateFile){
+    $entries=Get-Content -LiteralPath $StateFile -Raw | ConvertFrom-Json
+    $active=@($entries | Where-Object {
+      $proc=Get-Process -Id $_.id -ErrorAction SilentlyContinue
+      $proc -and $proc.StartTime.ToUniversalTime().Ticks.ToString() -eq $_.start
+    })
+    if($active.Count -gt 0){throw 'Application may already be running. Use stop.bat first.'}
+    # A previous Windows session can leave this metadata behind after both
+    # managed processes have exited. It is safe to discard only this stale file.
+    Remove-Item -LiteralPath $StateFile
+  }
   foreach($port in @(8000,3000)){
     $listener=Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
     if($listener){throw "Port $port is occupied. Stop the other application first."}
