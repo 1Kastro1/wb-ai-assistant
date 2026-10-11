@@ -353,7 +353,7 @@ def analytics(db, days=0, product_id='', account_id=''):
         func.avg(Review.rating),
     ).select_from(Review).where(*filters)
     total, unanswered, negative, manual, published, average = db.execute(aggregate).one()
-    topic_where = []
+    topic_where = ["r.marketplace NOT LIKE '%_question'"]
     topic_params = {}
     if days:
         topic_where.append('r.created_at >= :topic_start')

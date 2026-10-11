@@ -5,7 +5,7 @@ $ProjectRoot=Split-Path -Parent $PSScriptRoot
 
 if($Action -eq 'disable'){
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-  Write-Host 'Автозапуск WB AI Assistant выключен.'
+  Write-Host 'Автозапуск Ассистента маркетплейсов выключен.'
   exit 0
 }
 
@@ -20,5 +20,5 @@ $arguments="-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$tray
 $taskAction=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments -WorkingDirectory $ProjectRoot
 $trigger=New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings=New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0) -RestartCount 2 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Trigger $trigger -Settings $settings -Description 'Запускает локальный WB AI Assistant после входа в Windows.' -Force | Out-Null
-Write-Host 'Автозапуск WB AI Assistant включён. При следующем входе откроется приложение.'
+Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Trigger $trigger -Settings $settings -Description 'Запускает локальный Ассистент маркетплейсов после входа в Windows.' -Force | Out-Null
+Write-Host 'Автозапуск Ассистента маркетплейсов включён. При следующем входе откроется приложение.'

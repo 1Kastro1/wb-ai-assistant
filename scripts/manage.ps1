@@ -134,7 +134,7 @@ try {
     if($env:WB_NO_BROWSER -ne '1'){
       try {Start-Process 'http://127.0.0.1:3000'} catch {Write-Host 'Open http://127.0.0.1:3000 in your browser.'}
     }
-    Write-Host 'WB AI Assistant: http://127.0.0.1:3000'
+    Write-Host 'Ассистент маркетплейсов: http://127.0.0.1:3000'
   } catch {
     Stop-App
     if(!$BackendProcess.HasExited){$BackendProcess.Kill()}

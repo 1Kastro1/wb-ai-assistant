@@ -16,7 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import select, delete, text, func
+from sqlalchemy import select, delete, text, func, case
 from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
@@ -64,7 +64,7 @@ async def lifespan(app):
         pass
 
 
-app = FastAPI(title='WB AI Assistant', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title='Ассистент маркетплейсов', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.state.maintenance = False
 def allowed_origin(origin):
     return origin in ORIGINS
@@ -632,7 +632,7 @@ def telegram_set(body: TelegramInput, auth: OWNER, db: DB):
 
 @app.post('/settings/telegram/test')
 async def telegram_test(auth: OWNER, db: DB):
-    if not await send_telegram(db, 'WB Assistant: уведомления подключены.'): raise ValueError('Сначала включите Telegram и сохраните настройки')
+    if not await send_telegram(db, 'Ассистент маркетплейсов: уведомления подключены.'): raise ValueError('Сначала включите Telegram и сохраните настройки')
     return {'ok':True}
 
 
@@ -1250,6 +1250,42 @@ def product_fact_delete(pid: str, fact_index: int, auth: MARKET_OPERATOR, db: DB
 @app.get('/analytics')
 def stats(auth: AUTH, db: DB, days: int = 0, product_id: str = ''):
     return analytics(db, days, product_id, active_store(db, auth))
+
+
+@app.get('/analytics/marketplaces')
+def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
+    days = max(0, min(days, 365))
+    allowed = auth.get('store_ids') or []
+    stores = list(db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)))
+    if auth['role'] != 'owner' and allowed and '*' not in allowed:
+        stores = [store for store in stores if store.id in allowed]
+    keys = ('reviews', 'reviews_unanswered', 'reviews_negative', 'reviews_answered', 'reviews_drafts',
+            'questions', 'questions_unanswered', 'questions_answered', 'questions_drafts')
+    totals = dict.fromkeys(keys, 0)
+    rows = []
+    is_question = Review.marketplace.like('%_question')
+    for store in stores:
+        filters = [Review.wb_account_id == store.id]
+        if days:
+            filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
+        counts = db.execute(select(
+            func.sum(case((~is_question, 1), else_=0)),
+            func.sum(case(((~is_question) & (Review.is_answered == False), 1), else_=0)),
+            func.sum(case(((~is_question) & (Review.rating <= 3), 1), else_=0)),
+            func.sum(case(((~is_question) & (Review.is_answered == True), 1), else_=0)),
+            func.sum(case(((~is_question) & (Review.is_answered == False) & Draft.id.is_not(None), 1), else_=0)),
+            func.sum(case((is_question, 1), else_=0)),
+            func.sum(case((is_question & (Review.is_answered == False), 1), else_=0)),
+            func.sum(case((is_question & (Review.is_answered == True), 1), else_=0)),
+            func.sum(case((is_question & (Review.is_answered == False) & Draft.id.is_not(None), 1), else_=0)),
+        ).select_from(Review).outerjoin(Draft, Draft.review_id == Review.id).where(*filters)).one()
+        item = {'id': store.id, 'name': store.name, 'provider': store.provider,
+                'connected': bool(db.get(Account, store.id)),
+                **{key: int(value or 0) for key, value in zip(keys, counts)}}
+        rows.append(item)
+        for key in keys:
+            totals[key] += item[key]
+    return {'days': days, 'totals': totals, 'stores': rows}
 
 
 @app.get('/quality-report')
