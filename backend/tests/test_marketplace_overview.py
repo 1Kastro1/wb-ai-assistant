@@ -51,8 +51,11 @@ def test_marketplace_overview_counts_reviews_and_questions_separately(client):
     client.headers['X-CSRF-Token'] = login.json()['csrf']
     restricted = client.get('/analytics/marketplaces').json()
     assert [store['id'] for store in restricted['stores']] == [wb_store['id'], ozon['id'], yandex['id']]
-    assert [store['accessible'] for store in restricted['stores']] == [False, True, False]
+    assert [store['accessible'] for store in restricted['stores']] == [True, True, True]
+    assert [store['can_operate'] for store in restricted['stores']] == [False, True, False]
     assert restricted['totals']['reviews'] == 3
     assert restricted['totals']['questions'] == 1
     assert restricted['trend'][-1]['reviews'] == 2
-    assert client.post('/stores/'+wb_store['id']+'/activate').status_code == 403
+    assert client.post('/stores/'+wb_store['id']+'/activate').status_code == 200
+    assert client.get('/reviews/page').json()['total'] == 1
+    assert client.post('/jobs/sync/reviews').status_code == 403

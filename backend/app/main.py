@@ -180,15 +180,20 @@ def can(auth, permission):
         raise HTTPException(403, 'Недостаточно прав для этого действия')
 
 
+def can_operate_store(auth, store):
+    if not store:
+        raise HTTPException(404, 'Магазин не найден')
+    allowed = auth.get('store_ids') or []
+    if auth['role'] != 'owner' and '*' not in allowed and store.id not in allowed:
+        raise HTTPException(403, 'Вам доступен просмотр магазина, но операции не назначены владельцем')
+    can(auth, store.provider + ':operate')
+
+
 def active_store(db, auth):
     key = 'active_store:' + auth['user_id']
     store_id = setting(db, key, setting(db, 'active_store', 'owner'))
-    allowed = auth.get('store_ids') or []
-    if auth['role'] != 'owner' and '*' not in allowed:
-        if not allowed:
-            raise HTTPException(403, 'Вам пока не назначен магазин. Обратитесь к владельцу.')
-        if store_id not in allowed:
-            store_id = allowed[0]
+    if not db.get(StoreProfile, store_id):
+        store_id = db.scalar(select(StoreProfile.id).order_by(StoreProfile.created_at).limit(1)) or ''
     return store_id
 
 
@@ -424,7 +429,7 @@ def own_password(body: OwnPassword, auth: AUTH, db: DB):
 
 
 @app.get('/security')
-def security(auth: AUTH, db: DB):
+def security(auth: OWNER, db: DB):
     audit = db.scalars(select(Audit).order_by(Audit.id.desc()).limit(30)).all()
     active = active_store(db, auth)
     return {'privacy_mode': 'SERVER_SHARED', 'safe_mode': setting(db, 'safe_mode', False), 'test_mode': setting(db, 'test_mode', True), 'cloud_ai': False, 'web_research': True, 'search_provider': setting(db, 'search_provider', 'duckduckgo'), 'search_configured': bool(db.get(Account, 'search:tavily')), 'telemetry': False, 'database': 'POSTGRESQL' if DATABASE_URL.startswith('postgresql') else 'SQLITE', 'token': 'ENCRYPTED' if db.get(Account, active) else 'NOT_CONNECTED', 'active_store': active, 'backend': 'server', 'model': MODEL, 'real_publish_enabled': REAL_PUBLISH, 'audit': [public(a) for a in audit], 'backups': sorted(p.name for p in (DATA / 'backups').glob('*.db'))[-10:]}
@@ -568,7 +573,9 @@ def token(body: Token, auth: OWNER, db: DB):
 
 @app.post('/settings/wb-test')
 async def wb_test(auth: WB_OPERATOR, db: DB):
-    await guard.request('wb', 'ping', token=wb_token(db, active_store(db, auth)))
+    store_id = active_store(db, auth)
+    can_operate_store(auth, db.get(StoreProfile, store_id))
+    await guard.request('wb', 'ping', token=wb_token(db, store_id))
     return {'ok': True}
 
 
@@ -644,10 +651,11 @@ async def telegram_test(auth: OWNER, db: DB):
 def stores(auth: AUTH, db: DB):
     allowed = auth.get('store_ids') or []
     rows = list(db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)))
-    accessible = lambda store: auth['role'] == 'owner' or '*' in allowed or store.id in allowed
-    active = active_store(db, auth) if any(accessible(row) for row in rows) else ''
-    return {'active': active, 'items': [{**public(s), 'config': {k:v for k,v in (s.config or {}).items() if k in ('client_id','business_id')} if accessible(s) else {},
-                                      'connected': bool(db.get(Account, s.id)), 'accessible': accessible(s),
+    assigned = lambda store: auth['role'] == 'owner' or '*' in allowed or store.id in allowed
+    active = active_store(db, auth) if rows else ''
+    return {'active': active, 'items': [{**public(s), 'config': {k:v for k,v in (s.config or {}).items() if k in ('client_id','business_id')} if assigned(s) else {},
+                                      'connected': bool(db.get(Account, s.id)), 'accessible': True,
+                                      'can_operate': assigned(s) and ('*' in auth.get('permissions', []) or s.provider + ':operate' in auth.get('permissions', [])),
                                       'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id)) or 0} for s in rows]}
 
 
@@ -663,8 +671,6 @@ def create_store(body: StoreInput, auth: OWNER, db: DB):
 def activate_store(store_id: str, auth: AUTH, db: DB):
     if not db.get(StoreProfile, store_id):
         raise HTTPException(404)
-    if auth['role'] != 'owner' and '*' not in (auth.get('store_ids') or []) and store_id not in (auth.get('store_ids') or []):
-        raise HTTPException(403, 'Этот магазин не назначен сотруднику')
     set_setting(db, 'active_store:' + auth['user_id'], store_id)
     if auth['role'] == 'owner': set_setting(db, 'active_store', store_id)
     db.commit()
@@ -689,7 +695,7 @@ def connect_store(store_id: str, body: StoreConnection, auth: OWNER, db: DB):
 async def test_store(store_id: str, auth: AUTH, db: DB):
     store = db.get(StoreProfile, store_id)
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     if store.provider == 'wb':
         await guard.request('wb','ping',token=wb_token(db,store.id))
     else:
@@ -744,7 +750,7 @@ async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR,
         raise ValueError('Сначала включите ассистента')
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     schedule = schedule_get(auth, db)
     since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time(), 'drafts_since': since})
@@ -765,7 +771,7 @@ async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR,
 def pause_auto_replies(auth: MARKET_OPERATOR, db: DB):
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     schedule = schedule_get(auth, db)
     schedule['drafts_enabled'] = False
     set_setting(db, 'automation_schedule', schedule)
@@ -1041,7 +1047,7 @@ async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: 
     active = active_store(db, auth)
     store = db.get(StoreProfile, active)
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     if store.provider == 'wb': wb_token(db, active)
     elif not db.get(Account, active): raise ValueError('Сначала подключите API выбранного магазина')
     job = Job(id=str(uuid4()), kind=kind, result={'account_id': active})
@@ -1057,7 +1063,7 @@ async def schedule_all_drafts(background: BackgroundTasks, auth: AUTH, db: DB):
     active = active_store(db, auth)
     store = db.get(StoreProfile, active)
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     existing = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])))
     if existing:
         return public(existing)
@@ -1100,6 +1106,11 @@ def cancel_job(jid: str, auth: MARKET_OPERATOR, db: DB):
         raise ValueError('Это задание уже завершено')
     if auth['role'] != 'owner' and (job.result or {}).get('account_id') != active_store(db, auth):
         raise HTTPException(404, 'Задание не найдено')
+    job_store = (job.result or {}).get('account_id')
+    if job_store:
+        can_operate_store(auth, db.get(StoreProfile, job_store))
+    elif auth['role'] != 'owner':
+        raise HTTPException(403, 'Это задание доступно только владельцу')
     job.cancel_requested = True
     if job.status == 'queued':
         job.status = 'cancelled'
@@ -1114,6 +1125,11 @@ async def retry_job(jid: str, background: BackgroundTasks, auth: MARKET_OPERATOR
         raise ValueError('Повтор доступен только для незавершённого задания')
     if auth['role'] != 'owner' and (job.result or {}).get('account_id') != active_store(db, auth):
         raise HTTPException(404, 'Задание не найдено')
+    job_store = (job.result or {}).get('account_id')
+    if job_store:
+        can_operate_store(auth, db.get(StoreProfile, job_store))
+    elif auth['role'] != 'owner':
+        raise HTTPException(403, 'Это задание доступно только владельцу')
     job.status, job.cancel_requested, job.progress, job.attempts = 'queued', False, 0, 0
     db.commit()
     background.add_task(run_job_queue)
@@ -1134,7 +1150,7 @@ def get_job(jid: str, auth: AUTH, db: DB):
 async def sync(kind: str, auth: MARKET_OPERATOR, db: DB):
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     if kind == 'products' and store.provider != 'wb':
         raise ValueError('Отдельная загрузка каталога для этого маркетплейса пока недоступна')
     provider = provider_for(store)
@@ -1276,7 +1292,7 @@ def product_official_domain(pid: str, body: OfficialDomain, auth: OWNER, db: DB)
 def product_fact(pid: str, body: Fact, auth: OWNER, db: DB):
     store_id = active_store(db, auth)
     store = db.get(StoreProfile, store_id)
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     product = db.get(Product, pid)
     if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
         raise HTTPException(404)
@@ -1291,7 +1307,7 @@ def product_fact(pid: str, body: Fact, auth: OWNER, db: DB):
 async def research_product(pid: str, auth: MARKET_OPERATOR, db: DB):
     store_id = active_store(db, auth)
     store = db.get(StoreProfile, store_id)
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     product = db.get(Product, pid)
     if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
         raise HTTPException(404, 'Товар не найден')
@@ -1330,7 +1346,7 @@ def verify_product_fact(pid: str, fact_index: int, auth: OWNER, db: DB):
 def product_fact_delete(pid: str, fact_index: int, auth: MARKET_OPERATOR, db: DB):
     store_id = active_store(db, auth)
     store = db.get(StoreProfile, store_id)
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     product = db.get(Product, pid)
     if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
         raise HTTPException(404, 'Товар не найден')
@@ -1379,7 +1395,8 @@ def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
             sync[kind] = {'status': latest.status, 'started_at': latest.created_at, 'progress': latest.progress,
                           'processed': (latest.result or {}).get('processed'), 'message': (latest.result or {}).get('message', '')} if latest else None
         item = {'id': store.id, 'name': store.name, 'provider': store.provider, 'sync': sync,
-                'accessible': auth['role'] == 'owner' or '*' in allowed or store.id in allowed,
+                'accessible': True,
+                'can_operate': (auth['role'] == 'owner' or '*' in allowed or store.id in allowed) and ('*' in auth.get('permissions', []) or store.provider + ':operate' in auth.get('permissions', [])),
                 'connected': bool(db.get(Account, store.id)),
                 **{key: int(value or 0) for key, value in zip(keys, counts)}}
         rows.append(item)
@@ -1409,10 +1426,7 @@ def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
 def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: int = 50, offset: int = 0):
     if kind not in ('', 'reviews', 'questions'):
         raise HTTPException(422, 'Неизвестный тип обращения')
-    allowed = auth.get('store_ids') or []
-    if auth['role'] != 'owner' and '*' not in allowed and store_id and store_id not in allowed:
-        raise HTTPException(403, 'Этот магазин не назначен сотруднику')
-    ids = [s.id for s in db.scalars(select(StoreProfile)) if (auth['role'] == 'owner' or '*' in allowed or s.id in allowed) and (not store_id or s.id == store_id)]
+    ids = [s.id for s in db.scalars(select(StoreProfile)) if not store_id or s.id == store_id]
     if not ids:
         return {'items': [], 'total': 0, 'limit': limit, 'offset': offset}
     conditions = [Review.wb_account_id.in_(ids), Review.is_answered == False]
@@ -1444,7 +1458,7 @@ async def draft(rid: str, body: DraftInput, auth: MARKET_OPERATOR, db: DB):
     if not review or review.wb_account_id != active_store(db, auth): raise HTTPException(404, 'Отзыв не найден')
     store = db.get(StoreProfile, review.wb_account_id)
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     result = await generate_draft(db, rid, body.instruction)
     item = db.get(Draft, result['id'])
     item.updated_by = auth['user_id']
@@ -1458,7 +1472,7 @@ async def question_draft(qid: str, body: DraftInput, auth: MARKET_OPERATOR, db: 
     question = db.get(Review, qid)
     if not question or not question.marketplace.endswith('_question') or question.wb_account_id != active_store(db, auth):
         raise HTTPException(404, 'Вопрос не найден')
-    can(auth, question.marketplace.removesuffix('_question') + ':operate')
+    can_operate_store(auth, db.get(StoreProfile, question.wb_account_id))
     result = await generate_draft(db, qid, body.instruction)
     item = db.get(Draft, result['id'])
     item.updated_by = auth['user_id']
@@ -1473,7 +1487,7 @@ def question_publish(qid: str, auth: MARKET_OPERATOR, db: DB):
     question = db.get(Review, qid)
     if not question or not question.marketplace.endswith('_question') or question.wb_account_id != active_store(db, auth):
         raise HTTPException(404, 'Вопрос не найден')
-    can(auth, question.marketplace.removesuffix('_question') + ':operate')
+    can_operate_store(auth, db.get(StoreProfile, question.wb_account_id))
     return propose_publish(db, [qid])
 
 
@@ -1488,7 +1502,7 @@ async def schedule_question_drafts(body: QuestionDraftBatch, background: Backgro
     active = active_store(db, auth)
     store = db.get(StoreProfile, active)
     if not store: raise HTTPException(404, 'Магазин не найден')
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     selected = list(dict.fromkeys(body.question_ids))
     if selected:
         valid = set(db.scalars(select(Review.id).where(Review.id.in_(selected), Review.wb_account_id == active, Review.marketplace.like('%_question'), Review.is_answered == False)))
@@ -1521,7 +1535,7 @@ def draft_edit(did: str, body: DraftEdit, auth: MARKET_OPERATOR, db: DB):
     if not review or review.wb_account_id != active_store(db, auth):
         raise HTTPException(404, 'Черновик не найден')
     store = db.get(StoreProfile, review.wb_account_id)
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     result = edit_draft(db, did, body.text, body.revision)
     item = db.get(Draft, did); item.updated_by = auth['user_id']; db.commit()
     return public(item)
@@ -1539,7 +1553,7 @@ def draft_feedback(did: str, body: DraftFeedback, auth: MARKET_OPERATOR, db: DB)
     if not draft or not review or review.wb_account_id != active_store(db, auth):
         raise HTTPException(404, 'Черновик не найден')
     store = db.get(StoreProfile, review.wb_account_id)
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     reasons = [reason.strip()[:100] for reason in body.reasons if reason.strip()][:5]
     quality = dict(draft.quality or {})
     quality['owner_feedback'] = {'rating': body.rating, 'reasons': reasons, 'at': now()}
@@ -1562,7 +1576,7 @@ class PublishInput(Payload):
 def publish_proposal(body: PublishInput, auth: MARKET_OPERATOR, db: DB):
     active = active_store(db, auth)
     store = db.get(StoreProfile, active)
-    can(auth, store.provider + ':operate')
+    can_operate_store(auth, store)
     if any(not (review := db.get(Review, rid)) or review.wb_account_id != active for rid in body.review_ids):
         raise HTTPException(404, 'В выборке есть отзыв другого магазина')
     return propose_publish(db, body.review_ids)
@@ -1580,12 +1594,15 @@ def actions(auth: AUTH, db: DB):
 
 @app.post('/publications/reconcile')
 async def reconcile_publications(auth: WB_OPERATOR, db: DB):
-    active = setting(db, 'active_store', 'owner')
+    active = active_store(db, auth)
+    can_operate_store(auth, db.get(StoreProfile, active))
     wb_token(db, active)
     await wb.sync_reviews(db, active)
     checked, confirmed, mismatched = 0, 0, 0
     for publication in db.scalars(select(Publication).where(Publication.status.in_(['uncertain', 'in_flight']))):
         review = db.get(Review, publication.review_id)
+        if not review or review.wb_account_id != active:
+            continue
         draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
         checked += 1
         if review.is_answered and draft and review.existing_answer.strip() == draft.text.strip():
@@ -1599,7 +1616,7 @@ async def reconcile_publications(auth: WB_OPERATOR, db: DB):
 
 
 @app.delete('/actions/{aid}')
-def remove_action(aid: str, auth: AUTH, db: DB):
+def remove_action(aid: str, auth: OWNER, db: DB):
     action = db.get(Action, aid)
     if not action:
         raise HTTPException(404, 'Запись действия не найдена')
@@ -1624,7 +1641,7 @@ async def confirmation(aid: str, body: Confirm, auth: AUTH, db: DB):
         marketplace_operator(auth)
         active = active_store(db, auth)
         store = db.get(StoreProfile, active)
-        can(auth, store.provider + ':operate')
+        can_operate_store(auth, store)
         if any(not (review := db.get(Review, item['review_id'])) or review.wb_account_id != active for item in action.payload['items']):
             raise HTTPException(404, 'Действие другого магазина')
     elif action and action.kind == 'memory':
@@ -1642,7 +1659,7 @@ def cancel(aid: str, auth: AUTH, db: DB):
         marketplace_operator(auth)
         active = active_store(db, auth)
         store = db.get(StoreProfile, active)
-        can(auth, store.provider + ':operate')
+        can_operate_store(auth, store)
         if any(not (review := db.get(Review, item['review_id'])) or review.wb_account_id != active for item in action.payload['items']):
             raise HTTPException(404, 'Действие другого магазина')
     else:
@@ -1672,7 +1689,7 @@ def memory_propose(body: MemoryInput, auth: AUTH, db: DB):
 
 
 @app.patch('/actions/{aid}/memory')
-def memory_scope(aid: str, body: MemoryInput, auth: AUTH, db: DB):
+def memory_scope(aid: str, body: MemoryInput, auth: OWNER, db: DB):
     action = db.get(Action, aid)
     if not action or action.status != 'pending' or action.kind != 'memory':
         raise ValueError('Нет ожидающего предложения памяти')
@@ -1687,7 +1704,7 @@ def memories(auth: AUTH, db: DB):
 
 
 @app.delete('/memory/{mid}')
-def memory_delete(mid: str, auth: AUTH, db: DB):
+def memory_delete(mid: str, auth: OWNER, db: DB):
     result = db.execute(delete(Memory).where(Memory.id == mid))
     if result.rowcount != 1:
         db.rollback()
@@ -1714,7 +1731,8 @@ async def chat(body: Chat, auth: AUTH, db: DB):
         store_id = active_store(db, auth)
         store = db.get(StoreProfile, store_id)
         selection = {**body.selection, 'active_store_id':store_id}
-        allowed = '*' in auth.get('permissions', []) or bool(store and store.provider + ':operate' in auth.get('permissions', []))
+        assigned = auth['role'] == 'owner' or '*' in (auth.get('store_ids') or []) or store_id in (auth.get('store_ids') or [])
+        allowed = assigned and ('*' in auth.get('permissions', []) or bool(store and store.provider + ':operate' in auth.get('permissions', [])))
         return await assistant.send(db, body.text, body.conversation_id, selection, body.voice_mode, allowed)
 
 
@@ -1787,7 +1805,7 @@ def remove_conversation(cid: str, auth: AUTH, db: DB):
 
 
 @app.post('/catalog/import')
-async def catalog_import(auth: AUTH, db: DB, file: UploadFile = File(...), source: str = Form(...), verified: bool = Form(False)):
+async def catalog_import(auth: OWNER, db: DB, file: UploadFile = File(...), source: str = Form(...), verified: bool = Form(False)):
     raw = await file.read(10 * 1024 * 1024 + 1)
     try:
         return import_catalog(db, raw, file.filename or '', source, verified)
@@ -1857,14 +1875,14 @@ def brands(auth: AUTH, db: DB):
 
 
 @app.post('/brands')
-def brand_save(body: BrandInput, auth: AUTH, db: DB):
+def brand_save(body: BrandInput, auth: OWNER, db: DB):
     db.merge(BrandPreference(**body.model_dump()))
     db.commit()
     return {'ok': True}
 
 
 @app.post('/backup')
-def backup_create(auth: AUTH):
+def backup_create(auth: OWNER):
     return {'file': backup(), 'secrets_included': False}
 
 
@@ -1945,13 +1963,13 @@ async def portable_sync_verify(auth: OWNER, db: DB):
 
 
 @app.post('/portable/export')
-async def portable_export(body: PortablePassword, auth: AUTH):
+async def portable_export(body: PortablePassword, auth: OWNER):
     path = await asyncio.to_thread(portable_backup, body.password)
     return FileResponse(path, media_type='application/octet-stream', filename=path.name, headers={'X-Backup-Encrypted':'AES-256-GCM','X-Secrets-Included':'false'})
 
 
 @app.post('/portable/restore')
-async def portable_import(auth: AUTH, password: str = Form(...), file: UploadFile = File(...)):
+async def portable_import(auth: OWNER, password: str = Form(...), file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith('.wbai'):
         raise ValueError('Выберите зашифрованную копию .wbai')
     if len(password) < 12:

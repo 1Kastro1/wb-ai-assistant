@@ -79,10 +79,13 @@ def test_owner_can_create_colleague_with_separate_login(client):
         visible = colleague.get('/stores').json()
         assert len(visible['items']) == 1
         assert visible['items'][0]['provider'] == 'wb'
-        assert visible['items'][0]['accessible'] is False
+        assert visible['items'][0]['accessible'] is True
+        assert visible['items'][0]['can_operate'] is False
         assert visible['items'][0]['config'] == {}
-        assert visible['active'] == ''
-        assert colleague.post('/stores/owner/activate').status_code == 403
+        assert visible['active'] == 'owner'
+        assert colleague.post('/stores/owner/activate').status_code == 200
+        assert colleague.get('/reviews/page').status_code == 200
+        assert colleague.post('/jobs/sync/reviews').status_code == 403
         assert colleague.get('/analytics/marketplaces').json()['totals']['reviews'] == 0
         assert colleague.get('/users').status_code == 403
         assert colleague.post('/settings/wb-token', json={'token':'member-cannot-replace-this'}).status_code == 403
@@ -117,12 +120,14 @@ def test_marketplace_positions_have_real_wb_permissions(client):
     try:
         session = ozon.get('/auth/session').json()['user']
         assert session['can_manage_wb'] is False
-        assert ozon.get('/reviews').status_code == 403
+        assert ozon.get('/reviews').status_code == 200
         assert ozon.post('/jobs/sync/reviews').status_code == 403
         assert ozon.post('/auto-replies/start').status_code == 403
         assert ozon.patch('/settings/schedule', json={}).status_code == 403
         chat = ozon.post('/chat', json={'text':'подготовь ответ покупателю'})
-        assert chat.status_code == 403
+        assert chat.status_code == 200
+        assert ozon.post('/portable/export', json={'password':'a-separate-export-password'}).status_code == 403
+        assert ozon.post('/backup').status_code == 403
     finally:
         ozon.close()
 

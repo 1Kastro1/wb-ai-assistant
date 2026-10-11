@@ -29,8 +29,11 @@ def test_work_queue_separates_questions_and_respects_store_access(client):
     client.post('/auth/logout')
     logged = client.post('/auth/login', json={'username':'queue-user','password':'queue-password-123'}).json()
     client.headers['X-CSRF-Token'] = logged['csrf']
-    assert client.get('/work-queue').json()['total'] == 0
-    assert client.post('/stores/'+owner['id']+'/activate').status_code == 403
+    assert client.get('/work-queue').json()['total'] == 2
+    assert client.post('/stores/'+owner['id']+'/activate').status_code == 200
+    assert client.post('/reviews/queue-r1/draft', json={}).status_code == 403
+    assert client.post('/stores/'+ozon['id']+'/activate').status_code == 200
+    assert client.post('/questions/queue-q1/draft', json={}).status_code == 403
 
 
 def test_web_research_requires_owner_verification_before_reply_use(client, seeded, monkeypatch):
