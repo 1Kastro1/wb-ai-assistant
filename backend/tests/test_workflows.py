@@ -280,7 +280,7 @@ def test_web_research_reports_search_challenge(monkeypatch):
         return 'Unfortunately, bots use DuckDuckGo too. Please complete the following challenge.'
     monkeypatch.setattr(guard, 'request', request)
     product = SimpleNamespace(brand='KANGAROO', name='Очиститель')
-    with pytest.raises(ValueError, match='заблокирован'):
+    with pytest.raises(ValueError, match='недоступен'):
         asyncio.run(web_research.search_instructions(product))
 
 

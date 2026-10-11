@@ -2,6 +2,7 @@ import asyncio
 import html
 import json
 import re
+from xml.etree import ElementTree
 from urllib.parse import parse_qs, unquote, urlsplit
 from sqlalchemy import select
 from .config import MODEL
@@ -67,8 +68,8 @@ class WebResearchProvider:
     def clean(value):
         return html.unescape(re.sub(r'<[^>]+>', ' ', value)).replace('\xa0', ' ').strip()
 
-    async def search_instructions(self, product, db=None):
-        query = f'"{product.brand}" "{product.name}" инструкция применения'
+    async def search_instructions(self, product, db=None, topic='инструкция применения'):
+        query = f'"{product.brand}" "{product.name}" {topic}'
         owned = db is None
         if owned:
             db = Session()
@@ -86,12 +87,15 @@ class WebResearchProvider:
         finally:
             if owned:
                 db.close()
-        page = await guard.request('web', 'search', params={'q': query, 'kl': 'ru-ru'}, return_text=True)
-        lowered = page.lower()
-        if 'please complete the following challenge' in lowered or 'bots use duckduckgo too' in lowered:
-            raise ValueError('Интернет-поиск инструкций временно заблокирован поисковым сервисом')
-        links = re.findall(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', page, re.I | re.S)
-        snippets = re.findall(r'<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div)>', page, re.I | re.S)
+        try:
+            page = await guard.request('web', 'search', params={'q': query, 'kl': 'ru-ru'}, return_text=True)
+            lowered = page.lower()
+            if 'please complete the following challenge' in lowered or 'bots use duckduckgo too' in lowered:
+                raise ValueError('Поисковый сервис запросил проверку браузера')
+            links = re.findall(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', page, re.I | re.S)
+            snippets = re.findall(r'<(?:a|div)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div)>', page, re.I | re.S)
+        except ValueError:
+            links, snippets = [], []
         wanted = {x.lower() for x in re.findall(r'[а-яёa-z0-9]{4,}', product.name + ' ' + product.brand, re.I)}
         raw = []
         for index, (href, title) in enumerate(links[:10]):
@@ -101,7 +105,32 @@ class WebResearchProvider:
             snippet = self.clean(snippets[index]) if index < len(snippets) else ''
             title = self.clean(title)
             raw.append({'title': title, 'snippet': snippet, 'url': href})
-        return self._normalized_results(product, raw)
+        results = self._normalized_results(product, raw)
+        if results:
+            return results
+        try:
+            brave = await guard.request('web', 'brave_search', params={'q': query}, return_text=True)
+            blocks = re.split(r'<div class="snippet [^"]*" data-pos="\d+" data-type="web"', brave, flags=re.I)
+            brave_items = []
+            for block in blocks[1:11]:
+                link = re.search(r'<a href="(https?://[^"<>]+)"', block, re.I)
+                title = re.search(r'<div class="[^"]*search-snippet-title[^"]*"[^>]*title="([^"]+)"', block, re.I)
+                snippet = re.search(r'<div class="content [^"]*"[^>]*>(.*?)</div>', block, re.I | re.S)
+                if link and title:
+                    brave_items.append({'url': html.unescape(link.group(1)), 'title': html.unescape(title.group(1)), 'snippet': self.clean(snippet.group(1)) if snippet else ''})
+            results = self._normalized_results(product, brave_items)
+            if results:
+                return results
+        except ValueError:
+            pass
+        rss = await guard.request('web', 'bing_rss', params={'format': 'rss', 'q': query}, return_text=True)
+        try:
+            root = ElementTree.fromstring(rss)
+        except ElementTree.ParseError:
+            raise ValueError('Поиск товаров сейчас недоступен; повторите позже') from None
+        entries = [{'title': node.findtext('title', ''), 'snippet': node.findtext('description', ''), 'url': node.findtext('link', '')}
+                   for node in root.findall('./channel/item')]
+        return self._normalized_results(product, entries)
 
     def _normalized_results(self, product, items):
         wanted = {x.lower() for x in re.findall(r'[а-яёa-z0-9]{4,}', product.name + ' ' + product.brand, re.I)}

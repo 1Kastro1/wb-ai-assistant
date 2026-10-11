@@ -92,6 +92,8 @@ class EgressGuard:
         ('yandex', 'question_publish'): ('POST', 'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions/update'),
         ('telegram', 'send'): ('POST', 'https://api.telegram.org/bot{token}/sendMessage'),
         ('web', 'search'): ('GET', 'https://html.duckduckgo.com/html/'),
+        ('web', 'bing_rss'): ('GET', 'https://www.bing.com/search'),
+        ('web', 'brave_search'): ('GET', 'https://search.brave.com/search'),
         ('tavily', 'search'): ('POST', 'https://api.tavily.com/search'),
     }
     if os.environ.get('WB_CONTAINER') == '1':

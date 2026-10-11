@@ -120,10 +120,10 @@ def rule_reply(review, product, revision=0):
     return None
 
 
-def safe_fallback_reply(review, product, revision=0):
+def safe_fallback_reply(review, product, revision=0, facts=None):
     text = review.text.lower()
     product_text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
-    facts_text = ' '.join(str(f.get('text', '')) for f in (getattr(product, 'facts', None) or []) if f.get('verification_status') == 'VERIFIED').lower()
+    facts_text = ' '.join(str(f.get('text', '')) for f in (facts if facts is not None else (getattr(product, 'facts', None) or [])) if f.get('verification_status') == 'VERIFIED').lower()
     if cleaner_effectiveness_complaint(review, product):
         odor = any(marker in text for marker in ('воня', 'запах', 'аромат', 'пах'))
         if 'распыл' in facts_text and ('30 секунд' in facts_text or '30 сек' in facts_text) and ('ткан' in facts_text or 'салфет' in facts_text):

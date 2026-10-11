@@ -75,7 +75,9 @@ def test_owner_can_create_colleague_with_separate_login(client):
         assert changed.status_code == 200
         logged = colleague.post('/auth/login', json={'username':'anna','password':'anna-personal-password-456'})
         colleague.headers['X-CSRF-Token'] = logged.json()['csrf']
-        assert colleague.get('/security').status_code == 200
+        assert colleague.get('/security').status_code == 403
+        assert colleague.get('/stores').json()['items'] == []
+        assert colleague.get('/analytics/marketplaces').json()['totals']['reviews'] == 0
         assert colleague.get('/users').status_code == 403
         assert colleague.post('/settings/wb-token', json={'token':'member-cannot-replace-this'}).status_code == 403
 
@@ -109,20 +111,19 @@ def test_marketplace_positions_have_real_wb_permissions(client):
     try:
         session = ozon.get('/auth/session').json()['user']
         assert session['can_manage_wb'] is False
-        assert ozon.get('/reviews').status_code == 200
+        assert ozon.get('/reviews').status_code == 403
         assert ozon.post('/jobs/sync/reviews').status_code == 403
         assert ozon.post('/auto-replies/start').status_code == 403
         assert ozon.patch('/settings/schedule', json={}).status_code == 403
         chat = ozon.post('/chat', json={'text':'подготовь ответ покупателю'})
-        assert chat.status_code == 200
-        assert 'менеджеру WB' in chat.json()['text']
+        assert chat.status_code == 403
     finally:
         ozon.close()
 
     wb = colleague_client(client, 'wb-manager', 'Менеджер WB')
     try:
         assert wb.get('/auth/session').json()['user']['can_manage_wb'] is True
-        assert wb.post('/auto-replies/pause').status_code == 200
+        assert wb.post('/auto-replies/pause').status_code == 403
         assert wb.patch('/settings/schedule', json={}).status_code == 403
     finally:
         wb.close()

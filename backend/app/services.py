@@ -3,6 +3,7 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, case, text as sql_text
@@ -19,6 +20,24 @@ MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUALITY_EVALUATOR_VERSION = '2.0'
 WEB_FACT_MAX_AGE_DAYS = 30
+
+
+def trusted_product_facts(db, product):
+    """Only product-card facts and owner-approved manufacturer-domain facts reach the model."""
+    official = str(setting(db, f'official_domain:{product.id}', '') or '').lower()
+    result = []
+    for fact in product.facts or []:
+        if fact.get('verification_status') != 'VERIFIED':
+            continue
+        source = str(fact.get('source', ''))
+        if source == 'Карточка товара' or source.startswith('Карточка WB:'):
+            result.append(fact)
+            continue
+        parsed = urlsplit(source)
+        host = (parsed.hostname or '').lower()
+        if parsed.scheme == 'https' and official and (host == official or host.endswith('.' + official)):
+            result.append(fact)
+    return result
 INTENT_LABELS = {
     'WRONG_ITEM': 'пришёл другой товар', 'MISSING_PARTS': 'неполная комплектация',
     'DAMAGED_ITEM': 'повреждение товара', 'FITMENT_PROBLEM': 'товар не подошёл',
@@ -450,7 +469,7 @@ async def generate_question_draft(db, question, instruction=''):
     product = db.get(Product, question.product_id)
     existing = db.scalar(select(Draft).where(Draft.review_id == question.id))
     expected_revision = existing.revision if existing else None
-    verified_facts = [fact for fact in (product.facts or []) if fact.get('verification_status') == 'VERIFIED']
+    verified_facts = trusted_product_facts(db, product)
     sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
     intent = question_intent(question.text)
     if intent == 'применение' and not has_usage_instruction(verified_facts):
@@ -470,7 +489,7 @@ async def generate_question_draft(db, question, instruction=''):
     memories = [memory.text for memory in db.scalars(select(Memory).where(Memory.enabled == True)) if memory.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
     messages = [
         {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
-        {'role': 'user', 'content': json.dumps({'question': question.text, 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'research_sources_for_owner_review': sources, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
+        {'role': 'user', 'content': json.dumps({'question': question.text, 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
     try:
@@ -568,9 +587,10 @@ async def generate_draft(db, review_id, instruction=''):
         else:
             reply = 'Жаль, что аромат показался слабым. EIKOSHA — мягкий аромат, его восприятие индивидуально. Попробуйте размещение ближе к потоку воздуха по инструкции модели.'
     model = forced_model or 'safety-rules-1.0'
+    web_sources = []
     if not reply:
         model = MODEL
-        facts = [f for f in product.facts if f.get('verification_status') == 'VERIFIED']
+        facts = trusted_product_facts(db, product)
         style = owner_style_profile(db, review.wb_account_id)
         style['learned_from_edits'] = setting(db, 'learned_edit_preferences:' + review.wb_account_id, {})
         style['owner_feedback'] = setting(db, 'reply_feedback:' + review.wb_account_id, {})
@@ -589,7 +609,7 @@ async def generate_draft(db, review_id, instruction=''):
                 web_search_failed = True
         messages = [
             {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
-            {'role': 'user', 'content': json.dumps({'review_data': review.text, 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'web_instruction_sources': web_sources, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
+            {'role': 'user', 'content': json.dumps({'review_data': review.text, 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
         best_reply, best_quality = None, {'score': -1, 'issues': []}
         valid_candidates = []
         attempt_messages = messages
@@ -630,7 +650,7 @@ async def generate_draft(db, review_id, instruction=''):
                     {'role': 'assistant', 'content': last_candidate},
                     {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания и не направляй покупателя к продавцу. Верни только ответ.'},
                 ]
-        fallback = validate_reply(safe_fallback_reply(review, product, generation_revision))
+        fallback = validate_reply(safe_fallback_reply(review, product, generation_revision, trusted_product_facts(db, product)))
         fallback_quality = assess_reply(review, product, fallback)
         candidates_evaluated = len(valid_candidates)
         if best_reply is None or fallback_quality['score'] > best_quality['score']:
@@ -651,7 +671,7 @@ async def generate_draft(db, review_id, instruction=''):
     except ValueError:
         # A local-model answer may be useful but still violate a hard safety rule.
         # Preserve the safety boundary while always giving the owner a reviewable draft.
-        reply = validate_reply(safe_fallback_reply(review, product, generation_revision))
+        reply = validate_reply(safe_fallback_reply(review, product, generation_revision, trusted_product_facts(db, product)))
         model = 'safety-fallback-1.2'
     if web_search_failed:
         model += ' · без интернет-источников'
@@ -659,6 +679,8 @@ async def generate_draft(db, review_id, instruction=''):
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
     quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы.'
+    quality['sources'] = [{'text': f.get('text', ''), 'source': f.get('source', ''), 'verification_status': 'VERIFIED'} for f in trusted_product_facts(db, product)]
+    quality['unverified_sources_count'] = len(web_sources)
     # Generation may have awaited Ollama while another request published the review.
     db.refresh(review)
     if review.is_answered or review.status == 'publishing':
@@ -693,7 +715,7 @@ def edit_draft(db, draft_id, value, revision):
     draft.text, draft.revision = value, draft.revision + 1
     product = db.get(Product, review.product_id)
     if review.marketplace.endswith('_question'):
-        sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in (product.facts or []) if fact.get('verification_status') == 'VERIFIED']
+        sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in trusted_product_facts(db, product)]
         draft.quality = assess_question_answer(review, product, value, sources)
     else:
         draft.quality = assess_reply(review, product, value)
