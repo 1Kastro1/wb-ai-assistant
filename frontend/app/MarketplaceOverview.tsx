@@ -2,7 +2,7 @@
 
 type Counts = {reviews:number;reviews_unanswered:number;reviews_negative:number;reviews_answered:number;reviews_drafts:number;questions:number;questions_unanswered:number;questions_answered:number;questions_drafts:number};
 type SyncState = {status:string;started_at:string;progress:number;processed?:number;message?:string}|null;
-type Store = Counts & {id:string;name:string;provider:string;connected:boolean;sync?:Record<string,SyncState>};
+type Store = Counts & {id:string;name:string;provider:string;connected:boolean;accessible?:boolean;sync?:Record<string,SyncState>};
 type TrendDay = {date:string;reviews:number;questions:number;negative:number};
 type Overview = {days:number;totals:Counts;stores:Store[];trend?:TrendDay[]};
 
@@ -26,7 +26,7 @@ export default function MarketplaceOverview({overview,busy,onPeriod,onSelect}:{o
         <div className="market-progress"><span>Ответы на отзывы</span><b>{responseRate}%</b><div><i style={{width:responseRate+'%'}}/></div></div>
         <p className="muted">Без ответа: {store.reviews_unanswered} отзывов и {store.questions_unanswered} вопросов · негативных отзывов: {store.reviews_negative} · черновиков: {store.reviews_drafts+store.questions_drafts}</p>
         <div className="market-sync"><b>Последняя синхронизация</b>{(['reviews','questions','products'] as const).map(kind=>{const job=store.sync?.[kind];return <small key={kind}>{kind==='reviews'?'Отзывы':kind==='questions'?'Вопросы':'Товары'}: {!store.connected?'API не подключён':!job?'ещё не запускалась':`${job.status==='completed'?'успешно':job.status==='failed'?'ошибка':job.status==='running'?'выполняется':job.status==='queued'?'ожидает':'остановлена'} · ${new Date(job.started_at).toLocaleString('ru')}${job.status==='completed'&&job.processed!==undefined?` · получено ${job.processed}`:''}${job.status==='running'?` · ${job.progress}%`:''}`} {job?.status==='failed'&&job.message&&<span title={job.message}>ⓘ Причина</span>}</small>})}</div>
-        <button className="full" disabled={busy} onClick={()=>onSelect(store.id)}>Открыть магазин →</button>
+        <button className="full" disabled={busy||store.accessible===false} title={store.accessible===false?'Попросите владельца назначить доступ':undefined} onClick={()=>onSelect(store.id)}>{store.accessible===false?'Доступ не назначен':'Открыть магазин →'}</button>
       </article>
     })}</div>
   </section>;

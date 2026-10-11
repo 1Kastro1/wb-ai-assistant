@@ -76,7 +76,13 @@ def test_owner_can_create_colleague_with_separate_login(client):
         logged = colleague.post('/auth/login', json={'username':'anna','password':'anna-personal-password-456'})
         colleague.headers['X-CSRF-Token'] = logged.json()['csrf']
         assert colleague.get('/security').status_code == 403
-        assert colleague.get('/stores').json()['items'] == []
+        visible = colleague.get('/stores').json()
+        assert len(visible['items']) == 1
+        assert visible['items'][0]['provider'] == 'wb'
+        assert visible['items'][0]['accessible'] is False
+        assert visible['items'][0]['config'] == {}
+        assert visible['active'] == ''
+        assert colleague.post('/stores/owner/activate').status_code == 403
         assert colleague.get('/analytics/marketplaces').json()['totals']['reviews'] == 0
         assert colleague.get('/users').status_code == 403
         assert colleague.post('/settings/wb-token', json={'token':'member-cannot-replace-this'}).status_code == 403

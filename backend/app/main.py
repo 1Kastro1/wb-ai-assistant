@@ -644,10 +644,11 @@ async def telegram_test(auth: OWNER, db: DB):
 def stores(auth: AUTH, db: DB):
     allowed = auth.get('store_ids') or []
     rows = list(db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)))
-    if auth['role'] != 'owner' and '*' not in allowed:
-        rows = [row for row in rows if row.id in allowed]
-    active = active_store(db, auth) if rows else ''
-    return {'active': active, 'items': [{**public(s), 'config': {k:v for k,v in (s.config or {}).items() if k in ('client_id','business_id')}, 'connected': bool(db.get(Account, s.id)), 'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id)) or 0} for s in rows]}
+    accessible = lambda store: auth['role'] == 'owner' or '*' in allowed or store.id in allowed
+    active = active_store(db, auth) if any(accessible(row) for row in rows) else ''
+    return {'active': active, 'items': [{**public(s), 'config': {k:v for k,v in (s.config or {}).items() if k in ('client_id','business_id')} if accessible(s) else {},
+                                      'connected': bool(db.get(Account, s.id)), 'accessible': accessible(s),
+                                      'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id)) or 0} for s in rows]}
 
 
 @app.post('/stores')
@@ -1352,8 +1353,6 @@ def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
     days = max(0, min(days, 365))
     allowed = auth.get('store_ids') or []
     stores = list(db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)))
-    if auth['role'] != 'owner' and '*' not in allowed:
-        stores = [store for store in stores if store.id in allowed]
     keys = ('reviews', 'reviews_unanswered', 'reviews_negative', 'reviews_answered', 'reviews_drafts',
             'questions', 'questions_unanswered', 'questions_answered', 'questions_drafts')
     totals = dict.fromkeys(keys, 0)
@@ -1380,6 +1379,7 @@ def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
             sync[kind] = {'status': latest.status, 'started_at': latest.created_at, 'progress': latest.progress,
                           'processed': (latest.result or {}).get('processed'), 'message': (latest.result or {}).get('message', '')} if latest else None
         item = {'id': store.id, 'name': store.name, 'provider': store.provider, 'sync': sync,
+                'accessible': auth['role'] == 'owner' or '*' in allowed or store.id in allowed,
                 'connected': bool(db.get(Account, store.id)),
                 **{key: int(value or 0) for key, value in zip(keys, counts)}}
         rows.append(item)
