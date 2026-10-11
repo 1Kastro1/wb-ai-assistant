@@ -80,11 +80,16 @@ class EgressGuard:
         ('wb', 'products'): ('POST', 'https://content-api.wildberries.ru/content/v2/get/cards/list'),
         ('wb', 'publish'): ('POST', 'https://feedbacks-api.wildberries.ru/api/v1/feedbacks/answer'),
         ('wb', 'question_publish'): ('PATCH', 'https://feedbacks-api.wildberries.ru/api/v1/questions'),
-        ('ozon', 'reviews'): ('POST', 'https://api-seller.ozon.ru/v2/review/list'),
-        ('ozon', 'review'): ('POST', 'https://api-seller.ozon.ru/v2/review/info'),
+        ('ozon', 'reviews'): ('POST', 'https://api-seller.ozon.ru/v1/review/list'),
+        ('ozon', 'review'): ('POST', 'https://api-seller.ozon.ru/v1/review/info'),
         ('ozon', 'publish'): ('POST', 'https://api-seller.ozon.ru/v1/review/comment/create'),
+        ('ozon', 'questions'): ('POST', 'https://api-seller.ozon.ru/v1/question/list'),
+        ('ozon', 'question_info'): ('POST', 'https://api-seller.ozon.ru/v1/question/info'),
+        ('ozon', 'question_publish'): ('POST', 'https://api-seller.ozon.ru/v1/question/answer/create'),
         ('yandex', 'reviews'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback'),
         ('yandex', 'publish'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback/comments/update'),
+        ('yandex', 'questions'): ('POST', 'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions'),
+        ('yandex', 'question_publish'): ('POST', 'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions/update'),
         ('telegram', 'send'): ('POST', 'https://api.telegram.org/bot{token}/sendMessage'),
         ('web', 'search'): ('GET', 'https://html.duckduckgo.com/html/'),
         ('tavily', 'search'): ('POST', 'https://api.tavily.com/search'),
@@ -98,8 +103,12 @@ class EgressGuard:
 
     def validate(self, provider, operation, url=None):
         endpoint = self.ENDPOINTS.get((provider, operation))
-        if not endpoint or (url is not None and url != endpoint[1]):
+        if not endpoint:
             raise ValueError('Соединение заблокировано: неизвестный провайдер или операция')
+        if url is not None:
+            allowed = re.escape(endpoint[1]).replace(r'\{business_id\}', r'[0-9]+').replace(r'\{token\}', r'[^/]+')
+            if not re.fullmatch(allowed, url):
+                raise ValueError('Соединение заблокировано: адрес не разрешён')
         if operation in ('publish', 'question_publish'):
             from .config import REAL_PUBLISH
             with Session() as db:
@@ -115,7 +124,7 @@ class EgressGuard:
             url = url or template
             if '{' not in template and url != template:
                 raise ValueError('Соединение заблокировано: адрес не разрешён')
-            if provider == 'yandex' and not re.fullmatch(r'https://api\.partner\.market\.yandex\.ru/v2/businesses/[0-9]+/goods-feedback(?:/comments/update)?', url):
+            if provider == 'yandex' and not re.fullmatch(r'https://api\.partner\.market\.yandex\.ru/(?:v2/businesses/[0-9]+/goods-feedback(?:/comments/update)?|v1/businesses/[0-9]+/goods-questions(?:/update)?)', url):
                 raise ValueError('Соединение заблокировано: неверный адрес Яндекс Маркета')
             if provider == 'telegram' and not re.fullmatch(r'https://api\.telegram\.org/bot[^/]+/sendMessage', url):
                 raise ValueError('Соединение заблокировано: неверный адрес Telegram')

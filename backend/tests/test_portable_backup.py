@@ -60,9 +60,26 @@ def test_portable_restore_waits_for_active_jobs(client,seeded):
 
 def test_encrypted_folder_sync(client,seeded,tmp_path):
     configured=client.patch('/settings/portable-sync',json={'enabled':True,'directory':str(tmp_path),'password':PASSWORD,'hours':24})
-    assert configured.status_code==200
+    assert configured.status_code==200, configured.text
     assert configured.json()['configured'] is True
     synced=client.post('/portable/sync-now')
     assert synced.status_code==200
     destination=tmp_path/synced.json()['file']
     assert destination.read_bytes().startswith(b'WBAIPORT1')
+    verified=client.post('/portable/verify')
+    assert verified.status_code==200
+    assert verified.json()['ok'] is True
+    assert verified.json()['reviews']==4
+    assert verified.json()['file']==destination.name
+
+
+def test_folder_sync_detects_corrupt_backup_without_touching_database(client,seeded,tmp_path):
+    client.patch('/settings/portable-sync',json={'enabled':True,'directory':str(tmp_path),'password':PASSWORD,'hours':24})
+    synced=client.post('/portable/sync-now')
+    destination=tmp_path/synced.json()['file']
+    data=bytearray(destination.read_bytes());data[-20]^=1;destination.write_bytes(data)
+    verified=client.post('/portable/verify')
+    assert verified.status_code==400
+    assert 'повреждённая' in verified.json()['detail']
+    with Session() as db:
+        assert db.scalar(select(func.count()).select_from(Review))==4

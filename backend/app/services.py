@@ -145,7 +145,7 @@ def remember_web_instruction_sources(product, sources):
 
 
 def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False):
-    query = select(Review).join(Product).where(Review.rating <= max_rating, Review.marketplace != 'wb_question')
+    query = select(Review).join(Product).where(Review.rating <= max_rating, ~Review.marketplace.like('%_question'))
     if q:
         query = query.where((Review.text.contains(q, autoescape=True)) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
     if unanswered:
@@ -174,7 +174,7 @@ def reviews_page(db, **filters):
     limit = min(200, max(1, int(filters.get('limit', 50))))
     offset = max(0, int(filters.get('offset', 0)))
     rows = reviews_search(db, **{**filters, 'limit': limit, 'offset': offset})
-    count_query = select(func.count()).select_from(Review).join(Product).where(Review.rating <= filters.get('max_rating', 5), Review.marketplace != 'wb_question')
+    count_query = select(func.count()).select_from(Review).join(Product).where(Review.rating <= filters.get('max_rating', 5), ~Review.marketplace.like('%_question'))
     if filters.get('q'):
         q = filters['q']
         count_query = count_query.where((Review.text.contains(q, autoescape=True)) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
@@ -310,7 +310,7 @@ def learn_from_edit(db, draft, old, new):
 
 
 def quality_report(db, days=30, account_id=''):
-    filters = [Review.marketplace != 'wb_question']
+    filters = [~Review.marketplace.like('%_question')]
     if days:
         filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
     if account_id:
@@ -337,7 +337,7 @@ def quality_report(db, days=30, account_id=''):
 
 
 def analytics(db, days=0, product_id='', account_id=''):
-    filters = [Review.marketplace != 'wb_question']
+    filters = [~Review.marketplace.like('%_question')]
     if days:
         filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
     if product_id:
@@ -463,7 +463,7 @@ async def generate_question_draft(db, question, instruction=''):
         except ValueError:
             pass
     examples = []
-    previous = db.scalars(select(Review).where(Review.marketplace == 'wb_question', Review.product_id == question.product_id, Review.is_answered == True, Review.id != question.id).order_by(Review.created_at.desc()).limit(5))
+    previous = db.scalars(select(Review).where(Review.marketplace.like('%_question'), Review.product_id == question.product_id, Review.is_answered == True, Review.id != question.id).order_by(Review.created_at.desc()).limit(5))
     for item in previous:
         if item.existing_answer:
             examples.append({'question': item.text, 'answer': item.existing_answer})
@@ -517,7 +517,7 @@ async def generate_draft(db, review_id, instruction=''):
     if not setting(db, 'assistant_enabled', True):
         raise ValueError('Ассистент отключён владельцем')
     review = db.get(Review, review_id)
-    if review and review.marketplace == 'wb_question':
+    if review and review.marketplace.endswith('_question'):
         return await generate_question_draft(db, review, instruction)
     if not review or review.is_answered:
         raise ValueError('Отзыв не найден или уже имеет ответ')
@@ -692,7 +692,7 @@ def edit_draft(db, draft_id, value, revision):
     draft.edits = draft.edits + [{'old': old, 'new': value, 'diff': '\n'.join(difflib.ndiff(old.splitlines(), value.splitlines())), 'at': now()}]
     draft.text, draft.revision = value, draft.revision + 1
     product = db.get(Product, review.product_id)
-    if review.marketplace == 'wb_question':
+    if review.marketplace.endswith('_question'):
         sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in (product.facts or []) if fact.get('verification_status') == 'VERIFIED']
         draft.quality = assess_question_answer(review, product, value, sources)
     else:
@@ -713,7 +713,7 @@ def propose_publish(db, review_ids):
         draft = db.scalar(select(Draft).where(Draft.review_id == rid))
         if not review or not draft or review.is_answered or review.status == 'publishing':
             raise ValueError('Для каждого выбранного отзыва нужен доступный черновик')
-        is_question = review.marketplace == 'wb_question'
+        is_question = review.marketplace.endswith('_question')
         if len(ids) > 1 and not is_question and (review.rating <= 3 or review.manual):
             excluded.append(rid)
             continue
@@ -760,7 +760,7 @@ async def confirm_action(db, action_id, manual_ack=False):
         validate_reply(draft.text)
         if not test:
             if db.scalar(select(Publication).where(Publication.review_id == review.id)):
-                raise ValueError('Для отзыва уже выполнялась публикация. Сначала сверка с WB')
+                raise ValueError('Для ответа уже выполнялась публикация. Сначала проверьте его в маркетплейсе')
             db.add(Publication(id=str(uuid4()), review_id=review.id, action_id=action.id, status='in_flight'))
             review.status = 'publishing'
     action.status = 'executing'
@@ -782,9 +782,9 @@ async def confirm_action(db, action_id, manual_ack=False):
                 job.status = 'published'
                 results.append({'review_id': review.id, 'status': 'published'})
             except ValueError:
-                # WB has no idempotency key. Ambiguous failures never retry a POST.
+                # Avoid duplicate replies when the marketplace accepted a request but the response was lost.
                 review.status, job.status = 'manual_review', 'uncertain'
-                results.append({'review_id': review.id, 'status': 'uncertain', 'message': 'Проверьте ответ в WB. Автоповтор запрещён.'})
+                results.append({'review_id': review.id, 'status': 'uncertain', 'message': 'Проверьте ответ в маркетплейсе. Автоповтор запрещён.'})
         db.commit()
     action.status = 'completed' if all(x['status'] in ('SIMULATED', 'published') for x in results) else 'needs_review'
     action.result = {'items': results, 'test_mode': test}

@@ -25,7 +25,7 @@ from .services import reviews_search, reviews_page, analytics, quality_report, g
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
-from .maintenance import backup, portable_backup, portable_restore, database_health, recovery_snapshot
+from .maintenance import backup, portable_backup, portable_restore, portable_verify, database_health, recovery_snapshot
 from . import voice
 
 
@@ -670,6 +670,10 @@ def activate_store(store_id: str, auth: AUTH, db: DB):
 def connect_store(store_id: str, body: StoreConnection, auth: OWNER, db: DB):
     store = db.get(StoreProfile, store_id)
     if not store: raise HTTPException(404, 'Магазин не найден')
+    if store.provider == 'ozon' and not body.client_id.strip():
+        raise ValueError('Укажите Client-Id Ozon')
+    if store.provider == 'yandex' and not body.business_id.strip().isdigit():
+        raise ValueError('Укажите числовой Business ID Яндекс Маркета')
     store.config = {'client_id':body.client_id.strip(), 'business_id':body.business_id.strip()}
     db.merge(Account(id=store_id, encrypted_token=encrypt_secret(body.token)))
     db.commit()
@@ -812,7 +816,7 @@ async def run_sync_job(job_id):
                         Review.is_answered == False,
                         Review.status != 'publishing',
                         Draft.id.is_(None),
-                        Review.marketplace == 'wb_question' if is_questions else Review.marketplace != 'wb_question',
+                        Review.marketplace.like('%_question') if is_questions else ~Review.marketplace.like('%_question'),
                     ]
                     selected_ids = list((job.result or {}).get('selected_ids') or [])
                     if selected_ids:
@@ -871,8 +875,6 @@ async def run_sync_job(job_id):
                     provider = provider_for(store) if store else None
                     if not provider:
                         raise ValueError('Провайдер магазина не поддерживается')
-                    if kind == 'questions' and store.provider != 'wb':
-                        raise ValueError('Вопросы покупателей сейчас поддерживаются для Wildberries')
                     if kind == 'products' and store.provider != 'wb':
                         count = 0  # Ozon and Yandex products are learned from their review payloads.
                         job.result = {'message':'Товары этого маркетплейса обновляются вместе с отзывами'}
@@ -957,27 +959,34 @@ async def scheduler_loop():
                     set_setting(db, 'automation_schedule', schedule)
                     db.commit()
                     continue
-                active = setting(db, 'active_store', 'owner')
-                store = db.get(StoreProfile, active)
+                connected_stores = [store for store in db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)) if db.get(Account, store.id)]
                 for kind, hours in (('products', int(schedule.get('products_hours', 24))), ('reviews', int(schedule.get('reviews_hours', 3))), ('questions', int(schedule.get('questions_hours', 3)))):
-                    if kind == 'questions' and store and (store.provider or 'wb') != 'wb':
+                    if db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
                         continue
-                    last = float(schedule.get('last_' + kind, 0))
-                    if current - last >= max(1, hours) * 3600 and not db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind=kind, priority=200, result={'account_id': active, 'scheduled': True}))
-                        schedule['last_' + kind] = current
-                if schedule.get('drafts_enabled'):
-                    last = float(schedule.get('last_drafts', 0))
+                    for store in connected_stores:
+                        if kind == 'products' and store.provider != 'wb':
+                            continue
+                        last_key = f'last_{kind}:{store.id}'
+                        last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
+                        if current - last >= max(1, hours) * 3600:
+                            db.add(Job(id=str(uuid4()), kind=kind, priority=200, result={'account_id': store.id, 'scheduled': True}))
+                            schedule[last_key] = current
+                            break
+                for kind, enabled in (('drafts', schedule.get('drafts_enabled')), ('question_drafts', schedule.get('question_drafts_enabled'))):
+                    if not enabled or not setting(db, 'assistant_enabled', True):
+                        continue
+                    if db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
+                        continue
                     hours = max(1, int(schedule.get('drafts_hours', 6)))
-                    if current - last >= hours * 3600 and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': active, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Плановая подготовка автоответов'}))
-                        schedule['last_drafts'] = current
-                if schedule.get('question_drafts_enabled') and setting(db, 'assistant_enabled', True):
-                    last = float(schedule.get('last_question_drafts', 0))
-                    hours = max(1, int(schedule.get('drafts_hours', 6)))
-                    if current - last >= hours * 3600 and not db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind='question_drafts', priority=250, result={'account_id': active, 'scheduled': True, 'message': 'Плановая подготовка ответов на вопросы'}))
-                        schedule['last_question_drafts'] = current
+                    for store in connected_stores:
+                        last_key = f'last_{kind}:{store.id}'
+                        last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
+                        if current - last >= hours * 3600:
+                            result = {'account_id': store.id, 'scheduled': True, 'message': 'Плановая подготовка ответов на вопросы' if kind == 'question_drafts' else 'Плановая подготовка автоответов'}
+                            if kind == 'drafts': result['since'] = schedule.get('drafts_since', '')
+                            db.add(Job(id=str(uuid4()), kind=kind, priority=250, result=result))
+                            schedule[last_key] = current
+                            break
                 if current - float(schedule.get('last_backup', 0)) >= max(1, int(schedule.get('backup_hours', 24))) * 3600:
                     async with maintenance_lock:
                         await asyncio.to_thread(backup)
@@ -1105,16 +1114,22 @@ def get_job(jid: str, auth: AUTH, db: DB):
 
 
 @app.post('/sync/{kind}')
-async def sync(kind: str, auth: WB_OPERATOR, db: DB):
+async def sync(kind: str, auth: MARKET_OPERATOR, db: DB):
+    store = db.get(StoreProfile, active_store(db, auth))
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
+    if kind == 'products' and store.provider != 'wb':
+        raise ValueError('Отдельная загрузка каталога для этого маркетплейса пока недоступна')
+    provider = provider_for(store)
     if sync_lock.locked():
         raise ValueError('Синхронизация уже выполняется')
     async with sync_lock:
         if kind == 'products':
-            count = await wb.sync_products(db)
+            count = await provider.sync_products(db, store.id)
         elif kind == 'reviews':
-            count = await wb.sync_reviews(db)
+            count = await provider.sync_reviews(db, store.id)
         elif kind == 'questions':
-            count = await wb.sync_questions(db)
+            count = await provider.sync_questions(db, store.id)
         else:
             raise HTTPException(404)
     return {'processed': count}
@@ -1133,7 +1148,7 @@ def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False,
 @app.get('/questions/page')
 def questions_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, status: str = '', kind: str = '', limit: int = 30, offset: int = 0):
     limit, offset = min(200, max(1, limit)), max(0, offset)
-    conditions = [Review.wb_account_id == active_store(db, auth), Review.marketplace == 'wb_question']
+    conditions = [Review.wb_account_id == active_store(db, auth), Review.marketplace.like('%_question')]
     if q:
         conditions.append(Review.text.contains(q, autoescape=True) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
     if unanswered:
@@ -1165,7 +1180,7 @@ def questions_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = Fals
 @app.get('/questions/stats')
 def question_stats(auth: AUTH, db: DB):
     active = active_store(db, auth)
-    base = [Review.wb_account_id == active, Review.marketplace == 'wb_question']
+    base = [Review.wb_account_id == active, Review.marketplace.like('%_question')]
     rows = list(db.scalars(select(Review).where(*base)))
     types = {}
     for row in rows:
@@ -1182,14 +1197,18 @@ def question_stats(auth: AUTH, db: DB):
 
 @app.get('/products')
 def products(auth: AUTH, db: DB, q: str = ''):
-    return [public(p) for p in db.scalars(select(Product).where(Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True)).limit(200))]
+    store = db.get(StoreProfile, active_store(db, auth))
+    scope = Product.marketplace == 'wb' if not store or store.provider == 'wb' else Product.id.startswith(f'{store.provider}:{store.id}:')
+    return [public(p) for p in db.scalars(select(Product).where(scope, Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True)).limit(200))]
 
 
 @app.get('/products/page')
 def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset: int = 0):
     limit, offset = min(200, max(1, limit)), max(0, offset)
-    query = select(Product)
-    count_query = select(func.count()).select_from(Product)
+    store = db.get(StoreProfile, active_store(db, auth))
+    scope = Product.marketplace == 'wb' if not store or store.provider == 'wb' else Product.id.startswith(f'{store.provider}:{store.id}:')
+    query = select(Product).where(scope)
+    count_query = select(func.count()).select_from(Product).where(scope)
     if q:
         condition = Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True) | Product.category.contains(q, autoescape=True)
         query, count_query = query.where(condition), count_query.where(condition)
@@ -1260,9 +1279,9 @@ async def draft(rid: str, body: DraftInput, auth: MARKET_OPERATOR, db: DB):
 @app.post('/questions/{qid}/draft')
 async def question_draft(qid: str, body: DraftInput, auth: MARKET_OPERATOR, db: DB):
     question = db.get(Review, qid)
-    if not question or question.marketplace != 'wb_question':
+    if not question or not question.marketplace.endswith('_question') or question.wb_account_id != active_store(db, auth):
         raise HTTPException(404, 'Вопрос не найден')
-    can(auth, 'wb:operate')
+    can(auth, question.marketplace.removesuffix('_question') + ':operate')
     result = await generate_draft(db, qid, body.instruction)
     item = db.get(Draft, result['id'])
     item.updated_by = auth['user_id']
@@ -1275,9 +1294,9 @@ async def question_draft(qid: str, body: DraftInput, auth: MARKET_OPERATOR, db: 
 @app.post('/questions/{qid}/publish')
 def question_publish(qid: str, auth: MARKET_OPERATOR, db: DB):
     question = db.get(Review, qid)
-    if not question or question.marketplace != 'wb_question':
+    if not question or not question.marketplace.endswith('_question') or question.wb_account_id != active_store(db, auth):
         raise HTTPException(404, 'Вопрос не найден')
-    can(auth, 'wb:operate')
+    can(auth, question.marketplace.removesuffix('_question') + ':operate')
     return propose_publish(db, [qid])
 
 
@@ -1289,11 +1308,13 @@ class QuestionDraftBatch(Payload):
 async def schedule_question_drafts(body: QuestionDraftBatch, background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB):
     if not setting(db, 'assistant_enabled', True):
         raise ValueError('Сначала включите ассистента')
-    can(auth, 'wb:operate')
     active = active_store(db, auth)
+    store = db.get(StoreProfile, active)
+    if not store: raise HTTPException(404, 'Магазин не найден')
+    can(auth, store.provider + ':operate')
     selected = list(dict.fromkeys(body.question_ids))
     if selected:
-        valid = set(db.scalars(select(Review.id).where(Review.id.in_(selected), Review.wb_account_id == active, Review.marketplace == 'wb_question', Review.is_answered == False)))
+        valid = set(db.scalars(select(Review.id).where(Review.id.in_(selected), Review.wb_account_id == active, Review.marketplace.like('%_question'), Review.is_answered == False)))
         if valid != set(selected):
             raise ValueError('В выборке есть недоступные или уже отвеченные вопросы')
     existing = db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued','running'])))
@@ -1307,7 +1328,7 @@ async def schedule_question_drafts(body: QuestionDraftBatch, background: Backgro
 @app.get('/jobs/question-drafts/preview')
 def preview_question_drafts(auth: AUTH, db: DB):
     active = active_store(db, auth)
-    total = db.scalar(select(func.count()).select_from(Review).outerjoin(Draft, Draft.review_id == Review.id).where(Review.wb_account_id == active, Review.marketplace == 'wb_question', Review.is_answered == False, Review.status != 'publishing', Draft.id.is_(None))) or 0
+    total = db.scalar(select(func.count()).select_from(Review).outerjoin(Draft, Draft.review_id == Review.id).where(Review.wb_account_id == active, Review.marketplace.like('%_question'), Review.is_answered == False, Review.status != 'publishing', Draft.id.is_(None))) or 0
     return {'total': total, 'estimated_minutes': max(1, round(total * 25 / 60)) if total else 0}
 
 
@@ -1695,6 +1716,22 @@ async def portable_sync_now(auth: OWNER, db: DB):
     config.update(last_sync=time.time(),last_file=Path(copied).name,last_error='')
     set_setting(db,'portable_sync',config);db.commit()
     return {'ok':True,'file':Path(copied).name}
+
+
+@app.post('/portable/verify')
+async def portable_sync_verify(auth: OWNER, db: DB):
+    config = setting(db, 'portable_sync', {})
+    account = db.get(Account, 'portable:sync')
+    directory = Path(str(config.get('directory', ''))).expanduser().resolve()
+    filename = str(config.get('last_file', ''))
+    if not account or not directory.is_dir() or not filename or Path(filename).name != filename or not filename.endswith('.wbai'):
+        raise ValueError('Сначала создайте зашифрованную копию')
+    source = (directory / filename).resolve()
+    if source.parent != directory or not source.is_file():
+        raise ValueError('Последняя зашифрованная копия не найдена')
+    async with portable_lock:
+        result = await asyncio.to_thread(portable_verify, source, decrypt_secret(account.encrypted_token))
+    return {**result, 'file': filename}
 
 
 @app.post('/portable/export')

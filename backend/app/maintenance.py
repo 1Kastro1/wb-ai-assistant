@@ -98,6 +98,20 @@ def _check_backup_database(path):
             raise ValueError('Копия содержит запрещённые секреты')
 
 
+def portable_verify(source_path, password):
+    """Exercise decryption and SQLite integrity without touching the live database."""
+    temp_path = DATA / 'temp' / f'portable-check-{secrets.token_hex(12)}.db'
+    try:
+        _decrypt_portable(Path(source_path), temp_path, password)
+        _check_backup_database(temp_path)
+        with closing(sqlite3.connect(temp_path)) as source:
+            reviews = source.execute('SELECT count(*) FROM reviews').fetchone()[0]
+            drafts = source.execute('SELECT count(*) FROM generated_answers').fetchone()[0]
+        return {'ok': True, 'reviews': reviews, 'drafts': drafts}
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def portable_restore(source_path, password):
     temp_path = DATA / 'temp' / f'portable-{secrets.token_hex(12)}.db'
     try:

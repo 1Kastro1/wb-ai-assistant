@@ -1,0 +1,59 @@
+name: Assistant availability
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: assistant-availability
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check public site and API
+        id: check
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error --location --max-time 20 \
+                 --output /dev/null 'https://assistant.blackmindworks.com/' \
+               && curl --fail --silent --show-error --location --max-time 20 \
+                 'https://assistant.blackmindworks.com/api/health' \
+                 | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 10; fi
+          done
+          exit 1
+
+      - name: Open or resolve outage issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='WB Assistant: сайт недоступен'
+          issue="$(gh issue list --state open --limit 100 --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          if [ "$CHECK_OUTCOME" = failure ]; then
+            if [ -z "$issue" ]; then
+              gh issue create --title "$title" \
+                --body "Внешняя проверка сайта и /api/health не прошла три раза. Проверьте компьютер или сервер, приложение и Cloudflare Tunnel. Журнал: https://github.com/$GH_REPO/actions/workflows/availability.yml"
+            fi
+            exit 1
+          fi
+          if [ -n "$issue" ]; then
+            gh issue close "$issue" --comment 'Сайт и API снова отвечают на внешнюю проверку.'
+          fi

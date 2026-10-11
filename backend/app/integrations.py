@@ -304,7 +304,26 @@ def upsert_market_review(db, store, external_id, product_external_id, product_na
     row.is_answered, row.existing_answer = bool(answered), mask_vin(answer or '')
     for key, value in classify(row.text, product.category).items():
         setattr(row, key, value)
-    row.status = 'published' if row.is_answered else ('manual_review' if row.manual else row.status)
+    row.status = 'published' if row.is_answered else ('manual_review' if row.manual else ('draft_ready' if db.scalar(select(Draft).where(Draft.review_id == row.id)) else 'unanswered'))
+    db.add(row)
+    return row
+
+
+def upsert_market_question(db, store, external_id, product_external_id, product_name, text, created_at, answered=False):
+    if not external_id:
+        return None
+    product_id = f'{store.provider}:{store.id}:{product_external_id or "unknown"}'
+    product = db.get(Product, product_id) or Product(id=product_id, name=product_name or str(product_external_id or 'Товар'), brand='', category='', marketplace=store.provider)
+    db.add(product)
+    db.flush()
+    stored_id = f'question:{external_id}'
+    row = db.scalar(select(Review).where(Review.wb_account_id == store.id, Review.wb_review_id == stored_id))
+    if not row:
+        row = Review(id=f'{store.id}:{stored_id}', wb_account_id=store.id, wb_review_id=stored_id, product_id=product_id, rating=0, status='unanswered', marketplace=f'{store.provider}_question')
+    row.text = mask_vin(str(text or '').strip())
+    row.created_at = str(created_at or now())
+    row.is_answered = bool(answered)
+    row.status = 'published' if answered else ('draft_ready' if db.scalar(select(Draft).where(Draft.review_id == row.id)) else 'unanswered')
     db.add(row)
     return row
 
@@ -344,19 +363,56 @@ class OzonProvider:
 
     async def publish(self, db, review, text):
         store, token = store_credentials(db, review.wb_account_id)
+        if review.marketplace == 'ozon_question':
+            question_id = review.wb_review_id.removeprefix('question:')
+            current = await guard.request('ozon', 'question_info', headers=self.headers(store, token), body={'question_id': question_id})
+            question = current.get('question') or current.get('result', {}).get('question') or current.get('result') or {}
+            if str(question.get('id') or question.get('question_id') or '') != question_id:
+                raise ValueError('Ozon не подтвердил существование выбранного вопроса')
+            if str(question.get('status') or '').upper() not in ('NEW', 'UNPROCESSED'):
+                raise ValueError('Ozon не подтвердил, что вопрос ещё ждёт ответа')
+            sku = str(question.get('sku') or '')
+            if not sku.isdigit():
+                raise ValueError('Ozon не вернул SKU вопроса; публикация остановлена')
+            await guard.request('ozon', 'question_publish', headers=self.headers(store, token), body={'question_id': question_id, 'sku': int(sku), 'text': text})
+            return
         await guard.request('ozon', 'publish', headers=self.headers(store, token), body={'review_id': review.wb_review_id, 'text': text})
+
+    async def sync_questions(self, db, store_id, progress=None, cancelled=None):
+        store, token = store_credentials(db, store_id)
+        total, last_id, seen = 0, '', set()
+        for _ in range(1000):
+            if cancelled and cancelled(): raise asyncio.CancelledError()
+            body = {'filter': {'status': 'ALL'}, 'limit': 100, 'last_id': last_id, 'sort_dir': 'DESC'}
+            result = await guard.request('ozon', 'questions', headers=self.headers(store, token), body=body)
+            items = result.get('questions') or (result.get('result') or {}).get('questions') or []
+            for item in items:
+                status = str(item.get('status') or '').upper()
+                if upsert_market_question(db, store, item.get('id') or item.get('question_id'), item.get('sku'), item.get('product_name'), item.get('text'), item.get('published_at') or item.get('created_at'), status in ('PROCESSED', 'ANSWERED')):
+                    total += 1
+            db.commit()
+            if progress: progress(min(95, 5 + total // 100))
+            if len(items) < 100: break
+            next_id = str(result.get('last_id') or (result.get('result') or {}).get('last_id') or '')
+            if not next_id or next_id in seen: break
+            seen.add(next_id)
+            last_id = next_id
+        return total
 
 
 class YandexProvider:
     def target(self, store, operation):
         business_id = str((store.config or {}).get('business_id', '')).strip()
         if not business_id.isdigit(): raise ValueError('Для Яндекс Маркета укажите числовой Business ID')
+        if operation in ('questions', 'question_publish'):
+            suffix = '/update' if operation == 'question_publish' else ''
+            return f'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions{suffix}'
         suffix = '/comments/update' if operation == 'publish' else ''
         return f'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback{suffix}'
 
     async def test(self, db, store_id):
         store, token = store_credentials(db, store_id)
-        await guard.request('yandex', 'reviews', token='Bearer ' + token, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
+        await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
         return True
 
     async def sync_reviews(self, db, store_id, progress=None, cancelled=None):
@@ -365,15 +421,16 @@ class YandexProvider:
         for _ in range(1000):
             if cancelled and cancelled(): raise asyncio.CancelledError()
             params = {'limit': 50}
-            if page: params['page_token'] = page
-            result = await guard.request('yandex', 'reviews', token='Bearer ' + token, url=self.target(store, 'reviews'), params=params, body={'reactionStatus':'ALL'})
+            if page: params['pageToken'] = page
+            result = await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params=params, body={'reactionStatus':'ALL'})
             payload = result.get('result', {})
             items = payload.get('feedbacks') or []
             for item in items:
                 description = item.get('description') or {}
                 identifiers = item.get('identifiers') or {}
                 content = '\n'.join(str(description.get(k) or '') for k in ('advantages','disadvantages','comment')).strip()
-                upsert_market_review(db, store, item.get('feedbackId'), identifiers.get('offerId') or 'unknown', identifiers.get('offerId'), '', (item.get('statistics') or {}).get('rating'), content, item.get('createdAt'), not item.get('needReaction', True))
+                statistics = item.get('statistics') or {}
+                upsert_market_review(db, store, item.get('feedbackId'), identifiers.get('offerId') or 'unknown', identifiers.get('offerId'), '', statistics.get('rating'), content, item.get('createdAt'), bool(statistics.get('commentsCount')))
                 total += 1
             db.commit()
             if progress: progress(min(95, 5 + total // 50))
@@ -383,7 +440,42 @@ class YandexProvider:
 
     async def publish(self, db, review, text):
         store, token = store_credentials(db, review.wb_account_id)
-        await guard.request('yandex', 'publish', token='Bearer ' + token, url=self.target(store, 'publish'), body={'feedbackId': review.wb_review_id, 'comment': {'text': text[:4096]}})
+        if review.marketplace == 'yandex_question':
+            question_id = review.wb_review_id.removeprefix('question:')
+            if not question_id.isdigit(): raise ValueError('Некорректный идентификатор вопроса Яндекс Маркета')
+            current = await guard.request('yandex', 'questions', headers={'Api-Key': token}, url=self.target(store, 'questions'), params={'limit': 1}, body={'questionIds': [int(question_id)], 'needAnswer': True})
+            questions = (current.get('result') or {}).get('questions') or []
+            if not questions or str((questions[0].get('questionIdentifiers') or {}).get('id')) != question_id:
+                raise ValueError('Яндекс Маркет не подтвердил существование вопроса')
+            await guard.request('yandex', 'question_publish', headers={'Api-Key': token}, url=self.target(store, 'question_publish'), body={'operationType': 'CREATE', 'parentEntityId': {'id': int(question_id), 'type': 'QUESTION'}, 'text': text})
+            return
+        if not review.wb_review_id.isdigit(): raise ValueError('Некорректный идентификатор отзыва Яндекс Маркета')
+        await guard.request('yandex', 'publish', headers={'Api-Key': token}, url=self.target(store, 'publish'), body={'feedbackId': int(review.wb_review_id), 'comment': {'text': text[:4096]}})
+
+    async def sync_questions(self, db, store_id, progress=None, cancelled=None):
+        store, token = store_credentials(db, store_id)
+        total = 0
+        # The API exposes needAnswer as a filter, not a property of each question.
+        # Read both views so answered status is never guessed from a missing field.
+        for need_answer in (False, True):
+            page, seen = '', set()
+            for _ in range(1000):
+                if cancelled and cancelled(): raise asyncio.CancelledError()
+                params = {'limit': 50}
+                if page: params['pageToken'] = page
+                result = await guard.request('yandex', 'questions', headers={'Api-Key': token}, url=self.target(store, 'questions'), params=params, body={'needAnswer': need_answer, 'sort': 'CREATED_AT_DESC'})
+                payload = result.get('result') or {}
+                items = payload.get('questions') or []
+                for item in items:
+                    ids = item.get('questionIdentifiers') or {}
+                    if upsert_market_question(db, store, ids.get('id'), ids.get('offerId'), ids.get('offerId'), item.get('text'), item.get('createdAt'), not need_answer):
+                        total += 1 if not need_answer else 0
+                db.commit()
+                if progress: progress(min(95, 5 + total // 50))
+                page = str((payload.get('paging') or {}).get('nextPageToken') or '')
+                if not page or page in seen: break
+                seen.add(page)
+        return total
 
 
 ozon, yandex = OzonProvider(), YandexProvider()
