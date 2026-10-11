@@ -3,7 +3,8 @@
 type Counts = {reviews:number;reviews_unanswered:number;reviews_negative:number;reviews_answered:number;reviews_drafts:number;questions:number;questions_unanswered:number;questions_answered:number;questions_drafts:number};
 type SyncState = {status:string;started_at:string;progress:number;processed?:number;message?:string}|null;
 type Store = Counts & {id:string;name:string;provider:string;connected:boolean;sync?:Record<string,SyncState>};
-type Overview = {days:number;totals:Counts;stores:Store[]};
+type TrendDay = {date:string;reviews:number;questions:number;negative:number};
+type Overview = {days:number;totals:Counts;stores:Store[];trend?:TrendDay[]};
 
 const names:Record<string,string> = {wb:'Wildberries',ozon:'Ozon',yandex:'Яндекс Маркет'};
 const empty:Counts = {reviews:0,reviews_unanswered:0,reviews_negative:0,reviews_answered:0,reviews_drafts:0,questions:0,questions_unanswered:0,questions_answered:0,questions_drafts:0};
@@ -11,9 +12,12 @@ const empty:Counts = {reviews:0,reviews_unanswered:0,reviews_negative:0,reviews_
 export default function MarketplaceOverview({overview,busy,onPeriod,onSelect}:{overview:Overview|null;busy:boolean;onPeriod:(days:number)=>void;onSelect:(id:string)=>void}) {
   const totals = overview?.totals||empty;
   const pending = totals.reviews_unanswered + totals.questions_unanswered;
+  const trend=overview?.trend||[];
+  const peak=Math.max(1,...trend.map(day=>day.reviews+day.questions));
   return <section className="market-overview">
     <div className="section-title"><div><p className="eyebrow">ВСЕ МАРКЕТПЛЕЙСЫ</p><h1>Общая статистика</h1><p className="muted">Данные, полученные при синхронизации магазинов. Отключённые магазины сохраняют свою историю.</p></div><div className="button-row"><button className={overview?.days===0?'active':''} disabled={busy} onClick={()=>onPeriod(0)}>За всё время</button><button className={overview?.days===30?'active':''} disabled={busy} onClick={()=>onPeriod(30)}>30 дней</button></div></div>
     <div className="metrics market-totals"><div className="metric"><span>Отзывы</span><strong>{totals.reviews}</strong><small>{totals.reviews_unanswered} без ответа</small></div><div className="metric"><span>Вопросы</span><strong>{totals.questions}</strong><small>{totals.questions_unanswered} без ответа</small></div><div className="metric"><span>Требуют ответа</span><strong>{pending}</strong><small>Отзывы и вопросы</small></div><div className="metric"><span>Черновики</span><strong>{totals.reviews_drafts+totals.questions_drafts}</strong><small>Для проверки командой</small></div></div>
+    {!!trend.length&&<div className="card marketplace-trend"><h3>Обращения покупателей за 14 дней</h3><p className="muted">Отзывы — фиолетовые, вопросы — голубые. Негативных отзывов за период: {trend.reduce((sum,day)=>sum+day.negative,0)}.</p><div className="marketplace-trend-bars">{trend.map(day=><div key={day.date} title={`${day.date}: ${day.reviews} отзывов, ${day.questions} вопросов, ${day.negative} негативных`}><div className="marketplace-trend-stack" style={{height:`${Math.max(4,(day.reviews+day.questions)/peak*100)}%`}}><i style={{flex:day.reviews||0,background:'#7457de'}}/><i style={{flex:day.questions||0,background:'#79b7e8'}}/></div><small>{day.date.slice(8)}</small></div>)}</div></div>}
     <div className="market-overview-grid">{overview?.stores.map(store=>{
       const responseRate=store.reviews?Math.round(store.reviews_answered/store.reviews*100):0;
       return <article className={'card market-overview-card '+store.provider} key={store.id}>

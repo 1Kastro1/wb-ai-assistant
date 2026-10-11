@@ -1385,7 +1385,24 @@ def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
         rows.append(item)
         for key in keys:
             totals[key] += item[key]
-    return {'days': days, 'totals': totals, 'stores': rows}
+    trend = []
+    if stores:
+        since = (datetime.now(timezone.utc) - timedelta(days=13)).date()
+        trend_rows = db.execute(select(
+            func.substr(Review.created_at, 1, 10),
+            func.sum(case((~is_question, 1), else_=0)),
+            func.sum(case((is_question, 1), else_=0)),
+            func.sum(case(((~is_question) & (Review.rating <= 3), 1), else_=0)),
+        ).where(Review.wb_account_id.in_([store.id for store in stores]), Review.created_at >= since.isoformat())
+          .group_by(func.substr(Review.created_at, 1, 10))).all()
+        by_day = {day: (int(reviews or 0), int(questions or 0), int(negative or 0))
+                  for day, reviews, questions, negative in trend_rows}
+        trend = [{'date': (since + timedelta(days=offset)).isoformat(),
+                  'reviews': by_day.get((since + timedelta(days=offset)).isoformat(), (0, 0, 0))[0],
+                  'questions': by_day.get((since + timedelta(days=offset)).isoformat(), (0, 0, 0))[1],
+                  'negative': by_day.get((since + timedelta(days=offset)).isoformat(), (0, 0, 0))[2]}
+                 for offset in range(14)]
+    return {'days': days, 'totals': totals, 'stores': rows, 'trend': trend}
 
 
 @app.get('/work-queue')

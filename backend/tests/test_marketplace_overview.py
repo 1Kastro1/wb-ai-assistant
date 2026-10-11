@@ -29,6 +29,9 @@ def test_marketplace_overview_counts_reviews_and_questions_separately(client):
     assert data['totals']['questions'] == 1
     assert data['totals']['reviews_negative'] == 2
     assert data['totals']['reviews_drafts'] == 1
+    assert len(data['trend']) == 14
+    assert data['trend'][-1]['reviews'] == 2
+    assert data['trend'][-1]['questions'] == 1
     by_provider = {store['provider']: store for store in data['stores']}
     assert by_provider['ozon']['reviews_answered'] == 1
     assert by_provider['ozon']['questions_unanswered'] == 1
@@ -50,3 +53,4 @@ def test_marketplace_overview_counts_reviews_and_questions_separately(client):
     assert [store['id'] for store in restricted['stores']] == [ozon['id']]
     assert restricted['totals']['reviews'] == 1
     assert restricted['totals']['questions'] == 1
+    assert restricted['trend'][-1]['reviews'] == 1
