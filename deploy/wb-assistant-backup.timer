@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Marketplace Assistant backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+Unit=wb-assistant-backup.service
+
+[Install]
+WantedBy=timers.target

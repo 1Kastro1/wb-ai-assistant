@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up Marketplace Assistant data
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wb-assistant-backup
