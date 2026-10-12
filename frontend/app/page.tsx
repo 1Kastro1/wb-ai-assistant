@@ -20,6 +20,16 @@ async function syncJob(kind:string, onUpdate?: (job:Row)=>void) {
   }
   throw new Error('Синхронизация ещё выполняется. Проверьте состояние позже.');
 }
+async function singleDraftJob(reviewId:string, instruction:string) {
+  let job = await api('/jobs/single-draft','POST',{review_id:reviewId,instruction});
+  for(let attempt=0;attempt<1800;attempt++) {
+    if(job.status==='completed') return job.result.draft;
+    if(['failed','interrupted','cancelled'].includes(job.status)) throw new Error(job.result?.message||'Ответ не подготовлен');
+    await new Promise(resolve=>setTimeout(resolve,2000));
+    job=await api('/jobs/'+job.id);
+  }
+  throw new Error('Ответ ещё готовится. Проверьте черновик позже.');
+}
 const nav = [['◷', 'Главная'], ['◈', 'Ассистент'], ['☷', 'Очередь ответов'], ['▤', 'Отзывы'], ['?', 'Вопросы'], ['◇', 'Товары'], ['⇄', 'Задачи'], ['⌘', 'Память'], ['⚙', 'Настройки']];
 const statusLabel: Row = { unanswered: 'Без ответа', draft_ready: 'Черновик готов', manual_review: 'Ручная проверка', pending_confirmation: 'Ждёт подтверждения', published: 'Опубликован', pending: 'Ждёт подтверждения', queued: 'В очереди', running: 'Выполняется', failed: 'Ошибка', interrupted: 'Прервано', completed: 'Завершено', cancelled: 'Отменено', needs_review: 'Нужна сверка', executing: 'Выполняется' };
 const activityLabel: Row = {'/settings/wb-token':'обновил подключение Wildberries','/settings/wb-test':'проверил подключение Wildberries','/settings/assistant':'изменил состояние ассистента','/auto-replies/start':'запустил автоответы','/auto-replies/pause':'поставил автоответы на паузу','/jobs/drafts':'запустил подготовку черновиков','/actions/publish':'подготовил публикацию ответов','/settings/schedule':'изменил расписание','/settings/search':'изменил поиск инструкций','/settings/performance':'изменил режим AI','/memory/propose':'предложил правило памяти','/portable/sync-now':'создал защищённую копию','/settings/portable-sync':'изменил резервное копирование'};
@@ -221,7 +231,7 @@ export default function App() {
     setBusy(true); setDraftingId(review.id); setError(''); setNotice('');
     setDraftErrors(current => ({...current, [review.id]: ''}));
     try {
-      const draft = await api('/reviews/' + encodeURIComponent(review.id) + '/draft', 'POST', {instruction});
+      const draft = await singleDraftJob(review.id, instruction);
       setReviews(current => current.map(item => item.id === review.id ? {...item, draft, status: item.manual ? 'manual_review' : 'draft_ready'} : item));
       setStats(current => ({...current, drafts: Number(current.drafts || 0) + (review.draft ? 0 : 1)}));
       const variants = draft.quality?.candidates_evaluated || 1;
@@ -235,7 +245,7 @@ export default function App() {
   }
   async function generateQuestionDraft(question: Row, instruction = '') {
     setBusy(true);setDraftingId(question.id);setError('');setNotice('');setDraftErrors(current=>({...current,[question.id]:''}));
-    try{const draft=await api('/questions/'+encodeURIComponent(question.id)+'/draft','POST',{instruction});setQuestions(current=>current.map(item=>item.id===question.id?{...item,draft,status:'draft_ready'}:item));setNotice('Ответ на вопрос подготовлен и проверен.');}
+    try{const draft=await singleDraftJob(question.id,instruction);setQuestions(current=>current.map(item=>item.id===question.id?{...item,draft,status:'draft_ready'}:item));setNotice('Ответ на вопрос подготовлен и проверен.');}
     catch(e){const message=e instanceof Error?e.message:'Не удалось подготовить ответ';setError(message);setDraftErrors(current=>({...current,[question.id]:message}));}
     finally{setDraftingId(null);setBusy(false)}
   }

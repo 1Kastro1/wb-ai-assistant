@@ -73,6 +73,26 @@ def test_questions_are_separate_and_have_their_own_draft_flow(client, seeded, mo
     assert client.post('/actions/' + action['id'] + '/confirm', json={}).status_code == 200
 
 
+def test_single_draft_job_creates_and_regenerates_question_answer(client, seeded, monkeypatch):
+    add_question()
+
+    async def variants(*args, **kwargs):
+        return ['Здравствуйте! Спасибо за вопрос. Следуйте инструкции в карточке товара.']
+
+    monkeypatch.setattr(ollama, 'reply_variants', variants)
+    for instruction in ('', 'Ответьте чуть короче'):
+        response = client.post('/jobs/single-draft', json={
+            'review_id': 'owner:question:q-1', 'instruction': instruction,
+        })
+        assert response.status_code == 200, response.text
+        job = client.get('/jobs/' + response.json()['id']).json()
+        assert job['kind'] == 'single_question_draft'
+        assert job['status'] == 'completed', job['result']
+        assert job['result']['draft']['review_id'] == 'owner:question:q-1'
+    with Session() as db:
+        assert db.query(Draft).filter_by(review_id='owner:question:q-1').count() == 1
+
+
 def test_assistant_toggle_stops_generation_chat_and_queued_drafts(client, seeded):
     with Session() as db:
         db.add(Job(id='queued-drafts', kind='drafts', status='queued'))
