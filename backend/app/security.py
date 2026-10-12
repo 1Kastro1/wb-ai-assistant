@@ -134,7 +134,7 @@ class EgressGuard:
             # Ignore environment proxies; never follow redirects with a secret.
             timeout = 120 if provider == 'ollama' else httpx.Timeout(60, connect=10, write=30, pool=10)
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, transport=self.transport) as client:
-                attempts = 1 if operation in ('publish', 'question_publish') else 3
+                attempts = 1 if provider == 'ollama' or operation in ('publish', 'question_publish') else 3
                 for attempt in range(attempts):
                     safe_headers = dict(headers or {})
                     if token:
