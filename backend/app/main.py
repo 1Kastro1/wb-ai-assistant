@@ -23,7 +23,7 @@ from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for, web_research
-from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources
+from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
@@ -46,7 +46,11 @@ async def lifespan(app):
         if not setting(db, 'active_store'):
             set_setting(db, 'active_store', 'owner')
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
-            job.status, job.result = 'interrupted', {'message':'Приложение перезапущено; повторите синхронизацию'}
+            if job.kind in ('products', 'reviews', 'questions') and not job.cancel_requested:
+                job.status = 'queued'
+                job.result = {**(job.result or {}), 'message': 'Продолжение синхронизации после перезапуска'}
+            else:
+                job.status, job.result = 'interrupted', {**(job.result or {}), 'message':'Приложение перезапущено; повторите задание'}
         for job in db.scalars(select(Job).where(Job.status == 'completed', Job.progress < 100)):
             job.progress = 100
         for action in db.scalars(select(Action).where(Action.status == 'executing')):
@@ -217,6 +221,7 @@ class SetupPassword(Payload):
 login_attempts = {}
 login_lock = asyncio.Lock()
 setup_lock = asyncio.Lock()
+register_lock = asyncio.Lock()
 SESSION_SECONDS = 30 * 24 * 3600
 
 
@@ -278,6 +283,73 @@ async def login(body: Password, response: Response, request: Request, db: DB):
 @app.get('/auth/status')
 def auth_status(db: DB):
     return {'initialized': bool(db.scalar(select(func.count()).select_from(User)) or setting(db, 'password_hash'))}
+
+
+class InviteInput(Payload):
+    position: Literal['Менеджер WB', 'Менеджер Ozon', 'Менеджер Яндекс Маркет'] = 'Менеджер WB'
+    store_ids: list[str] = Field(default_factory=lambda: ['*'], max_length=100)
+    days: int = Field(default=7, ge=1, le=30)
+
+
+class RegisterInput(Payload):
+    invite: str = Field(min_length=32, max_length=128)
+    username: str = Field(min_length=3, max_length=64)
+    display_name: str = Field(min_length=2, max_length=100)
+    password: str = Field(min_length=12, max_length=1024)
+    confirmation: str = Field(min_length=12, max_length=1024)
+
+
+@app.post('/auth/invites')
+def create_invite(body: InviteInput, auth: OWNER, db: DB):
+    if '*' in body.store_ids:
+        store_ids = ['*']
+    else:
+        available = set(db.scalars(select(StoreProfile.id)))
+        store_ids = list(dict.fromkeys(body.store_ids))
+        if not store_ids or not set(store_ids) <= available:
+            raise ValueError('Выберите доступные магазины')
+    token = secrets.token_urlsafe(32)
+    invitation = TeamInvite(token_hash=digest(token), position=body.position, store_ids=store_ids,
+                            created_by=auth['user_id'], expires=int(time.time()) + body.days * 86400)
+    db.add(invitation)
+    db.commit()
+    return {'invite': token, 'position': invitation.position, 'expires': invitation.expires,
+            'store_ids': store_ids}
+
+
+@app.get('/auth/invites/{token}')
+def invite_details(token: str, db: DB):
+    invitation = db.get(TeamInvite, digest(token)) if 32 <= len(token) <= 128 else None
+    if not invitation or invitation.used_by or invitation.expires < time.time():
+        raise HTTPException(404, 'Приглашение недействительно или уже использовано')
+    return {'position': invitation.position, 'expires': invitation.expires}
+
+
+@app.post('/auth/register')
+async def register_colleague(body: RegisterInput, response: Response, request: Request, db: DB):
+    if body.password != body.confirmation:
+        raise ValueError('Пароли не совпадают')
+    username = normalized_username(body.username)
+    password_hash = PasswordHasher().hash(body.password)
+    async with register_lock:
+        db.rollback()
+        db.execute(text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
+        invitation = db.scalar(select(TeamInvite).where(TeamInvite.token_hash == digest(body.invite)).with_for_update())
+        if not invitation or invitation.used_by or invitation.expires < time.time():
+            raise HTTPException(404, 'Приглашение недействительно или уже использовано')
+        if db.scalar(select(User.id).where(User.username == username)):
+            raise HTTPException(409, 'Пользователь с таким логином уже существует')
+        user = User(id=str(uuid4()), username=username, display_name=body.display_name.strip(),
+                    password_hash=password_hash, role='member', position=invitation.position,
+                    permissions=permission_preset(invitation.position), store_ids=invitation.store_ids,
+                    enabled=True, must_change_password=False)
+        token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
+        invitation.used_by = user.id
+        db.add(user)
+        db.add(LoginSession(id=digest(token), expires=int(time.time() + SESSION_SECONDS), csrf=csrf, user_id=user.id))
+        db.commit()
+    set_session_cookie(response, request, token)
+    return session_response(user, csrf)
 
 
 @app.post('/auth/setup')
@@ -812,6 +884,7 @@ async def run_sync_job(job_id):
             job.status, job.progress, job.attempts = 'running', 1, job.attempts + 1
             kind = job.kind
             account_id = (job.result or {}).get('account_id') or setting(db, 'active_store', 'owner')
+            start_checkpoint = (job.result or {}).get('checkpoint') or {}
             db.commit()
             def update_progress(value):
                 db.refresh(job)
@@ -820,6 +893,11 @@ async def run_sync_job(job_id):
             def cancelled():
                 db.refresh(job)
                 return job.cancel_requested
+            def save_checkpoint(value):
+                db.refresh(job)
+                job.result = {**(job.result or {}), 'checkpoint': value, 'account_id': account_id,
+                              'message': f'Сохранён прогресс: {value.get("processed", 0)} записей'}
+                db.commit()
             try:
                 if kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft'):
                     since = (job.result or {}).get('since', '')
@@ -850,6 +928,13 @@ async def run_sync_job(job_id):
                             raise asyncio.CancelledError
                         try:
                             single_draft = await generate_draft(db, review_id, (job.result or {}).get('instruction', '') if is_single else '')
+                            if is_single and (job.result or {}).get('requested_by'):
+                                stored_draft = db.get(Draft, single_draft['id'])
+                                if not stored_draft.created_by:
+                                    stored_draft.created_by = job.result['requested_by']
+                                stored_draft.updated_by = job.result['requested_by']
+                                db.commit()
+                                single_draft = draft_public(db, stored_draft)
                             processed += 1
                         except Exception as error:
                             db.rollback()
@@ -903,13 +988,17 @@ async def run_sync_job(job_id):
                     else:
                         operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
                     try:
-                        if operation: count = await operation(db, account_id, update_progress, cancelled)
+                        if operation: count = await operation(db, account_id, update_progress, cancelled, resume=start_checkpoint, checkpoint=save_checkpoint)
                     except TypeError as exc:
-                        # Keep simple test/custom providers that implement the original (db) contract usable.
-                        if 'positional' not in str(exc):
+                        if 'unexpected keyword argument' not in str(exc):
                             raise
-                        count = await operation(db)
-                    job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id}
+                        try:
+                            count = await operation(db, account_id, update_progress, cancelled)
+                        except TypeError as legacy_exc:
+                            if 'positional' not in str(legacy_exc):
+                                raise
+                            count = await operation(db)
+                    job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id, 'finished_at': now()}
                     if kind == 'reviews':
                         negative = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == False, Review.rating <= 2)) or 0
                         if negative:
@@ -936,7 +1025,7 @@ async def run_sync_job(job_id):
                     default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'
                     detail = (str(error) or type(error).__name__)[:500]
                     message = f'{default_message} {detail}'
-                    job.status, job.result = 'failed', {'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail}
+                    job.status, job.result = 'failed', {**(job.result or {}), 'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail, 'finished_at': now()}
                     add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
             db.commit()
 
@@ -1156,6 +1245,29 @@ def get_job(jid: str, auth: AUTH, db: DB):
     return public(job)
 
 
+@app.get('/sync/status')
+def sync_status(auth: AUTH, db: DB):
+    jobs = list(db.scalars(select(Job).where(Job.kind.in_(['products', 'reviews', 'questions'])).order_by(Job.created_at.desc()).limit(1000)))
+    result = []
+    for store in db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)):
+        kinds = {}
+        for kind in ('products', 'reviews', 'questions'):
+            matching = [job for job in jobs if job.kind == kind and (job.result or {}).get('account_id') == store.id]
+            latest = matching[0] if matching else None
+            success = next((job for job in matching if job.status == 'completed'), None)
+            kinds[kind] = {
+                'state': latest.status if latest else 'never',
+                'progress': latest.progress if latest else 0,
+                'message': (latest.result or {}).get('message', '') if latest else '',
+                'processed': (latest.result or {}).get('processed', (latest.result or {}).get('checkpoint', {}).get('processed', 0)) if latest else 0,
+                'last_success_at': (success.result or {}).get('finished_at', success.created_at) if success else '',
+                'last_success_count': (success.result or {}).get('processed', 0) if success else 0,
+                'job_id': latest.id if latest else '',
+            }
+        result.append({'store_id': store.id, 'store_name': store.name, 'provider': store.provider, 'kinds': kinds})
+    return {'stores': result}
+
+
 @app.post('/sync/{kind}')
 async def sync(kind: str, auth: MARKET_OPERATOR, db: DB):
     store = db.get(StoreProfile, active_store(db, auth))
@@ -1214,7 +1326,7 @@ def questions_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = Fals
         item = public(row)
         item['product'] = public(db.get(Product, row.product_id))
         draft = db.scalar(select(Draft).where(Draft.review_id == row.id))
-        item['draft'] = public(draft) if draft else None
+        item['draft'] = draft_public(db, draft)
         item['question_type'] = question_intent(row.text)
         items.append(item)
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total}
@@ -1483,7 +1595,7 @@ async def schedule_single_draft(body: SingleDraftJobInput, background: Backgroun
         if body.review_id in (existing.result or {}).get('selected_ids', []):
             return public(existing)
     job = Job(id=str(uuid4()), kind=kind, priority=40, max_attempts=1,
-              result={'account_id': store.id, 'selected_ids': [body.review_id], 'instruction': body.instruction,
+              result={'account_id': store.id, 'selected_ids': [body.review_id], 'instruction': body.instruction, 'requested_by': auth['user_id'],
                       'message': 'Подготовка ответа поставлена в очередь'})
     db.add(job)
     db.commit()
@@ -1575,9 +1687,8 @@ def draft_edit(did: str, body: DraftEdit, auth: MARKET_OPERATOR, db: DB):
         raise HTTPException(404, 'Черновик не найден')
     store = db.get(StoreProfile, review.wb_account_id)
     can_operate_store(auth, store)
-    result = edit_draft(db, did, body.text, body.revision)
-    item = db.get(Draft, did); item.updated_by = auth['user_id']; db.commit()
-    return public(item)
+    result = edit_draft(db, did, body.text, body.revision, auth['user_id'])
+    return draft_public(db, db.get(Draft, did))
 
 
 class DraftFeedback(Payload):
@@ -1686,7 +1797,7 @@ async def confirmation(aid: str, body: Confirm, auth: AUTH, db: DB):
     elif action and action.kind == 'memory':
         owner(auth)
     async with action_lock:
-        return await confirm_action(db, aid, body.manual_ack)
+        return await confirm_action(db, aid, body.manual_ack, auth['user_id'])
 
 
 @app.post('/actions/{aid}/cancel')

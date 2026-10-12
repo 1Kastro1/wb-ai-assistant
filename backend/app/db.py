@@ -69,6 +69,17 @@ class User(Base):
     created_at: Mapped[str] = mapped_column(String, default=now)
 
 
+class TeamInvite(Base):
+    __tablename__ = 'team_invites'
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    position: Mapped[str] = mapped_column(String)
+    store_ids: Mapped[list] = mapped_column(JSON, default=list)
+    created_by: Mapped[str] = mapped_column(String)
+    created_at: Mapped[str] = mapped_column(String, default=now)
+    expires: Mapped[int] = mapped_column(Integer)
+    used_by: Mapped[str] = mapped_column(String, default='')
+
+
 class LoginSession(Base):
     __tablename__ = 'sessions'
     id: Mapped[str] = mapped_column(String, primary_key=True)

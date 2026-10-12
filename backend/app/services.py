@@ -18,7 +18,7 @@ WORDS = re.compile(r'[а-яё0-9]{4,}', re.I)
 MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
-QUALITY_EVALUATOR_VERSION = '2.0'
+QUALITY_EVALUATOR_VERSION = '3.0'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -38,6 +38,20 @@ def trusted_product_facts(db, product):
         if parsed.scheme == 'https' and official and (host == official or host.endswith('.' + official)):
             result.append(fact)
     return result
+
+
+def draft_public(db, draft):
+    if not draft:
+        return None
+    item = public(draft)
+    for key in ('created_by', 'updated_by'):
+        actor = db.get(User, item[key]) if item[key] else None
+        item[key + '_name'] = actor.display_name if actor else ('Автоматизация' if not item[key] else 'Бывший сотрудник')
+    for edit in item.get('edits') or []:
+        actor_id = edit.get('by')
+        actor = db.get(User, actor_id) if actor_id and actor_id != 'automation' else None
+        edit['by_name'] = actor.display_name if actor else ('Автоматизация' if actor_id in ('', None, 'automation') else 'Бывший сотрудник')
+    return item
 INTENT_LABELS = {
     'WRONG_ITEM': 'пришёл другой товар', 'MISSING_PARTS': 'неполная комплектация',
     'DAMAGED_ITEM': 'повреждение товара', 'FITMENT_PROBLEM': 'товар не подошёл',
@@ -170,7 +184,7 @@ def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id=
     if unanswered:
         query = query.where(Review.is_answered == False)
     if attention:
-        query = query.where((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL'))
+        query = query.where((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review'))
     if days:
         start = datetime.now(timezone(timedelta(hours=3))).replace(hour=0, minute=0, second=0, microsecond=0) if days == 1 else datetime.now(timezone.utc) - timedelta(days=days)
         query = query.where(Review.created_at >= start.isoformat())
@@ -184,7 +198,7 @@ def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id=
         item = public(row)
         item['product'] = public(db.get(Product, row.product_id))
         draft = db.scalar(select(Draft).where(Draft.review_id == row.id))
-        item['draft'] = public(draft) if draft else None
+        item['draft'] = draft_public(db, draft)
         result.append(item)
     return result
 
@@ -200,7 +214,7 @@ def reviews_page(db, **filters):
     if filters.get('unanswered'):
         count_query = count_query.where(Review.is_answered == False)
     if filters.get('attention'):
-        count_query = count_query.where((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL'))
+        count_query = count_query.where((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review'))
     if filters.get('product_id'):
         count_query = count_query.where(Review.product_id == filters['product_id'])
     if filters.get('account_id'):
@@ -211,7 +225,7 @@ def reviews_page(db, **filters):
     return {'items': rows, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(rows) < total}
 
 
-def assess_reply(review, product, reply):
+def assess_reply(review, product, reply, verified_facts=None):
     """Deterministic quality gate; it explains weaknesses without trusting the model to grade itself."""
     lowered = reply.lower().replace('ё', 'е')
     review_words = set(WORDS.findall(review.text.lower()))
@@ -263,16 +277,16 @@ def assess_reply(review, product, reply):
             breakdown['resolution']['score'] = 18
         else:
             issues.append('дать безопасную инструкцию по применению')
-        verified_facts = ' '.join(
-            str(fact.get('text', '')) for fact in (getattr(product, 'facts', None) or [])
+        verified_facts_text = ' '.join(
+            str(fact.get('text', '')) for fact in (verified_facts if verified_facts is not None else (getattr(product, 'facts', None) or []))
             if fact.get('verification_status') == 'VERIFIED'
         ).lower().replace('ё', 'е')
         missing_steps = []
-        if 'распыл' in verified_facts and 'распыл' not in lowered:
+        if 'распыл' in verified_facts_text and 'распыл' not in lowered:
             missing_steps.append('распыление')
-        if ('30 секунд' in verified_facts or '30 сек' in verified_facts) and not ('30 секунд' in lowered or '30 сек' in lowered):
+        if ('30 секунд' in verified_facts_text or '30 сек' in verified_facts_text) and not ('30 секунд' in lowered or '30 сек' in lowered):
             missing_steps.append('выдержка 30 секунд')
-        if ('ткан' in verified_facts or 'салфет' in verified_facts) and not ('ткан' in lowered or 'салфет' in lowered):
+        if ('ткан' in verified_facts_text or 'салфет' in verified_facts_text) and not ('ткан' in lowered or 'салфет' in lowered):
             missing_steps.append('удаление чистой тканью или салфеткой')
         if combined_cleaner_complaint and missing_steps:
             issues.append('указать подтверждённые шаги применения: ' + ', '.join(missing_steps))
@@ -288,7 +302,7 @@ def assess_reply(review, product, reply):
     if reply.strip().lower() in ('спасибо за отзыв!', 'спасибо за отзыв.', 'спасибо!'):
         score = min(score, 35)
         issues.append('слишком общий ответ')
-    if review.rating >= 4 and intent == 'POSITIVE_EXPERIENCE':
+    if review.rating >= 4 and intent in ('POSITIVE_EXPERIENCE', 'GENERAL') and (intent == 'POSITIVE_EXPERIENCE' or any(x in review.text.lower().replace('ё','е') for x in ('соответствует описанию', 'все подошло', 'все понравилось', 'работает отлично', 'хорошее качество'))):
         if any(x in lowered for x in ('жаль', 'сожале', 'извин', 'не оправдал', 'не понравил', 'разочаровал', 'показался слаб', 'недостаточно выражен')):
             score = min(score, 70)
             issues.append('не трактовать положительный отзыв как жалобу')
@@ -296,6 +310,17 @@ def assess_reply(review, product, reply):
         elif any(x in lowered for x in ('ближе к потоку воздуха', 'аромат будет ощущаться лучше')):
             score = min(score, 80)
             issues.append('не предлагать решение проблемы, которой покупатель не описал')
+    if review.rating >= 4 and intent in ('WRONG_ITEM','MISSING_PARTS','DAMAGED_ITEM','FITMENT_PROBLEM','NO_RESULT','ODOR_COMPLAINT','WEAK_SCENT','DESCRIPTION_MISMATCH','PACKAGING_ISSUE','DELIVERY_ISSUE'):
+        score = min(score, 80)
+        issues.append('оценка и текст отзыва противоречат друг другу — проверьте тон вручную')
+    if review.rating <= 2 and intent == 'POSITIVE_EXPERIENCE':
+        score = min(score, 80)
+        issues.append('оценка и текст отзыва противоречат друг другу — проверьте тон вручную')
+    if any(x in lowered for x in ('распылите', 'распылить', 'выдержите', 'оставьте на 30', 'ближе к потоку воздуха')):
+        facts_text = ' '.join(str(f.get('text', '')) for f in (verified_facts if verified_facts is not None else (getattr(product, 'facts', None) or []))).lower().replace('ё','е')
+        if not facts_text or not any(x in facts_text for x in ('распыл', 'выдерж', '30 секунд', 'потоку воздуха')):
+            score = min(score, 75)
+            issues.append('способ применения не подтверждён сведениями о товаре')
     return {
         'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
         'issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
@@ -304,9 +329,9 @@ def assess_reply(review, product, reply):
     }
 
 
-def assess_candidate(review, product, reply, comparisons=()):
+def assess_candidate(review, product, reply, comparisons=(), verified_facts=None):
     """Apply the normal quality gate and penalise near-copies of earlier answers."""
-    quality = assess_reply(review, product, reply)
+    quality = assess_reply(review, product, reply, verified_facts)
     similarities = [difflib.SequenceMatcher(None, reply.lower(), text.lower()).ratio() for text in comparisons if text]
     similarity = max(similarities, default=0.0)
     quality['breakdown']['originality'] = {
@@ -347,7 +372,7 @@ def quality_report(db, days=30, account_id=''):
         if not draft.quality or draft.quality.get('evaluator_version') != QUALITY_EVALUATOR_VERSION:
             review = db.get(Review, draft.review_id)
             product = db.get(Product, review.product_id)
-            draft.quality = assess_reply(review, product, draft.text)
+            draft.quality = assess_reply(review, product, draft.text, trusted_product_facts(db, product))
             changed = True
     if changed:
         db.commit()
@@ -561,6 +586,7 @@ async def generate_draft(db, review_id, instruction=''):
     initial_draft = db.scalar(select(Draft).where(Draft.review_id == review_id))
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
+    verified_facts = trusted_product_facts(db, product)
     memories = [m.text for m in db.scalars(select(Memory).where(Memory.enabled == True)) if m.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
     generation_revision = initial_draft.revision if initial_draft else 0
     rule_candidates = []
@@ -568,8 +594,8 @@ async def generate_draft(db, review_id, instruction=''):
         candidate = rule_reply(review, product, generation_revision + offset)
         if candidate and candidate not in rule_candidates:
             rule_candidates.append(validate_reply(mask_vin(candidate)))
-    reply = max(rule_candidates, key=lambda value: assess_reply(review, product, value)['score']) if rule_candidates else None
-    previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text)) if initial_draft else None
+    reply = max(rule_candidates, key=lambda value: assess_reply(review, product, value, verified_facts)['score']) if rule_candidates else None
+    previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
     structured_intents = ('WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM')
@@ -646,7 +672,7 @@ async def generate_draft(db, review_id, instruction=''):
             try:
                 last_candidate = seed_candidates[attempt] if attempt < len(seed_candidates) else await ollama.chat(attempt_messages)
                 checked_candidate = validate_reply(mask_vin(last_candidate))
-                candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates])
+                candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates], verified_facts)
                 repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
                 if not repeated and candidate_quality['score'] >= best_quality['score']:
                     best_reply, best_quality = checked_candidate, candidate_quality
@@ -669,7 +695,7 @@ async def generate_draft(db, review_id, instruction=''):
                     {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания и не направляй покупателя к продавцу. Верни только ответ.'},
                 ]
         fallback = validate_reply(safe_fallback_reply(review, product, generation_revision, trusted_product_facts(db, product)))
-        fallback_quality = assess_reply(review, product, fallback)
+        fallback_quality = assess_reply(review, product, fallback, verified_facts)
         candidates_evaluated = len(valid_candidates)
         if best_reply is None or fallback_quality['score'] > best_quality['score']:
             reply, model = fallback, 'safety-fallback-1.2'
@@ -693,7 +719,7 @@ async def generate_draft(db, review_id, instruction=''):
         model = 'safety-fallback-1.2'
     if web_search_failed:
         model += ' · без интернет-источников'
-    quality = assess_reply(review, product, reply)
+    quality = assess_reply(review, product, reply, verified_facts)
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
     quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы.'
@@ -713,12 +739,12 @@ async def generate_draft(db, review_id, instruction=''):
     else:
         draft = Draft(id=str(uuid4()), review_id=review_id, text=reply, original=reply, model=model, quality=quality)
         db.add(draft)
-    review.status = 'manual_review' if review.manual else 'draft_ready'
+    review.status = 'manual_review' if review.manual or not quality['passed'] or model.startswith('safety-fallback') else 'draft_ready'
     db.commit()
     return public(draft)
 
 
-def edit_draft(db, draft_id, value, revision):
+def edit_draft(db, draft_id, value, revision, actor_id=''):
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
     draft = db.get(Draft, draft_id, populate_existing=True)
@@ -729,16 +755,18 @@ def edit_draft(db, draft_id, value, revision):
         raise ValueError('Этот ответ уже публикуется или опубликован')
     value = validate_reply(value)
     old = draft.text
-    draft.edits = draft.edits + [{'old': old, 'new': value, 'diff': '\n'.join(difflib.ndiff(old.splitlines(), value.splitlines())), 'at': now()}]
+    draft.edits = draft.edits + [{'old': old, 'new': value, 'diff': '\n'.join(difflib.ndiff(old.splitlines(), value.splitlines())), 'at': now(), 'by': actor_id or 'automation'}]
     draft.text, draft.revision = value, draft.revision + 1
+    if actor_id:
+        draft.updated_by = actor_id
     product = db.get(Product, review.product_id)
     if review.marketplace.endswith('_question'):
         sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in trusted_product_facts(db, product)]
         draft.quality = assess_question_answer(review, product, value, sources)
     else:
-        draft.quality = assess_reply(review, product, value)
+        draft.quality = assess_reply(review, product, value, trusted_product_facts(db, product))
     learn_from_edit(db, draft, old, value)
-    review.status = 'manual_review' if review.manual else 'draft_ready'
+    review.status = 'manual_review' if review.manual or not draft.quality['passed'] else 'draft_ready'
     db.commit()
     return public(draft)
 
@@ -768,7 +796,7 @@ def propose_publish(db, review_ids):
     return public(action)
 
 
-async def confirm_action(db, action_id, manual_ack=False):
+async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
     # Reserve the action and unique per-review publication slots atomically.
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
@@ -781,7 +809,7 @@ async def confirm_action(db, action_id, manual_ack=False):
         raise ValueError('Подтверждение устарело. Создайте новое действие')
     if action.kind == 'memory':
         db.add(Memory(id=str(uuid4()), **action.payload))
-        action.status, action.result = 'completed', {'saved': True}
+        action.status, action.result = 'completed', {'saved': True, 'confirmed_by': actor_id, 'confirmed_at': now()}
         db.commit()
         return public(action)
     if setting(db, 'safe_mode', False):
@@ -827,6 +855,6 @@ async def confirm_action(db, action_id, manual_ack=False):
                 results.append({'review_id': review.id, 'status': 'uncertain', 'message': 'Проверьте ответ в маркетплейсе. Автоповтор запрещён.'})
         db.commit()
     action.status = 'completed' if all(x['status'] in ('SIMULATED', 'published') for x in results) else 'needs_review'
-    action.result = {'items': results, 'test_mode': test}
+    action.result = {'items': results, 'test_mode': test, 'confirmed_by': actor_id, 'confirmed_at': now()}
     db.commit()
     return public(action)

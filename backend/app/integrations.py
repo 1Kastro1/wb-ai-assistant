@@ -159,13 +159,14 @@ def wb_token(db, account_id=None):
     return decrypt_secret(row.encrypted_token)
 
 
-async def wb_question_pages(token, answered, cancelled=None, page_size=5000, window_size=10000):
+async def wb_question_pages(token, answered, cancelled=None, page_size=5000, window_size=10000, start=None, with_checkpoint=False):
     """Read all questions without exceeding WB's take + skip <= 10000 limit."""
-    date_to = None
+    date_to = (start or {}).get('date_to')
+    start_skip = int((start or {}).get('skip', 0))
     seen = set()
     while True:
         last_item = None
-        for skip in range(0, window_size, page_size):
+        for skip in range(start_skip, window_size, page_size):
             if cancelled and cancelled():
                 raise asyncio.CancelledError()
             params = {'isAnswered': str(answered).lower(), 'take': page_size,
@@ -178,8 +179,14 @@ async def wb_question_pages(token, answered, cancelled=None, page_size=5000, win
             items = result.get('data', {}).get('questions', [])
             fresh = [item for item in items if item.get('id') not in seen]
             seen.update(item.get('id') for item in fresh)
+            next_cursor = {'date_to': date_to, 'skip': skip + page_size}
+            if len(items) >= page_size and next_cursor['skip'] >= window_size and items[-1].get('createdDate'):
+                timestamp = datetime.fromisoformat(str(items[-1]['createdDate']).replace('Z', '+00:00'))
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                next_cursor = {'date_to': int(timestamp.timestamp()), 'skip': 0}
             if fresh:
-                yield fresh
+                yield (fresh, next_cursor) if with_checkpoint else fresh
             if len(items) < page_size:
                 return
             last_item = items[-1]
@@ -192,12 +199,13 @@ async def wb_question_pages(token, answered, cancelled=None, page_size=5000, win
         if date_to is not None and next_date_to >= date_to:
             raise ValueError('WB вернул повторный временной курсор списка вопросов')
         date_to = next_date_to
+        start_skip = 0
 
 
 class WildberriesProvider:
-    async def sync_products(self, db, account_id=None, progress=None, cancelled=None):
+    async def sync_products(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None):
         token = wb_token(db, account_id)
-        cursor, total = {'limit': 100}, 0
+        cursor, total = (resume or {}).get('cursor') or {'limit': 100}, int((resume or {}).get('processed', 0))
         seen = set()
         for _ in range(1000):
             if cancelled and cancelled():
@@ -235,14 +243,18 @@ class WildberriesProvider:
                 raise ValueError('WB вернул повторный курсор; синхронизация остановлена')
             seen.add(key)
             cursor = {'limit': 100, 'updatedAt': key[0], 'nmID': key[1]}
+            if checkpoint: checkpoint({'cursor': cursor, 'processed': total})
             await asyncio.sleep(0.65)
         raise ValueError('Достигнут лимит страниц синхронизации')
 
-    async def sync_reviews(self, db, account_id=None, progress=None, cancelled=None):
+    async def sync_reviews(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None):
         account_id = account_id or setting(db, 'active_store', 'owner')
-        token, total = wb_token(db, account_id), 0
+        token, total = wb_token(db, account_id), int((resume or {}).get('processed', 0))
         for answered in (False, True):
-            for skip in range(0, 200000, 5000):
+            if (resume or {}).get('answered') is True and not answered:
+                continue
+            start_skip = int((resume or {}).get('skip', 0)) if (resume or {}).get('answered') == answered else 0
+            for skip in range(start_skip, 200000, 5000):
                 if cancelled and cancelled():
                     raise asyncio.CancelledError()
                 result = await guard.request('wb', 'reviews', token=token, params={'isAnswered': str(answered).lower(), 'take': 5000, 'skip': skip, 'order': 'dateDesc'})
@@ -275,6 +287,7 @@ class WildberriesProvider:
                     db.add(row)
                     total += 1
                 db.commit()
+                if checkpoint: checkpoint({'answered': answered if len(items) >= 5000 else True, 'skip': skip + 5000 if len(items) >= 5000 else 0, 'processed': total})
                 if progress:
                     progress(min(95, 5 + total // 2500))
                 if len(items) < 5000:
@@ -282,11 +295,14 @@ class WildberriesProvider:
                 await asyncio.sleep(0.4)
         return total
 
-    async def sync_questions(self, db, account_id=None, progress=None, cancelled=None):
+    async def sync_questions(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None):
         account_id = account_id or setting(db, 'active_store', 'owner')
-        token, total = wb_token(db, account_id), 0
+        token, total = wb_token(db, account_id), int((resume or {}).get('processed', 0))
         for answered in (False, True):
-            async for items in wb_question_pages(token, answered, cancelled):
+            if (resume or {}).get('answered') is True and not answered:
+                continue
+            start = (resume or {}).get('cursor') if (resume or {}).get('answered') == answered else None
+            async for items, next_cursor in wb_question_pages(token, answered, cancelled, start=start, with_checkpoint=True):
                 for item in items:
                     details = item.get('productDetails') or {}
                     pid = str(details.get('nmId') or item.get('nmId') or '')
@@ -314,9 +330,11 @@ class WildberriesProvider:
                     db.add(row)
                     total += 1
                 db.commit()
+                if checkpoint: checkpoint({'answered': answered, 'cursor': next_cursor, 'processed': total})
                 if progress:
                     progress(min(95, 5 + total // 2500))
                 await asyncio.sleep(0.4)
+            if checkpoint: checkpoint({'answered': True, 'cursor': {'date_to': None, 'skip': 0}, 'processed': total})
         return total
 
     async def publish(self, db, review, text):
@@ -397,9 +415,9 @@ class OzonProvider:
         await guard.request('ozon', 'reviews', headers=self.headers(store, token), body={'limit': 1, 'sort_dir': 'DESC'})
         return True
 
-    async def sync_reviews(self, db, store_id, progress=None, cancelled=None):
+    async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
         store, token = store_credentials(db, store_id)
-        total, last_id = 0, ''
+        total, last_id = int((resume or {}).get('processed', 0)), str((resume or {}).get('last_id', ''))
         for _ in range(1000):
             if cancelled and cancelled(): raise asyncio.CancelledError()
             body = {'limit': 100, 'sort_dir': 'DESC'}
@@ -415,6 +433,7 @@ class OzonProvider:
             if progress: progress(min(95, 5 + total // 100))
             if len(items) < 100: break
             last_id = str(result.get('last_id') or items[-1].get('id') or '')
+            if checkpoint: checkpoint({'last_id': last_id, 'processed': total})
             if not last_id: break
         return total
 
@@ -435,9 +454,9 @@ class OzonProvider:
             return
         await guard.request('ozon', 'publish', headers=self.headers(store, token), body={'review_id': review.wb_review_id, 'text': text})
 
-    async def sync_questions(self, db, store_id, progress=None, cancelled=None):
+    async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
         store, token = store_credentials(db, store_id)
-        total, last_id, seen = 0, '', set()
+        total, last_id, seen = int((resume or {}).get('processed', 0)), str((resume or {}).get('last_id', '')), set()
         for _ in range(1000):
             if cancelled and cancelled(): raise asyncio.CancelledError()
             body = {'filter': {'status': 'ALL'}, 'limit': 100, 'last_id': last_id, 'sort_dir': 'DESC'}
@@ -454,6 +473,7 @@ class OzonProvider:
             if not next_id or next_id in seen: break
             seen.add(next_id)
             last_id = next_id
+            if checkpoint: checkpoint({'last_id': last_id, 'processed': total})
         return total
 
 
@@ -472,9 +492,9 @@ class YandexProvider:
         await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
         return True
 
-    async def sync_reviews(self, db, store_id, progress=None, cancelled=None):
+    async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
         store, token = store_credentials(db, store_id)
-        total, page = 0, ''
+        total, page = int((resume or {}).get('processed', 0)), str((resume or {}).get('page', ''))
         for _ in range(1000):
             if cancelled and cancelled(): raise asyncio.CancelledError()
             params = {'limit': 50}
@@ -493,6 +513,7 @@ class YandexProvider:
             if progress: progress(min(95, 5 + total // 50))
             page = str((payload.get('paging') or {}).get('nextPageToken') or '')
             if not page: break
+            if checkpoint: checkpoint({'page': page, 'processed': total})
         return total
 
     async def publish(self, db, review, text):
@@ -509,13 +530,15 @@ class YandexProvider:
         if not review.wb_review_id.isdigit(): raise ValueError('Некорректный идентификатор отзыва Яндекс Маркета')
         await guard.request('yandex', 'publish', headers={'Api-Key': token}, url=self.target(store, 'publish'), body={'feedbackId': int(review.wb_review_id), 'comment': {'text': text[:4096]}})
 
-    async def sync_questions(self, db, store_id, progress=None, cancelled=None):
+    async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
         store, token = store_credentials(db, store_id)
-        total = 0
+        total = int((resume or {}).get('processed', 0))
         # The API exposes needAnswer as a filter, not a property of each question.
         # Read both views so answered status is never guessed from a missing field.
         for need_answer in (False, True):
-            page, seen = '', set()
+            if (resume or {}).get('need_answer') is True and not need_answer:
+                continue
+            page, seen = (str((resume or {}).get('page', '')) if (resume or {}).get('need_answer') == need_answer else ''), set()
             for _ in range(1000):
                 if cancelled and cancelled(): raise asyncio.CancelledError()
                 params = {'limit': 50}
@@ -532,6 +555,8 @@ class YandexProvider:
                 page = str((payload.get('paging') or {}).get('nextPageToken') or '')
                 if not page or page in seen: break
                 seen.add(page)
+                if checkpoint: checkpoint({'need_answer': need_answer, 'page': page, 'processed': total})
+            if checkpoint: checkpoint({'need_answer': True, 'page': '', 'processed': total})
         return total
 
 
