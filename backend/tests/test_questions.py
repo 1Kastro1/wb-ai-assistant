@@ -1,5 +1,8 @@
+import asyncio
+from datetime import datetime
+
 from app.db import Draft, Job, Review, Session, setting
-from app.integrations import guard, ollama
+from app.integrations import guard, ollama, wb_question_pages
 
 
 def add_question():
@@ -14,6 +17,32 @@ def add_question():
             marketplace='wb_question',
         ))
         db.commit()
+
+
+def test_wb_question_pagination_rolls_date_window_before_offset_limit(monkeypatch):
+    rows = [
+        {'id': str(second), 'createdDate': f'2026-10-02T10:00:{second:02d}Z'}
+        for second in range(6, 0, -1)
+    ]
+    calls = []
+
+    async def request(provider, operation, **kwargs):
+        assert (provider, operation) == ('wb', 'questions')
+        params = kwargs['params']
+        assert params['take'] + params['skip'] <= 4
+        calls.append(params)
+        visible = [row for row in rows if 'dateTo' not in params or
+                   int(datetime.fromisoformat(row['createdDate'].replace('Z', '+00:00')).timestamp()) <= params['dateTo']]
+        return {'data': {'questions': visible[params['skip']:params['skip'] + params['take']]}}
+
+    monkeypatch.setattr(guard, 'request', request)
+
+    async def collect():
+        return [item['id'] async for page in wb_question_pages('token', False, page_size=2, window_size=4)
+                for item in page]
+
+    assert asyncio.run(collect()) == ['6', '5', '4', '3', '2', '1']
+    assert any('dateTo' in params for params in calls)
 
 
 def test_questions_are_separate_and_have_their_own_draft_flow(client, seeded, monkeypatch):

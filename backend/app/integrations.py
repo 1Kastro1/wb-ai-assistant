@@ -2,6 +2,7 @@ import asyncio
 import html
 import json
 import re
+from datetime import datetime, timezone
 from xml.etree import ElementTree
 from urllib.parse import parse_qs, unquote, urlsplit
 from sqlalchemy import select
@@ -158,6 +159,41 @@ def wb_token(db, account_id=None):
     return decrypt_secret(row.encrypted_token)
 
 
+async def wb_question_pages(token, answered, cancelled=None, page_size=5000, window_size=10000):
+    """Read all questions without exceeding WB's take + skip <= 10000 limit."""
+    date_to = None
+    seen = set()
+    while True:
+        last_item = None
+        for skip in range(0, window_size, page_size):
+            if cancelled and cancelled():
+                raise asyncio.CancelledError()
+            params = {'isAnswered': str(answered).lower(), 'take': page_size,
+                      'skip': skip, 'order': 'dateDesc'}
+            if date_to is not None:
+                params['dateTo'] = date_to
+            result = await guard.request('wb', 'questions', token=token, params=params)
+            if result.get('error'):
+                raise ValueError('WB сообщил об ошибке получения вопросов')
+            items = result.get('data', {}).get('questions', [])
+            fresh = [item for item in items if item.get('id') not in seen]
+            seen.update(item.get('id') for item in fresh)
+            if fresh:
+                yield fresh
+            if len(items) < page_size:
+                return
+            last_item = items[-1]
+        if not last_item or not last_item.get('createdDate'):
+            raise ValueError('WB не указал дату для продолжения списка вопросов')
+        timestamp = datetime.fromisoformat(str(last_item['createdDate']).replace('Z', '+00:00'))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        next_date_to = int(timestamp.timestamp())
+        if date_to is not None and next_date_to >= date_to:
+            raise ValueError('WB вернул повторный временной курсор списка вопросов')
+        date_to = next_date_to
+
+
 class WildberriesProvider:
     async def sync_products(self, db, account_id=None, progress=None, cancelled=None):
         token = wb_token(db, account_id)
@@ -250,13 +286,7 @@ class WildberriesProvider:
         account_id = account_id or setting(db, 'active_store', 'owner')
         token, total = wb_token(db, account_id), 0
         for answered in (False, True):
-            for skip in range(0, 200000, 5000):
-                if cancelled and cancelled():
-                    raise asyncio.CancelledError()
-                result = await guard.request('wb', 'questions', token=token, params={'isAnswered': str(answered).lower(), 'take': 5000, 'skip': skip, 'order': 'dateDesc'})
-                if result.get('error'):
-                    raise ValueError('WB сообщил об ошибке получения вопросов')
-                items = result.get('data', {}).get('questions', [])
+            async for items in wb_question_pages(token, answered, cancelled):
                 for item in items:
                     details = item.get('productDetails') or {}
                     pid = str(details.get('nmId') or item.get('nmId') or '')
@@ -286,8 +316,6 @@ class WildberriesProvider:
                 db.commit()
                 if progress:
                     progress(min(95, 5 + total // 2500))
-                if len(items) < 5000:
-                    break
                 await asyncio.sleep(0.4)
         return total
 
