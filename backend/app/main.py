@@ -1,3 +1,4 @@
+import os
 import secrets
 import time
 import hashlib
@@ -72,7 +73,7 @@ def allowed_origin(origin):
 
 
 app.add_middleware(CORSMiddleware, allow_origins=ORIGINS, allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type', 'X-CSRF-Token'])
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver', 'assistant.blackmindworks.com'])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver', 'assistant.blackmindworks.com'] + (['backend'] if os.environ.get('WB_CONTAINER') == '1' else []))
 
 
 @app.middleware('http')
