@@ -4,7 +4,7 @@ from .db import Session, setting
 
 class ModelRouter:
     """All task classes stay local. The installed model is reused by default."""
-    PROFILES = {'economy':(4096,256),'normal':(8192,768),'quality':(16384,1536)}
+    PROFILES = {'economy':(2048,256),'normal':(4096,768),'quality':(8192,1536)}
 
     def choose(self, task='STANDARD'):
         with Session() as db:

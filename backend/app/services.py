@@ -383,7 +383,8 @@ def analytics(db, days=0, product_id='', account_id=''):
     if account_id:
         topic_where.append('r.wb_account_id = :topic_account_id')
         topic_params['topic_account_id'] = account_id
-    topic_sql = 'SELECT j.value, COUNT(*) FROM reviews AS r, json_each(r.topics) AS j'
+    topic_function = 'json_array_elements_text' if db.bind.dialect.name == 'postgresql' else 'json_each'
+    topic_sql = f'SELECT j.value, COUNT(*) FROM reviews AS r, {topic_function}(r.topics) AS j'
     if topic_where:
         topic_sql += ' WHERE ' + ' AND '.join(topic_where)
     topic_sql += ' GROUP BY j.value ORDER BY j.value'
