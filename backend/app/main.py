@@ -446,8 +446,9 @@ def system_status(auth: AUTH, db: DB):
     backups = sorted((DATA / 'backups').glob('*.db'), key=lambda path: path.stat().st_mtime, reverse=True)[:10]
     try: health = database_health()
     except Exception as error: health = {'status':'failed','detail':type(error).__name__}
+    database_bytes = (db.scalar(select(func.pg_database_size(func.current_database()))) or 0) if DATABASE_URL.startswith('postgresql') else (DATABASE.stat().st_size if DATABASE.exists() else 0)
     return {
-        'database_mb': round(DATABASE.stat().st_size / 1024 / 1024, 1) if DATABASE.exists() else 0,
+        'database_mb': round(database_bytes / 1024 / 1024, 1),
         'automation_enabled': bool(schedule.get('enabled')),
         'auto_replies_enabled': bool(schedule.get('enabled') and schedule.get('drafts_enabled')),
         'scheduler': setting(db, 'scheduler_status', {'state': 'waiting'}),

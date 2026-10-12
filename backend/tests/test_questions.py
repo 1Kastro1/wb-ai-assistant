@@ -1,8 +1,9 @@
 import asyncio
 from datetime import datetime
 
-from app.db import Draft, Job, Review, Session, setting
+from app.db import Draft, Job, Product, Review, Session, setting
 from app.integrations import guard, ollama, wb_question_pages
+from app.services import assess_question_answer
 
 
 def add_question():
@@ -17,6 +18,21 @@ def add_question():
             marketplace='wb_question',
         ))
         db.commit()
+
+
+def test_battery_answer_distinguishes_nominal_voltage_from_measured_charge():
+    product = Product(id='battery', name='Аккумулятор автомобильный 12 В', brand='DOMEI')
+    question = Review(id='battery-question', wb_review_id='battery-question', product_id='battery',
+                      rating=0, text='Сколько вольт должно быть на клеммах при покупке?',
+                      marketplace='wb_question')
+    sources = [{'text': 'Номинальное напряжение 12 В', 'verification_status': 'VERIFIED'}]
+    inaccurate = assess_question_answer(question, product,
+        'Добрый день! На клеммах аккумулятора при покупке должно быть 12 В.', sources)
+    careful = assess_question_answer(question, product,
+        'Добрый день! По карточке номинальное напряжение аккумулятора — 12 В. Фактическое напряжение заряда на клеммах при покупке в карточке не указано.', sources)
+    assert inaccurate['passed'] is False
+    assert 'номинальное' in inaccurate['issues'][0]
+    assert careful['passed'] is True
 
 
 def test_wb_question_pagination_rolls_date_window_before_offset_limit(monkeypatch):

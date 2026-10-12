@@ -460,6 +460,13 @@ def assess_question_answer(question, product, answer, sources=None):
         score += 10; breakdown['facts']['score'] = 10
     else:
         issues.append('нужна опора на подтверждённые сведения о товаре')
+    if ('аккумулятор' in product.name.lower() and 'клемм' in question.text.lower()
+            and re.search(r'\b\d+(?:[.,]\d+)?\s*(?:в|вольт)\b', answer.lower())
+            and not ('номинальн' in answer.lower() and
+                     re.search(r'фактическ|заряд|измеренн', answer.lower()))):
+        issues.append('отличить номинальное напряжение от фактического заряда на клеммах')
+        score -= 20
+        breakdown['relevance']['score'] = max(0, breakdown['relevance']['score'] - 20)
     intent = question_intent(question.text)
     return {'score': min(100, score), 'passed': score >= 90 and not issues, 'issues': issues, 'intent_label': intent, 'breakdown': breakdown, 'sources': sources or [], 'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION}
 
@@ -505,10 +512,11 @@ async def generate_question_draft(db, question, instruction=''):
                 checked.append((value, assess_question_answer(question, product, value, sources)))
         except ValueError:
             continue
-    if checked:
-        reply, quality = max(checked, key=lambda item: item[1]['score'])
+    passed_candidates = [item for item in checked if item[1]['passed']]
+    if passed_candidates:
+        reply, quality = max(passed_candidates, key=lambda item: item[1]['score'])
         model = MODEL
-        quality['selection_note'] = f'Выбран лучший из {len(checked)} безопасных вариантов'
+        quality['selection_note'] = f'Выбран лучший из {len(passed_candidates)} проверенных вариантов'
     else:
         reply = 'Здравствуйте! Спасибо за вопрос. В карточке товара пока недостаточно подтверждённых данных для точного ответа, поэтому не хотим вводить вас в заблуждение.'
         quality = assess_question_answer(question, product, reply, sources)
