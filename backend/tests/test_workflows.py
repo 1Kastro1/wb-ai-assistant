@@ -66,6 +66,32 @@ def test_fragrance_regeneration_rotates_high_quality_reply(client):
     assert second['model'] == 'safety-rules-1.1'
 
 
+def test_positive_eikosha_fragrance_review_is_not_treated_as_weak_scent(client):
+    review_text = 'Приятный, ненавязчивый аромат !!! «Елочки» отдыхают!!!'
+    product = SimpleNamespace(brand='EIKOSHA', name='Меловой ароматизатор для авто R90 WHITY MUSK A-204', category='Автомобильные ароматизаторы')
+    review = SimpleNamespace(text=review_text, rating=5, risk='NORMAL')
+    assert review_intent(review_text) == 'POSITIVE_EXPERIENCE'
+    wrong_reply = 'Здравствуйте! Благодарим за отзыв об аромате. Сожалеем, что интенсивность аромата не оправдала ваших ожиданий. Попробуйте разместить его ближе к потоку воздуха.'
+    wrong_quality = assess_reply(review, product, wrong_reply)
+    assert wrong_quality['passed'] is False
+    assert 'не трактовать положительный отзыв как жалобу' in wrong_quality['issues']
+    with Session() as db:
+        db.add(Product(id='positive-eikosha-product', name=product.name, brand=product.brand, category=product.category))
+        db.add(Review(id='positive-eikosha-review', wb_review_id='positive-eikosha-review', product_id='positive-eikosha-product', rating=5, text=review_text, risk='NORMAL'))
+        db.commit()
+    first = client.post('/reviews/positive-eikosha-review/draft', json={})
+    second = client.post('/reviews/positive-eikosha-review/draft', json={})
+    assert first.status_code == second.status_code == 200
+    for result in (first, second):
+        draft = result.json()
+        assert draft['quality']['passed'] is True
+        assert draft['quality']['intent'] == 'POSITIVE_EXPERIENCE'
+        assert draft['quality']['score'] >= 96
+        assert 'аромат' in draft['text'].lower()
+        assert not any(word in draft['text'].lower() for word in ('жаль', 'сожале', 'не оправдал', 'слабым', 'потоку воздуха'))
+    assert second.json()['text'] != first.json()['text']
+
+
 def test_cleaner_odor_complaint_generates_and_regenerates_without_ai(client, monkeypatch):
     from app.integrations import ollama
     async def unavailable(*args, **kwargs):

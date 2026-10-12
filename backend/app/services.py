@@ -288,7 +288,14 @@ def assess_reply(review, product, reply):
     if reply.strip().lower() in ('спасибо за отзыв!', 'спасибо за отзыв.', 'спасибо!'):
         score = min(score, 35)
         issues.append('слишком общий ответ')
-    intent = review_intent(review.text)
+    if review.rating >= 4 and intent == 'POSITIVE_EXPERIENCE':
+        if any(x in lowered for x in ('жаль', 'сожале', 'извин', 'не оправдал', 'не понравил', 'разочаровал', 'показался слаб', 'недостаточно выражен')):
+            score = min(score, 70)
+            issues.append('не трактовать положительный отзыв как жалобу')
+            breakdown['relevance']['score'] = 0
+        elif any(x in lowered for x in ('ближе к потоку воздуха', 'аромат будет ощущаться лучше')):
+            score = min(score, 80)
+            issues.append('не предлагать решение проблемы, которой покупатель не описал')
     return {
         'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
         'issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
@@ -593,6 +600,8 @@ async def generate_draft(db, review_id, instruction=''):
             reply = 'Здравствуйте! Описанные симптомы требуют проверки тормозной системы специалистом до дальнейшей эксплуатации. По отзыву установить причину невозможно. Пожалуйста, обратитесь в сервис.'
         elif review.risk == 'CAUTION':
             reply = 'Здравствуйте! Причины скрипа бывают разными; по отзыву определить их нельзя. Рекомендуем проверить тормозную систему и установку в сервисе.'
+        elif review.rating >= 4 and review_intent(review.text) == 'POSITIVE_EXPERIENCE':
+            reply = 'Здравствуйте! Спасибо за высокую оценку! Рады, что аромат вам понравился. Пользуйтесь с удовольствием!'
         else:
             reply = 'Жаль, что аромат показался слабым. EIKOSHA — мягкий аромат, его восприятие индивидуально. Попробуйте размещение ближе к потоку воздуха по инструкции модели.'
     model = forced_model or 'safety-rules-1.0'
