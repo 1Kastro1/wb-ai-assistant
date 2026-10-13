@@ -54,8 +54,12 @@ class SpecificReviewDetailsTests(unittest.TestCase):
         self.review.text = 'Крышка без заводской защиты. Одета криво, часть протекла, запах кислый, липкая (возможно подменили)'
         answer = rule_reply(self.review, self.product)
         self.assertIn('протечку', answer)
-        self.assertIn('неприятном запахе', answer)
-        self.assertIn('нельзя подтвердить', answer)
+        self.assertIn('неприятный запах', answer)
+        self.assertIn('состояние крышки', answer)
+        self.assertIn('в ПВЗ', answer)
+        self.assertIn('отказаться от его получения', answer)
+        for forbidden in ('провер', 'поддержк', 'подмен', 'фотограф', 'возврат'):
+            self.assertNotIn(forbidden, answer.lower())
         self.assertNotIn('нанесите', answer.lower())
         self.assertFalse(missing_complaints(analyze_customer_message(self.review.text, 2), answer))
 
