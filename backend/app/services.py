@@ -220,7 +220,14 @@ def _review_query(filters):
         days = filters['days']
         start = datetime.now(timezone(timedelta(hours=3))).replace(hour=0, minute=0, second=0, microsecond=0) if days == 1 else datetime.now(timezone.utc) - timedelta(days=days)
         conditions.append(Review.created_at >= start.isoformat())
-    if view == 'context':
+    if view == 'positive':
+        conditions.append(Review.rating.between(4, 5))
+    elif view == 'negative':
+        conditions.append(Review.rating.between(1, 3))
+    elif view == 'rating_only':
+        text_without_whitespace = func.replace(func.replace(func.replace(func.coalesce(Review.text, ''), '\n', ''), '\r', ''), '\t', '')
+        conditions.append(func.trim(text_without_whitespace) == '')
+    elif view == 'context':
         raw_ids = filters.get('review_ids', '')
         if len(raw_ids) > 12000:
             raise ValueError('Слишком длинная выборка отзывов')
