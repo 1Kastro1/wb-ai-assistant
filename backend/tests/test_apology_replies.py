@@ -20,7 +20,10 @@ class ApologyReplyTests(unittest.TestCase):
             reply = rule_reply(self.review, self.product, revision)
             self.assertIsNotNone(reply)
             self.assertIn('извин', reply.lower())
-            self.assertIn('производител', reply.lower())
+            self.assertIn('маркиров', reply.lower())
+            self.assertIn('фотограф', reply.lower())
+            self.assertNotIn('был понятен', reply.lower())
+            self.assertNotIn('должен быть ясно указан', reply.lower())
             self.assertNotIn('возврат', reply.lower())
             self.assertTrue('спасибо' in reply.lower() or 'благодар' in reply.lower())
             self.assertNotIn('учт', reply.lower())
@@ -50,6 +53,13 @@ class ApologyReplyTests(unittest.TestCase):
         for text in ['Мы внимательно учтём описанный вами недостаток при работе с информацией о товаре.',
                      'Мы учтем ваш отзыв при работе с карточкой товара.',
                      'Ваш отзыв поможет точнее описывать товар.']:
+            with self.assertRaises(ValueError):
+                validate_reply(text)
+
+    def test_model_cannot_reintroduce_abstract_manufacturer_templates(self):
+        for text in ['Понимаем Ваши сомнения: важно, чтобы производитель полученного товара был понятен.',
+                     'Производитель должен быть ясно указан на товаре и упаковке.',
+                     'Вы рассчитывали получить товар, на котором производитель и маркировка указаны понятно.']:
             with self.assertRaises(ValueError):
                 validate_reply(text)
 

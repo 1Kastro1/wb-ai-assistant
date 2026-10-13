@@ -96,6 +96,8 @@ class ProductGuidanceTests(unittest.TestCase):
         matches = namespace['_addresses_review_topic']
         self.assertTrue(matches('Деньги на ветер', 'Извините за результат очистки. По инструкции распылите средство.'))
         self.assertFalse(matches('Деньги на ветер', 'Спасибо за покупку! Приятных поездок!'))
+        self.assertTrue(matches('Заказал свечи производитель NGK Япония, пришли х/з', 'Извините за разочарование. Для проверки приложите фотографии маркировки.'))
+        self.assertFalse(matches('Заказал свечи производитель NGK Япония, пришли х/з', 'Спасибо за покупку! Приятных поездок!'))
 
 
 if __name__ == '__main__':
