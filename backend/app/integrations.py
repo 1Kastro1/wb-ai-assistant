@@ -9,6 +9,7 @@ from sqlalchemy import select
 from .config import MODEL
 from .db import Account, Draft, Product, Review, StoreProfile, Session, now, setting
 from .safety import classify, mask_vin
+from .verified_instructions import attach_verified_instructions
 from .security import guard, decrypt_secret
 
 
@@ -229,6 +230,7 @@ class WildberriesProvider:
                 if characteristics:
                     facts.append({'text': '\n'.join(characteristics)[:8000], 'source': 'Карточка WB: характеристики', 'verified_at': item.get('updatedAt') or now(), 'verification_status': 'VERIFIED'})
                 product.facts = facts
+                attach_verified_instructions(db, product)
                 # vendorCode is seller SKU, not verified manufacturer part number.
                 db.add(product)
                 total += 1

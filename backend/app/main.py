@@ -1373,6 +1373,9 @@ def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset:
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total}
 
 
+from .verified_instructions import attach_verified_instructions
+
+
 class Fact(Payload):
     text: str = Field(min_length=2, max_length=2000)
     source: str = Field(min_length=2, max_length=1000)
@@ -1433,6 +1436,10 @@ async def research_product(pid: str, auth: MARKET_OPERATOR, db: DB):
     product = db.get(Product, pid)
     if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
         raise HTTPException(404, 'Товар не найден')
+    saved = attach_verified_instructions(db, product)
+    if saved or any(f.get('catalog_instruction') for f in product.facts or []):
+        db.commit()
+        return {'product': public(product), 'found': saved, 'saved_instructions': saved, 'verified_instructions': True}
     instruction_sources = await web_research.search_instructions(product, db)
     detail_sources = await web_research.search_instructions(product, db, 'характеристики состав комплектация')
     sources = list({item['url']: item for item in instruction_sources + detail_sources}.values())
