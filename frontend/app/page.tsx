@@ -21,14 +21,15 @@ async function syncJob(kind:string, onUpdate?: (job:Row)=>void) {
   throw new Error('Синхронизация ещё выполняется. Проверьте состояние позже.');
 }
 async function singleDraftJob(reviewId:string, instruction:string) {
-  let job = await api('/jobs/single-draft','POST',{review_id:reviewId,instruction});
-  for(let attempt=0;attempt<1800;attempt++) {
+  let job = await api('/jobs/single-draft','POST',{review_id:reviewId,instruction},15000);
+  const deadline=performance.now()+5*60*1000;
+  while(performance.now()<deadline) {
     if(job.status==='completed') return job.result.draft;
     if(['failed','interrupted','cancelled'].includes(job.status)) throw new Error(job.result?.message||'Ответ не подготовлен');
     await new Promise(resolve=>setTimeout(resolve,2000));
-    job=await api('/jobs/'+job.id);
+    job=await api('/jobs/'+job.id,'GET',undefined,15000);
   }
-  throw new Error('Ответ ещё готовится. Проверьте черновик позже.');
+  throw new Error('Подготовка ответа заняла больше пяти минут. Задание продолжает выполняться на сервере. Проверьте его в разделе «Задачи» и обновите отзывы позже.');
 }
 const nav = [['◷', 'Главная'], ['◈', 'Ассистент'], ['☷', 'Очередь ответов'], ['▤', 'Отзывы'], ['?', 'Вопросы'], ['◇', 'Товары'], ['⇄', 'Задачи'], ['☑', 'Действия'], ['🔔', 'Уведомления'], ['⌘', 'Память'], ['⚙', 'Настройки']];
 const statusLabel: Row = { unanswered: 'Без ответа', draft_ready: 'Черновик готов', manual_review: 'Ручная проверка', pending_confirmation: 'Ждёт подтверждения', published: 'Опубликован', pending: 'Ждёт подтверждения', queued: 'В очереди', running: 'Выполняется', failed: 'Ошибка', interrupted: 'Прервано', completed: 'Завершено', cancelled: 'Отменено', needs_review: 'Нужна сверка', executing: 'Выполняется' };

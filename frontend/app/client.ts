@@ -3,12 +3,21 @@ let csrf='';
 
 export function setCsrf(value:string){csrf=value}
 
-export async function api(path:string,method='GET',body?:unknown){
+export async function api(path:string,method='GET',body?:unknown,timeoutMs=180000){
   const multipart=body instanceof FormData;
-  const response=await fetch(API+path,{method,credentials:'include',headers:{...(multipart?{}:{'Content-Type':'application/json'}),'X-CSRF-Token':csrf},body:body===undefined?undefined:multipart?body:JSON.stringify(body)});
-  const raw=await response.text();let result:any={};
-  try{result=raw?JSON.parse(raw):{}}catch{result={detail:response.ok?'Сервер вернул некорректный ответ':'Сервер временно не ответил. Повторите попытку.'}}
-  if(!response.ok)throw new Error(result.detail||'Не удалось выполнить запрос');return result;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+  try{
+    const response=await fetch(API+path,{method,credentials:'include',signal:controller.signal,headers:{...(multipart?{}:{'Content-Type':'application/json'}),'X-CSRF-Token':csrf},body:body===undefined?undefined:multipart?body:JSON.stringify(body)});
+    const raw=await response.text();let result:any={};
+    try{result=raw?JSON.parse(raw):{}}catch{throw new Error(response.ok?'Сервер вернул некорректный ответ':'Сервер временно не ответил. Повторите попытку.')}
+    if(!response.ok)throw new Error(result.detail||'Не удалось выполнить запрос');return result;
+  }catch(error){
+    if(controller.signal.aborted)throw new Error('Сервер не ответил вовремя. Проверьте соединение. Если задание уже запущено, его состояние доступно в разделе «Задачи».');
+    throw error;
+  }finally{
+    clearTimeout(timer);
+  }
 }
 
 export async function apiAudio(path:string,body:unknown){
