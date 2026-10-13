@@ -1296,7 +1296,7 @@ def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_ratin
 
 
 @app.get('/reviews/page')
-def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = ''):
+def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = ''):
     return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids)
 
 
