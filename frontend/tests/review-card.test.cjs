@@ -5,11 +5,15 @@ const path=require('node:path');
 const ts=require('typescript');
 const React=require('react');
 const {renderToStaticMarkup}=require('react-dom/server');
-const source=fs.readFileSync(path.join(__dirname,'../app/ReviewCard.tsx'),'utf8');
-const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
-const moduleObject={exports:{}};
-new Function('require','module','exports',compiled)(require,moduleObject,moduleObject.exports);
-const Card=moduleObject.exports.default;
+function loadComponent(file){
+ const source=fs.readFileSync(file,'utf8');
+ const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
+ const moduleObject={exports:{}};
+ const localRequire=name=>name.startsWith('.')?loadComponent(path.resolve(path.dirname(file),name+'.tsx')):require(name);
+ new Function('require','module','exports',compiled)(localRequire,moduleObject,moduleObject.exports);
+ return moduleObject.exports;
+}
+const Card=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx')).default;
 function render(overrides={}){
  const review={id:'r',product_id:'p',product:{name:'Очиститель',brand:'KANGAROO'},rating:5,text:'',risk:'NORMAL',created_at:'2026-10-13',draft:{text:'Спасибо за оценку!',revision:2,quality:{passed:true},edits:[{at:'2026-10-13',old:'Прежний текст',new:'Новый текст'}]},...overrides.review};
  return renderToStaticMarkup(React.createElement(Card,{review,checked:false,toggle(){},busy:false,assistantEnabled:true,canManage:true,generating:false,generationError:'',generate(){},save(){},feedback(){},...overrides,review}));
@@ -22,3 +26,7 @@ test('recoverable waiting failure retains text and offers continuation',()=>{con
 test('terminal failure has a retry action',()=>{assert(render({generationError:'Не удалось завершить подготовку.'}).includes('Повторить попытку'))});
 test('published review offers no regeneration or save',()=>{const html=render({review:{is_answered:true,existing_answer:'Опубликованный ответ'}});assert(html.includes('Отправлен'));assert(!html.includes('Новый вариант'));assert(!html.includes('Сохранить</button>'))});
 exports.Card=Card;
+
+test('product photos load lazily with an accessible name',()=>{const html=render({review:{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp'}}});assert(html.includes('src="https://example.com/card.webp"'));assert(html.includes('loading="lazy"'));assert(html.includes('alt="Очиститель"'))});
+test('missing or unsafe photo URLs retain a product placeholder',()=>{for(const image_url of ['', 'javascript:alert(1)']){const html=render({review:{product:{name:'Очиститель',image_url}}});assert(html.includes('Фото товара отсутствует'));assert(!html.includes('<img'))}});
+test('review header keeps scheduling details collapsed and controls permission-aware',()=>{const Header=loadComponent(path.join(__dirname,'../app/ReviewHeader.tsx')).default;const html=renderToStaticMarkup(React.createElement(Header,{automation:{enabled:false},busy:false,canManage:false,assistantEnabled:true,count:30,total:220294,selected:0,onToggle(){},onCheck(){},onPublish(){}}));assert(html.includes('Расписание автоответов'));assert(!html.includes(' open='));assert(html.includes('disabled'));assert(!html.includes('class="primary"'))});

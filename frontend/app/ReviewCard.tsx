@@ -1,5 +1,6 @@
 'use client';
 import {useEffect,useState,useRef} from 'react';
+import ProductThumbnail from './ProductThumbnail';
 type Row=Record<string,any>;
 
 export function GenerationProgress(){
@@ -20,8 +21,7 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   const blocked=busy||!canManage||!assistantEnabled||dirty;
   const retryLabel=/ещё готовится|ожидание|задание сохранено/.test(generationError)?'Продолжить ожидание':'Повторить попытку';
   return <article className={'card review compact-review '+(r.rating<=3?'negative':'positive')}>
-    <div className="review-head"><label className="check"><input type="checkbox" checked={checked} disabled={!canManage||r.is_answered} onChange={toggle}/><b>{r.product.name}</b></label><div className="review-head-state"><span className="stars" aria-label={r.rating+' из 5'}>{'★'.repeat(r.rating)}<span>{'★'.repeat(5-r.rating)}</span></span><span role="status" title={reason} className={'pill '+(generating?'working':generationError||needsCheck?'amber':'green')}>{status}</span></div></div>
-    <div className="review-meta"><span>{r.product.brand} · {r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркет':'Wildberries'} {r.product_id}</span><span>{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>{!hasText&&<span>Оценка без текста</span>}</div>
+    <div className="review-head"><label className="check"><input type="checkbox" checked={checked} disabled={!canManage||r.is_answered} onChange={toggle}/><span className="review-product"><ProductThumbnail product={r.product}/><span className="review-product-copy"><b>{r.product.name}</b><span className="review-meta"><span>{r.product.brand} · {r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркет':'Wildberries'} {r.product_id}</span><span>{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>{!hasText&&<span>Оценка без текста</span>}</span></span></span></label><div className="review-head-state"><span className="stars" aria-label={r.rating+' из 5'}>{'★'.repeat(r.rating)}<span>{'★'.repeat(5-r.rating)}</span></span><span role="status" title={reason} className={'pill '+(generating?'working':generationError||needsCheck?'amber':'green')}>{status}</span></div></div>
     <div className={'review-content '+(hasText?'has-text':'rating-only')}>
       {hasText&&<div className="customer-review"><small>ОТЗЫВ ПОКУПАТЕЛЯ</small><p className="review-text">{r.text}</p></div>}
       {r.is_answered?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<div className="draft">

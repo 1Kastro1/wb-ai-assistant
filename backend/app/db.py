@@ -113,6 +113,7 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String)
     brand: Mapped[str] = mapped_column(String, default='')
     category: Mapped[str] = mapped_column(String, default='')
+    image_url: Mapped[str] = mapped_column(String, default='')
     part_number: Mapped[str] = mapped_column(String, default='')
     facts: Mapped[list] = mapped_column(JSON, default=list)
     marketplace: Mapped[str] = mapped_column(String, default='wb')
