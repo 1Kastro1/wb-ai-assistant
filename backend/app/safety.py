@@ -89,6 +89,8 @@ def validate_reply(text):
         raise ValueError('Полный VIN запрещён в публичном ответе')
     if any(x in text.lower() for x in FORBIDDEN):
         raise ValueError('Ответ содержит запрещённое обещание или небезопасное утверждение')
+    if re.search(r'просроч|(?:ист[её]к|законч|выш[её]л)[^.!?]{0,35}срок\w*\s+годност|срок\w*\s+годност[^.!?]{0,35}(?:ист[её]к|законч|выш[её]л)', text, re.I):
+        raise ValueError('Не обсуждать просроченность товара и не предполагать её причиной проблемы')
     if re.search(r'(?:верн|возврат)\w*[^.!?]{0,45}(?:деньг|средств|стоим|оплат)|возмещ\w*[^.!?]{0,35}(?:расход|стоим)|(?:выплат|перевед|зачисл)[^.!?]{0,80}(?:счет|карт|деньг|руб|₽)|(?:нет|не имеете|отсутствуют)[^.!?]{0,25}(?:права|право)', text, re.I):
         raise ValueError('Не обсуждать финансовые условия и не отрицать права покупателя')
     if re.search(r'заяв\w*[^.!?]{0,60}возврат|оформ\w*[^.!?]{0,30}возврат', text, re.I):
@@ -179,6 +181,8 @@ def rule_reply(review, product, revision=0, facts=None):
 
 
 def safe_fallback_reply(review, product, revision=0, facts=None):
+    if review.risk in ('HIGH', 'CAUTION'):
+        return rule_reply(review, product, revision, facts)
     guidance = product_usage_reply(review, product, facts if facts is not None else (getattr(product, 'facts', None) or []), revision)
     if guidance:
         return guidance
@@ -186,16 +190,16 @@ def safe_fallback_reply(review, product, revision=0, facts=None):
     if review.risk == 'NORMAL' and (analysis['buyer_asks_about_money'] or len(analysis['complaints']) > 1):
         return contextual_complaint_reply(analysis, revision) or official_support_reply()
     if review_intent(review.text) == 'DESCRIPTION_MISMATCH' and review.risk == 'NORMAL':
-        return description_mismatch_reply(revision)
+        return description_mismatch_reply(revision, review.text)
     text = review.text.lower()
     product_text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     facts_text = ' '.join(str(f.get('text', '')) for f in (facts if facts is not None else (getattr(product, 'facts', None) or [])) if f.get('verification_status') == 'VERIFIED').lower()
-    if review.rating >= 4:
+    if review.rating >= 4 and analysis['sentiment'] not in ('negative', 'mixed'):
         if 'смол' in text or 'гудрон' in text:
             return 'Здравствуйте! Большое спасибо за такой приятный отзыв и рекомендацию! 😊 Очень рады, что очиститель отлично справился со смолой на кузове и результат вас порадовал. Пользуйтесь с удовольствием — пусть ваш автомобиль всегда радует чистотой! Будем рады видеть вас снова.'
         return 'Здравствуйте! Большое спасибо за ваш тёплый отзыв и высокую оценку! 😊 Очень рады, что товар вас порадовал. Пользуйтесь с удовольствием, а мы будем рады видеть вас снова!'
     return _variant([
-        f'Здравствуйте! Спасибо за честный отзыв о товаре «{getattr(product, "name", "товар")}». Нам искренне жаль, что покупка не оправдала ваших ожиданий. Приносим извинения за неприятное впечатление. Понимаем ваше разочарование от покупки. Благодарим, что поделились своим опытом.',
-        f'Здравствуйте! Благодарим за обратную связь о товаре «{getattr(product, "name", "товар")}». Сожалеем, что у вас осталось негативное впечатление от покупки. Приносим извинения за разочарование. Нам жаль, что полученный товар оставил такое впечатление. Спасибо, что рассказали о ситуации.',
-        f'Здравствуйте! Спасибо, что поделились мнением о товаре «{getattr(product, "name", "товар")}». Нам очень жаль, что он вас разочаровал. Приносим извинения за неприятное впечатление. Понимаем, что вы рассчитывали на другой результат. Благодарим за честную оценку.',
+        'Здравствуйте! Спасибо за отзыв. Извините, что покупка не оправдала Ваших ожиданий. Уточните, пожалуйста, что именно Вас не устроило, чтобы можно было дать подходящую рекомендацию.',
+        'Здравствуйте! Благодарим за обратную связь. Приносим извинения за разочарование от покупки. Расскажите, пожалуйста, в чём проявилась проблема с товаром, чтобы можно было разобраться в Вашей ситуации.',
+        'Здравствуйте! Спасибо, что поделились впечатлением. Извините за неприятный опыт использования. Уточните, пожалуйста, какие свойства или работа товара Вас не устроили — это поможет подобрать полезный совет.',
     ], revision)
