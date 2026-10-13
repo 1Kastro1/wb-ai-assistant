@@ -1,4 +1,4 @@
-"""Reviewed manufacturer instructions, matched by exact manufacturer article."""
+"""Reviewed product instructions, matched by exact manufacturer article."""
 import json
 import re
 from functools import lru_cache
@@ -35,6 +35,14 @@ def attach_verified_instructions(db, product):
     from .db import now, setting, set_setting
     items = matching_instructions(product)
     added = 0
+    from .steam_deo_guidance import reviewed_steam_facts
+    facts = list(product.facts or [])
+    for fact in reviewed_steam_facts(product):
+        if fact not in facts:
+            facts.append(fact)
+            added += 1
+    if added:
+        product.facts = facts
     for item in items:
         host = urlsplit(item['url']).hostname
         key = 'official_domain:' + product.id
