@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from app.safety import review_intent, rule_reply, safe_fallback_reply, validate_reply
+from app.safety import review_intent, rule_reply, safe_fallback_reply, validate_reply, fresh_reply_variants
 
 
 class ApologyReplyTests(unittest.TestCase):
@@ -15,13 +15,14 @@ class ApologyReplyTests(unittest.TestCase):
     def test_ordinary_country_mention_is_not_a_complaint(self):
         self.assertNotEqual(review_intent('Пришли свечи NGK Япония, все понравилось'), 'DESCRIPTION_MISMATCH')
 
-    def test_quick_reply_apologizes_and_suggests_checking_labels(self):
+    def test_quick_reply_apologizes_without_return_advice(self):
         for revision in range(3):
             reply = rule_reply(self.review, self.product, revision)
             self.assertIsNotNone(reply)
             self.assertIn('извин', reply.lower())
-            self.assertIn('маркиров', reply.lower())
-            self.assertIn('возврат', reply.lower())
+            self.assertIn('производител', reply.lower())
+            self.assertNotIn('возврат', reply.lower())
+            self.assertTrue('спасибо' in reply.lower() or 'благодар' in reply.lower())
             self.assertNotIn('учт', reply.lower())
             self.assertNotIn('поддел', reply.lower())
             validate_reply(reply)
@@ -29,6 +30,21 @@ class ApologyReplyTests(unittest.TestCase):
     def test_repeated_generation_has_different_safe_variants(self):
         replies = {rule_reply(self.review, self.product, i) for i in range(3)}
         self.assertEqual(len(replies), 3)
+
+    def test_regeneration_excludes_previous_even_if_its_score_would_win(self):
+        replies = [rule_reply(self.review, self.product, i) for i in range(3)]
+        for previous in replies:
+            choices = fresh_reply_variants(replies, previous)
+            self.assertNotIn(previous, choices)
+            self.assertTrue(choices)
+
+    def test_required_single_safety_reply_is_preserved(self):
+        self.assertEqual(fresh_reply_variants(['safe reply'], 'safe reply'), ['safe reply'])
+
+    def test_model_cannot_suggest_return_applications(self):
+        for text in ['Подайте заявку на возврат.', 'Можно оформить возврат товара.']:
+            with self.assertRaises(ValueError):
+                validate_reply(text)
 
     def test_model_cannot_reintroduce_internal_improvement_promises(self):
         for text in ['Мы внимательно учтём описанный вами недостаток при работе с информацией о товаре.',
