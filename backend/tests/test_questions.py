@@ -70,6 +70,33 @@ def test_internal_reasoning_question_draft_cannot_be_published_and_is_replaced(c
     assert draft['quality']['passed'] is True
 
 
+def test_compatibility_fallback_addresses_model_and_article_without_echoing_vin(client, monkeypatch):
+    with Session() as db:
+        db.add(Product(id='denso-plug', name='Свеча зажигания DENSO ITF20TT', brand='DENSO'))
+        db.flush()
+        db.add(Review(id='duster-question', wb_review_id='duster-question', product_id='denso-plug',
+                      rating=0, text='Добрый день. Для Рено Дастер К4М VIN WVWZZZ1JZXW000001 подойдут?',
+                      marketplace='wb_question'))
+        db.commit()
+
+    async def variants(*args, **kwargs):
+        return ['Хорошо, мне нужно создать три разных безопасных варианта ответа на вопрос о совместимости.']
+
+    monkeypatch.setattr(ollama, 'reply_variants', variants)
+    response = client.post('/questions/duster-question/draft', json={})
+    assert response.status_code == 200, response.text
+    draft = response.json()
+    assert draft['model'] == 'question-safety-1.0'
+    assert 'DENSO ITF20TT' in draft['text']
+    assert 'Рено Дастер К4М' in draft['text']
+    assert 'WVWZZZ1JZXW000001' not in draft['text']
+    assert 'VIN' not in draft['text']
+    assert 'нельзя достоверно установить' in draft['text']
+    assert draft['quality']['score'] >= 90
+    assert draft['quality']['passed'] is True
+    assert draft['quality']['candidates_evaluated'] == 0
+
+
 def test_wb_question_pagination_rolls_date_window_before_offset_limit(monkeypatch):
     rows = [
         {'id': str(second), 'createdDate': f'2026-10-02T10:00:{second:02d}Z'}

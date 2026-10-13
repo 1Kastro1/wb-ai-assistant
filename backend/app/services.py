@@ -488,6 +488,29 @@ def question_intent(text):
     return 'общее'
 
 
+def safe_question_fallback(question, product, intent):
+    if intent == 'совместимость':
+        # Quote only a short model designation from the customer's question; never echo a VIN.
+        question_text = re.sub(r'\b[A-HJ-NPR-Z0-9]{17}\b', ' ', question.text or '', flags=re.I)
+        match = re.search(r'\b(?:для|на|к)\s+([\w-]+(?:\s+[\w-]+){0,4})', question_text, re.I)
+        model = ''
+        if match:
+            tokens = []
+            for token in match.group(1).split():
+                if token.casefold() in {'vin', 'вин', 'подойдет', 'подойдёт', 'подойдут', 'подходит', 'совместим', 'артикул'}:
+                    break
+                tokens.append(token)
+            if tokens and any(any(char.isupper() or char.isdigit() for char in token) for token in tokens):
+                model = ' '.join(tokens)
+        subject = f'«{model}»' if model else 'указанной вами модели'
+        product_name = (product.name or 'товара').strip()[:120]
+        return (f'Здравствуйте! Спасибо за вопрос о том, подойдёт ли товар «{product_name}» для {subject}. '
+                'По доступным подтверждённым сведениям нельзя достоверно установить применяемость этого артикула. '
+                'Рекомендуем сверить её по каталогу производителя с учётом модели и двигателя.')
+    return ('Здравствуйте! Спасибо за вопрос. В карточке товара пока недостаточно подтверждённых данных '
+            'для точного ответа, поэтому не хотим вводить вас в заблуждение.')
+
+
 def assess_question_answer(question, product, answer, sources=None):
     question_words = set(WORDS.findall(question.text.lower()))
     answer_words = set(WORDS.findall(answer.lower()))
@@ -579,7 +602,7 @@ async def generate_question_draft(db, question, instruction=''):
         model = MODEL
         quality['selection_note'] = f'Выбран лучший из {len(passed_candidates)} проверенных вариантов'
     else:
-        reply = 'Здравствуйте! Спасибо за вопрос. В карточке товара пока недостаточно подтверждённых данных для точного ответа, поэтому не хотим вводить вас в заблуждение.'
+        reply = validate_reply(safe_question_fallback(question, product, intent))
         quality = assess_question_answer(question, product, reply, sources)
         quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
         model = 'question-safety-1.0'
