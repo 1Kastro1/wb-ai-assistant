@@ -1,3 +1,4 @@
+from .product_guidance import usage_excerpt, product_usage_reply
 import difflib
 import json
 import re
@@ -647,7 +648,7 @@ async def generate_draft(db, review_id, instruction=''):
     generation_revision = initial_draft.revision if initial_draft else 0
     rule_candidates = []
     for offset in range(3):
-        candidate = rule_reply(review, product, generation_revision + offset)
+        candidate = rule_reply(review, product, generation_revision + offset, verified_facts)
         if candidate and candidate not in rule_candidates:
             rule_candidates.append(validate_reply(mask_vin(candidate)))
     rule_candidates = fresh_reply_variants(rule_candidates, initial_draft.text if initial_draft else '')
@@ -683,10 +684,10 @@ async def generate_draft(db, review_id, instruction=''):
             reply = 'Здравствуйте! Описанные симптомы требуют проверки тормозной системы специалистом до дальнейшей эксплуатации. По отзыву установить причину невозможно. Пожалуйста, обратитесь в сервис.'
         elif review.risk == 'CAUTION':
             reply = 'Здравствуйте! Причины скрипа бывают разными; по отзыву определить их нельзя. Рекомендуем проверить тормозную систему и установку в сервисе.'
-        elif review.rating >= 4 and review_intent(review.text) == 'POSITIVE_EXPERIENCE':
+        elif review.rating >= 4 and review_intent(review.text) == 'POSITIVE_EXPERIENCE' and not product_usage_reply(review, product, verified_facts):
             reply = 'Здравствуйте! Спасибо за высокую оценку! Рады, что аромат вам понравился. Пользуйтесь с удовольствием!'
         else:
-            reply = 'Жаль, что аромат показался слабым. EIKOSHA — мягкий аромат, его восприятие индивидуально. Попробуйте размещение ближе к потоку воздуха по инструкции модели.'
+            reply = product_usage_reply(review, product, verified_facts, generation_revision) or reply
     model = forced_model or 'safety-rules-1.0'
     web_sources = []
     if not reply:
@@ -710,7 +711,7 @@ async def generate_draft(db, review_id, instruction=''):
                 web_search_failed = True
         messages = [
             {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\n' + customer_reply_policy() + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
-            {'role': 'user', 'content': json.dumps({'review_data': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating), 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
+            {'role': 'user', 'content': json.dumps({'review_data': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating), 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'verified_usage_instruction': usage_excerpt(facts), 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
         best_reply, best_quality = None, {'score': -1, 'issues': []}
         valid_candidates = []
         attempt_messages = messages
@@ -753,7 +754,7 @@ async def generate_draft(db, review_id, instruction=''):
             if attempt < MAX_GENERATION_ATTEMPTS - 1:
                 attempt_messages = messages + [
                     {'role': 'assistant', 'content': last_candidate},
-                    {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания и не направляй покупателя к продавцу. Верни только ответ.'},
+                    {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания; давай советы по применению только из verified_usage_instruction и verified_facts. Верни только ответ.'},
                 ]
         fallback = validate_reply(safe_fallback_reply(review, product, generation_revision, trusted_product_facts(db, product)))
         fallback_quality = assess_reply(review, product, fallback, verified_facts)

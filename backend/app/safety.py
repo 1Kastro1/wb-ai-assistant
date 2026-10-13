@@ -1,4 +1,5 @@
 import re
+from .product_guidance import product_usage_reply, is_cleaner
 from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply
 
 VIN = re.compile(r'\b[A-HJ-NPR-Z0-9]{17}\b', re.I)
@@ -25,11 +26,11 @@ def review_intent(text):
         return 'DAMAGED_ITEM'
     if _contains_any(value, ('не подошел', 'не подходит', 'несовместим')):
         return 'FITMENT_PROBLEM'
-    if _contains_any(value, ('не увидел результата', 'не увидела результата', 'нет результата', 'не помог', 'не помогло', 'не очищает', 'не очистил', 'не отмыл', 'не отмыла')):
+    if _contains_any(value, ('не увидел результата', 'не увидела результата', 'нет результата', 'не помог', 'не помогло', 'не очищает', 'не очистил', 'не отмыл', 'не отмыла', 'деньги на ветер', 'толку нет')):
         return 'NO_RESULT'
     if 'воняет' in value or (any(x in value for x in ('запах', 'аромат')) and _contains_any(value, ('неприят', 'резк', 'ужасн', 'не понрав'))):
         return 'ODOR_COMPLAINT'
-    if _contains_any(value, ('запаха почти нет', 'слабый запах', 'слабый аромат', 'не пахнет', 'аромат не чувств')):
+    if _contains_any(value, ('запаха почти нет', 'слабый запах', 'слабый аромат', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха')):
         return 'WEAK_SCENT'
     if _contains_any(value, ('не соответствует описанию', 'не как на фото', 'отличается от описания', 'характеристики не совпадают')):
         return 'DESCRIPTION_MISMATCH'
@@ -118,12 +119,12 @@ def cleaner_effectiveness_complaint(review, product):
     product_text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower().replace('ё', 'е')
     cleaner = any(marker in product_text for marker in ('очистител', 'пятн', 'химчист'))
     dissatisfied = review_intent(review.text) == 'NO_RESULT' or any(marker in text for marker in (
-        'полная хрень', 'полный отстой', 'бесполезн', 'не работает', 'неэффектив', 'толку нет',
+        'полная хрень', 'полный отстой', 'бесполезн', 'не работает', 'неэффектив', 'толку нет', 'деньги на ветер',
     ))
     return cleaner and review.rating <= 3 and dissatisfied
 
 
-def rule_reply(review, product, revision=0):
+def rule_reply(review, product, revision=0, facts=None):
     analysis = analyze_customer_message(review.text, review.rating)
     if not review.text.strip():
         if review.rating >= 4:
@@ -137,6 +138,9 @@ def rule_reply(review, product, revision=0):
         return 'Здравствуйте! Спасибо за обратную связь. Нам жаль, что после установки появился скрип. У скрипа тормозных колодок могут быть разные причины, и по одному отзыву установить их невозможно. Рекомендуем проверить тормозную систему и правильность установки в сервисе. После диагностики будет проще определить дальнейшие действия.'
     if analysis['buyer_asks_about_money']:
         return contextual_complaint_reply(analysis, revision) or official_support_reply()
+    guidance = product_usage_reply(review, product, facts if facts is not None else (getattr(product, 'facts', None) or []), revision)
+    if guidance:
+        return guidance
     if len(analysis['complaints']) > 1:
         return None
     intent = review_intent(review.text)
@@ -147,12 +151,6 @@ def rule_reply(review, product, revision=0):
             'Здравствуйте! Спасибо за высокую оценку и за то, что поделились впечатлением. Очень рады, что аромат вам понравился. Благодарим за выбор нашего товара и желаем приятных поездок!',
             'Здравствуйте! Благодарим за тёплый отзыв об аромате и высокую оценку. Нам приятно знать, что товар пришёлся вам по вкусу. Пользуйтесь с удовольствием и спасибо, что выбрали нас!',
             'Здравствуйте! Спасибо, что рассказали о своём впечатлении и оценили аромат. Рады, что покупка вам понравилась. Благодарим за доверие и желаем приятного использования!',
-        ], revision)
-    if product.brand.upper() == 'EIKOSHA' and intent == 'WEAK_SCENT':
-        return _variant([
-            'Здравствуйте! Спасибо, что рассказали о впечатлении. Нам жаль, что аромат показался вам слишком слабым. EIKOSHA отличается мягким и ненавязчивым ароматом, а восприятие запаха индивидуально. Попробуйте разместить ароматизатор ближе к потоку воздуха, соблюдая инструкцию вашей модели — так аромат может ощущаться заметнее.',
-            'Здравствуйте! Благодарим за честную обратную связь. Сожалеем, что интенсивность аромата EIKOSHA не оправдала ваших ожиданий: эта композиция раскрывается мягко, а восприятие запахов у всех разное. Можно попробовать установить ароматизатор ближе к потоку воздуха в соответствии с инструкцией вашей модели. Надеемся, так аромат будет ощущаться лучше.',
-            'Здравствуйте! Спасибо, что поделились своим мнением об аромате. Нам искренне жаль, что он показался недостаточно выраженным. Для более заметного раскрытия мягкого аромата EIKOSHA попробуйте разместить ароматизатор ближе к потоку воздуха, следуя инструкции вашей модели. Желаем, чтобы дальнейшее использование оставило более приятное впечатление.',
         ], revision)
     product_text = (product.name + ' ' + product.category).lower()
     if cleaner_effectiveness_complaint(review, product):
@@ -179,6 +177,9 @@ def rule_reply(review, product, revision=0):
 
 
 def safe_fallback_reply(review, product, revision=0, facts=None):
+    guidance = product_usage_reply(review, product, facts if facts is not None else (getattr(product, 'facts', None) or []), revision)
+    if guidance:
+        return guidance
     analysis = analyze_customer_message(review.text, review.rating)
     if review.risk == 'NORMAL' and (analysis['buyer_asks_about_money'] or len(analysis['complaints']) > 1):
         return contextual_complaint_reply(analysis, revision) or official_support_reply()
@@ -187,18 +188,6 @@ def safe_fallback_reply(review, product, revision=0, facts=None):
     text = review.text.lower()
     product_text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     facts_text = ' '.join(str(f.get('text', '')) for f in (facts if facts is not None else (getattr(product, 'facts', None) or [])) if f.get('verification_status') == 'VERIFIED').lower()
-    if cleaner_effectiveness_complaint(review, product):
-        odor = any(marker in text for marker in ('воня', 'запах', 'аромат', 'пах'))
-        if 'распыл' in facts_text and ('30 секунд' in facts_text or '30 сек' in facts_text) and ('ткан' in facts_text or 'салфет' in facts_text):
-            odor_phrase = ' и его запах показался неприятным' if odor else ''
-            return _variant([
-                f'Здравствуйте! Спасибо за честный отзыв. Нам очень жаль, что результат использования вас разочаровал{odor_phrase}. Для лучшего эффекта применяйте средство по инструкции из карточки: сначала проверьте его на небольшом участке, распылите на поверхность, сильные загрязнения обработайте щёткой и оставьте на 30 секунд. Затем протрите участок чистой тканью или салфеткой и промойте водой. Надеемся, соблюдение этой последовательности поможет получить более заметный результат.',
-                f'Здравствуйте! Благодарим, что поделились опытом. Сожалеем, что средство не оправдало ожиданий{odor_phrase}. В карточке рекомендуется сначала проверить состав на незаметном участке, затем распылить его, обработать сильное загрязнение щёткой и выдержать 30 секунд. После этого поверхность нужно протереть чистой тканью или салфеткой и промыть водой. Надеемся, такой порядок применения повысит эффективность очистки.',
-                f'Здравствуйте! Спасибо за обратную связь. Нам жаль, что эффект средства вас не устроил{odor_phrase}. Чтобы средство сработало эффективнее, следуйте способу из карточки: тест на небольшом участке, распыление, обработка стойкого загрязнения щёткой и выдержка 30 секунд. Завершите обработку чистой тканью или салфеткой и промойте поверхность водой. Надеемся, повторное применение в этой последовательности даст лучший результат.',
-            ], revision)
-        if 'щетк' in facts_text or 'тряпк' in facts_text:
-            return 'Здравствуйте! Спасибо, что поделились результатом использования. Нам очень жаль, что средство не помогло с первого раза. В карточке товара указано, что для максимального эффекта поверхность следует обработать щёткой или тряпкой; рекомендуем повторить обработку по инструкции на упаковке и сначала проверить средство на незаметном участке. Надеемся, повторное применение по инструкции поможет добиться лучшего результата.'
-        return 'Здравствуйте! Спасибо, что поделились результатом использования. Нам очень жаль, что средство не помогло. Пожалуйста, повторите обработку строго по инструкции на упаковке и сначала проверьте средство на незаметном участке. Надеемся, повторное применение по инструкции поможет добиться лучшего результата.'
     if review.rating >= 4:
         if 'смол' in text or 'гудрон' in text:
             return 'Здравствуйте! Большое спасибо за такой приятный отзыв и рекомендацию! 😊 Очень рады, что очиститель отлично справился со смолой на кузове и результат вас порадовал. Пользуйтесь с удовольствием — пусть ваш автомобиль всегда радует чистотой! Будем рады видеть вас снова.'
