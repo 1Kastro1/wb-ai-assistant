@@ -8,7 +8,7 @@ from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, case, or_, not_, text as sql_text
 from .db import *
-from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint
+from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
 from .db import IS_SQLITE
@@ -296,11 +296,11 @@ def assess_reply(review, product, reply, verified_facts=None):
     intent = review_intent(review.text)
     combined_cleaner_complaint = cleaner_effectiveness_complaint(review, product)
     if intent == 'WRONG_ITEM':
-        if 'возврат' in lowered or 'вернуть' in lowered:
+        if any(x in lowered for x in ('извин', 'сожале', 'жаль')):
             score += 18
             breakdown['resolution']['score'] = 18
         else:
-            issues.append('объяснить возможность возврата неверного товара')
+            issues.append('извиниться за получение неверного товара')
     elif intent == 'NO_RESULT' or combined_cleaner_complaint:
         if any(x in lowered for x in ('инструкц', 'нанес', 'обработ', 'примен', 'распыл', 'протр')):
             score += 18
@@ -647,6 +647,7 @@ async def generate_draft(db, review_id, instruction=''):
         candidate = rule_reply(review, product, generation_revision + offset)
         if candidate and candidate not in rule_candidates:
             rule_candidates.append(validate_reply(mask_vin(candidate)))
+    rule_candidates = fresh_reply_variants(rule_candidates, initial_draft.text if initial_draft else '')
     reply = max(rule_candidates, key=lambda value: assess_reply(review, product, value, verified_facts)['score']) if rule_candidates else None
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
