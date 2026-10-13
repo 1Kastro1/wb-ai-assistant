@@ -78,12 +78,12 @@ class SpecificReviewDetailsTests(unittest.TestCase):
         self.assertIn('по Вашему опыту', answer)
         self.assertNotIn('точно', answer)
 
-    def test_positive_details_and_cleaning_instruction(self):
+    def test_five_star_positive_details_without_cleaning_instruction(self):
         self.product.name = 'Очиститель Profoam 1000'
         self.review.text = 'Масло и нагар на двигателе отмывает хорошо'
         answer = rule_reply(self.review, self.product, facts=[{'text':'Нанесите средство. Смойте водой.', 'verification_status':'VERIFIED'}])
         self.assertIn('результат очистки', answer)
-        self.assertIn('Смойте водой', answer)
+        self.assertNotIn('Смойте водой', answer)
 
     def test_polish_residue_after_correct_use_acknowledged(self):
         self.product.name = 'Полироль Cosmic'

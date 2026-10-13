@@ -31,10 +31,25 @@ class PositiveComparisonTests(unittest.TestCase):
             self.assertNotIn('совместим', answer)
             validate_reply(answer)
 
-    def test_blank_positive_cleaner_includes_verified_instruction_without_apology(self):
+    def test_blank_five_star_cleaner_omits_usage_instruction(self):
         answer = rule_reply(self.review, self.product, facts=[{'text':'Распылите средство на поверхность. Через 30 секунд протрите тканью.', 'verification_status':'VERIFIED'}])
-        self.assertIn('30 секунд', answer)
+        self.assertNotIn('30 секунд', answer)
+        self.assertNotIn('Распылите', answer)
+        self.assertIn('Profoam', answer)
         self.assertNotIn('Извините', answer)
+
+    def test_five_star_praise_omits_usage_but_keeps_concrete_detail(self):
+        self.review.text = 'Отмыл старый жир, отличный очиститель'
+        facts=[{'text':'Распылите средство. Через 30 секунд протрите тканью.', 'verification_status':'VERIFIED'}]
+        answer=rule_reply(self.review,self.product,facts=facts)
+        self.assertIn('результат очистки',answer)
+        self.assertNotIn('30 секунд',answer)
+
+    def test_five_star_complaint_and_question_keep_helpful_instruction(self):
+        facts=[{'text':'Распылите средство. Через 30 секунд протрите тканью.', 'verification_status':'VERIFIED'}]
+        for text in ('Не очищает', 'Как применять средство?'):
+            self.review.text=text
+            self.assertIn('30 секунд',rule_reply(self.review,self.product,facts=facts))
 
 
 if __name__ == '__main__':
