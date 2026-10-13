@@ -1,9 +1,10 @@
 import re
+from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply
 
 VIN = re.compile(r'\b[A-HJ-NPR-Z0-9]{17}\b', re.I)
 HIGH = ('хуже тормоз', 'плохо тормоз', 'ухудшен', 'провалива', 'дым', 'перегрев', 'заклини', 'утеч', 'скрежет', 'сильн', 'не тормоз', 'отказ тормоз')
 CRITICAL = ('тормоз', 'колод', 'суппорт', 'рулев', 'шаров', 'ступиц', 'подвеск', 'диск')
-FORBIDDEN = ('это нормально', 'притрутся', 'неправильно установили', 'плохие диски', 'точно брак', 'точно не брак', 'продолжайте ездить', 'гарантируем', 'компенсац', 'напишите продавцу', 'свяжитесь с продавцом', 'обратитесь к продавцу')
+FORBIDDEN = ('это нормально', 'притрутся', 'неправильно установили', 'плохие диски', 'точно брак', 'точно не брак', 'продолжайте ездить', 'гарантируем', 'компенсац')
 
 
 def _contains_any(value, phrases):
@@ -51,7 +52,9 @@ def origin_unclear_complaint(text):
     return origin and unclear and received
 
 
-def description_mismatch_reply(revision=0):
+def description_mismatch_reply(revision=0, text=''):
+    if text and not origin_unclear_complaint(text):
+        return contextual_complaint_reply(analyze_customer_message(text), revision)
     return _variant([
         'Здравствуйте! Приносим извинения за разочарование от покупки. Понимаем ваше недовольство: производитель должен быть ясно указан на товаре и упаковке. Спасибо, что рассказали о ситуации.',
         'Здравствуйте! Спасибо за отзыв. Извините, что покупка оставила неприятное впечатление. Понимаем, что вы рассчитывали получить товар, на котором производитель и маркировка указаны понятно.',
@@ -85,6 +88,8 @@ def validate_reply(text):
         raise ValueError('Полный VIN запрещён в публичном ответе')
     if any(x in text.lower() for x in FORBIDDEN):
         raise ValueError('Ответ содержит запрещённое обещание или небезопасное утверждение')
+    if re.search(r'(?:верн|возврат)\w*[^.!?]{0,45}(?:деньг|средств|стоим|оплат)|возмещ\w*[^.!?]{0,35}(?:расход|стоим)|(?:выплат|перевед|зачисл)[^.!?]{0,80}(?:счет|карт|деньг|руб|₽)|(?:нет|не имеете|отсутствуют)[^.!?]{0,25}(?:права|право)', text, re.I):
+        raise ValueError('Не обсуждать финансовые условия и не отрицать права покупателя')
     if re.search(r'заяв\w*[^.!?]{0,60}возврат|оформ\w*[^.!?]{0,30}возврат', text, re.I):
         raise ValueError('Не предлагать заявку на возврат в публичном ответе')
     if re.search(r'учт[её]м[^.!?]{0,140}(?:недостат|замечан|отзыв|информац|карточк|товар)|поможет точнее описывать', text, re.I):
@@ -92,7 +97,7 @@ def validate_reply(text):
     service_markers = (
         'previous_draft', 'review_data', 'detected_intent', 'owner_style_profile',
         'важно не повторять предыдущий', 'нужно сделать ответ', 'ответ должен быть содержательным',
-        'вот мой анализ', 'служебная инструкция', '/no_think',
+        'вот мой анализ', 'служебная инструкция', '/no_think', 'internal_analysis', 'primary_complaint', 'buyer_asks_about_money',
     )
     if any(marker in text.lower() for marker in service_markers):
         raise ValueError('Ответ содержит служебные рассуждения вместо текста покупателю')
@@ -100,6 +105,7 @@ def validate_reply(text):
         raise ValueError('Ответ содержит служебные рассуждения вместо текста покупателю')
     if re.search(r'совместимость\s+подтверждена|(?:точно|полностью|гарантированно)\s+под(?:ходит|ойдут)|подходит\s+(?:к|для|на)\s+ваш', text, re.I):
         raise ValueError('Подтверждать применяемость можно только по проверенному результату каталога')
+    text = re.sub(r'\b(вы|вас|вам|вами|ваш[а-я]*)\b', lambda m: m.group(0)[0].upper() + m.group(0)[1:], text, flags=re.I)
     return text.strip()
 
 
@@ -118,19 +124,24 @@ def cleaner_effectiveness_complaint(review, product):
 
 
 def rule_reply(review, product, revision=0):
+    analysis = analyze_customer_message(review.text, review.rating)
     if not review.text.strip():
         if review.rating >= 4:
             return 'Здравствуйте! Спасибо за вашу оценку. Рады, что вы выбрали наш товар!'
         return 'Здравствуйте! Спасибо за оценку. Нам искренне жаль, что товар не оправдал ваших ожиданий. Нам важно понять, что можно улучшить. Если будет возможность, дополните отзыв и расскажите, пожалуйста, что именно вас не устроило.'
-    if review_intent(review.text) == 'WRONG_ITEM':
+    if review_intent(review.text) == 'WRONG_ITEM' and len(analysis['complaints']) <= 1:
         return 'Здравствуйте! Приносим искренние извинения за то, что вам пришёл не тот товар. Понимаем ваше разочарование: вы ожидали получить именно выбранный товар. Спасибо, что сообщили нам об этой ситуации.'
     if review.risk == 'HIGH':
         return 'Здравствуйте! Спасибо, что сообщили о проблеме. Нам искренне жаль, что возникла такая ситуация. Описанные симптомы требуют проверки тормозной системы специалистом до дальнейшей эксплуатации. По отзыву установить причину невозможно. Пожалуйста, обратитесь в сервис для диагностики.'
     if review.risk == 'CAUTION':
         return 'Здравствуйте! Спасибо за обратную связь. Нам жаль, что после установки появился скрип. У скрипа тормозных колодок могут быть разные причины, и по одному отзыву установить их невозможно. Рекомендуем проверить тормозную систему и правильность установки в сервисе. После диагностики будет проще определить дальнейшие действия.'
+    if analysis['buyer_asks_about_money']:
+        return contextual_complaint_reply(analysis, revision) or official_support_reply()
+    if len(analysis['complaints']) > 1:
+        return None
     intent = review_intent(review.text)
     if intent == 'DESCRIPTION_MISMATCH':
-        return description_mismatch_reply(revision)
+        return description_mismatch_reply(revision, review.text)
     if review.rating >= 4 and intent == 'POSITIVE_EXPERIENCE' and any(x in review.text.lower() for x in ('пах', 'аромат', 'запах')):
         return _variant([
             'Здравствуйте! Спасибо за высокую оценку и за то, что поделились впечатлением. Очень рады, что аромат вам понравился. Благодарим за выбор нашего товара и желаем приятных поездок!',
@@ -160,12 +171,17 @@ def rule_reply(review, product, revision=0):
             f'Здравствуйте! Благодарим за обратную связь о товаре «{product.name}». Сожалеем, что результат использования вас разочаровал и запах средства оставил неприятное впечатление. Приносим извинения за неприятное впечатление от покупки. Спасибо, что рассказали о своём опыте.',
             f'Здравствуйте! Спасибо, что поделились мнением о товаре «{product.name}». Нам очень жаль, что средство вам не понравилось, в том числе из-за его запаха. Приносим извинения за разочарование от покупки. Благодарим за честную обратную связь.',
         ], revision)
+    if any(kind in analysis['complaints'] for kind in ('MISSING_PARTS', 'DAMAGED_ITEM', 'QUALITY_ISSUE', 'PACKAGING_ISSUE', 'DELIVERY_ISSUE', 'FITMENT_PROBLEM')):
+        return contextual_complaint_reply(analysis, revision)
     if review.rating >= 4 and any(x in review.text.lower() for x in ('смол', 'гудрон')) and 'очист' in product_text:
         return safe_fallback_reply(review, product)
     return None
 
 
 def safe_fallback_reply(review, product, revision=0, facts=None):
+    analysis = analyze_customer_message(review.text, review.rating)
+    if review.risk == 'NORMAL' and (analysis['buyer_asks_about_money'] or len(analysis['complaints']) > 1):
+        return contextual_complaint_reply(analysis, revision) or official_support_reply()
     if review_intent(review.text) == 'DESCRIPTION_MISMATCH' and review.risk == 'NORMAL':
         return description_mismatch_reply(revision)
     text = review.text.lower()
