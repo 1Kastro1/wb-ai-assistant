@@ -10,6 +10,7 @@ from sqlalchemy import select, func, case, or_, not_, text as sql_text
 from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint
 from .integrations import ollama, wb, web_research, provider_for
+from .generation_budget import GenerationBudget
 from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
 
@@ -585,7 +586,7 @@ async def generate_question_draft(db, question, instruction=''):
     ]
     candidates = []
     try:
-        candidates = await ollama.reply_variants(messages, MIN_AI_CANDIDATES)
+        candidates = await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
     except Exception:
         candidates = []
     checked = []
@@ -711,8 +712,9 @@ async def generate_draft(db, review_id, instruction=''):
         attempt_messages = messages
         last_candidate = ''
         model_unavailable = False
+        budget = GenerationBudget()
         try:
-            seed_candidates = await ollama.reply_variants(messages, MIN_AI_CANDIDATES)
+            seed_candidates = await budget.run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
         except Exception:
             # A connection failure should immediately use the safe local path instead
             # of holding the browser open for several identical network retries.
@@ -722,7 +724,7 @@ async def generate_draft(db, review_id, instruction=''):
             if model_unavailable:
                 break
             try:
-                last_candidate = seed_candidates[attempt] if attempt < len(seed_candidates) else await ollama.chat(attempt_messages)
+                last_candidate = seed_candidates[attempt] if attempt < len(seed_candidates) else await budget.run(lambda: ollama.chat(attempt_messages))
                 checked_candidate = validate_reply(mask_vin(last_candidate))
                 candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates], verified_facts)
                 repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
@@ -737,6 +739,9 @@ async def generate_draft(db, review_id, instruction=''):
                     break
                 if candidate_quality['score'] >= MIN_DRAFT_QUALITY:
                     issues.append('создать ещё один самостоятельный вариант, чтобы выбрать лучший')
+            except TimeoutError:
+                # Keep the best checked candidate or the existing safe fallback.
+                break
             except Exception as error:
                 # Ollama may be temporarily unavailable or may produce a reply that
                 # violates a hard rule. Retry with the concrete validation feedback.
