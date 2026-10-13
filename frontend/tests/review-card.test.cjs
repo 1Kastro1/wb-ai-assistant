@@ -38,6 +38,7 @@ test('product knowledge card renders its own thumbnail',()=>{
  const html=renderToStaticMarkup(React.createElement(KnowledgeCard,{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp',facts:[]},busy:false,owner:false,canManage:true,onDiscuss(){},onRefresh(){},onRun(){}}));
  assert(html.includes('src="https://example.com/card.webp"'));
  assert(html.includes('product-identity'));
- const otherStart=page.indexOf('function SyncSummary'),otherEnd=page.indexOf('function QuestionCard',otherStart);
+ const otherStart=page.indexOf('function SyncStatus'),otherEnd=page.indexOf('function QuestionCard',otherStart);
+ assert(otherStart>=0&&otherEnd>otherStart);
  assert(!page.slice(otherStart,otherEnd).includes('ProductThumbnail'));
 });
