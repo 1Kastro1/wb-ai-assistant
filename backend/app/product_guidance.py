@@ -4,7 +4,54 @@ import re
 
 def is_cleaner(product):
     text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
-    return any(x in text for x in ('очистител', 'чистящ', 'моющ', 'пятновывод', 'химчист', 'бытовая хим', 'автохим'))
+    return any(x in text for x in ('очистител', 'чистящ', 'моющ', 'пятновывод', 'химчист', 'бытовая хим', 'автохим', 'полироль', 'воск автомобильный'))
+
+
+def positive_detail(text):
+    """Acknowledge the buyer's experience without asserting new product facts."""
+    value = text.lower().replace('ё', 'е')
+    details = []
+    if any(x in value for x in ('аромат', 'запах', 'пахнет', 'пахн')):
+        details.append('аромат Вам понравился')
+    if 'пенится' in value:
+        details.append('Вы отметили хорошее пенообразование')
+    if any(x in value for x in ('отмывает', 'отмыл', 'чистит', 'очистил', 'нагар', 'гудрон', 'смол')):
+        details.append('результат очистки Вас порадовал')
+    elif any(x in value for x in ('отработал', 'работает', 'рабочими')):
+        details.append('Вы довольны работой товара')
+    if any(x in value for x in ('подош', 'встали как родные')):
+        details.append('установка прошла успешно по Вашему опыту')
+    if any(x in value for x in ('качеств', 'на совесть', 'клапан', 'резьба')):
+        details.append('Вы оценили качество товара')
+    if 'соответствует описанию' in value:
+        details.append('товар соответствует Вашим ожиданиям и описанию')
+    if any(x in value for x in ('третий раз', 'не первый раз', 'пользуюсь давно')):
+        details.append('Вы снова выбираете этот товар')
+    if any(x in value for x in ('вовремя', 'во время')):
+        details.append('заказ пришёл вовремя')
+    return 'Рады, что ' + ' и '.join(details[:2]) + '.' if details else 'Рады, что покупка Вам понравилась.'
+
+
+def positive_review_reply(review, product, revision=0):
+    from .reply_policy import analyze_customer_message
+    analysis = analyze_customer_message(review.text, review.rating)
+    if review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed'):
+        return None
+    thanks = ['Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.'][int(revision) % 3]
+    return 'Здравствуйте! ' + thanks + ' ' + positive_detail(review.text) + ' Благодарим за выбор нашего магазина и желаем приятного использования!'
+
+
+def battery_voltage_answer(question, product):
+    """Conditional general benchmark; never claim this unit's measured charge."""
+    name, text = product.name.lower(), question.text.lower()
+    if 'аккумулятор' not in name or not ('клемм' in text and any(x in text for x in ('вольт', 'напряжен'))):
+        return None
+    if any(x in name for x in ('литиев', 'литий', '24в', '24 в', '6в', '6 в')):
+        return None
+    return {
+        'answer': 'Здравствуйте! Если речь о 12-вольтовом свинцово-кислотном аккумуляторе, ориентир для полностью заряженного АКБ в покое — примерно 12,6–12,8 В на клеммах. Номинальные 12 В и фактически измеренное напряжение заряда — разные показатели. При покупке попросите проверить напряжение мультиметром: заряд конкретного экземпляра нельзя определить по названию товара.',
+        'source': {'text': 'Общий ориентир GS Yuasa: полностью заряженный 12-вольтовый АКБ в покое — примерно 12,6–12,8 В; это не измерение продаваемого экземпляра.', 'source': 'https://www.yuasa.com/en-it/faq/question/view/id/464/', 'verification_status': 'VERIFIED', 'source_type': 'technical_reference'},
+    }
 
 
 def usage_excerpt(facts):
@@ -41,6 +88,15 @@ def product_usage_reply(review, product, facts, revision=0):
     complaints = set(analysis['complaints'])
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     text = review.text.lower().replace('ё', 'е')
+    if complaints & {'LEAKAGE', 'PACKAGING_ISSUE'} and not complaints - {'LEAKAGE', 'PACKAGING_ISSUE', 'ODOR_COMPLAINT'}:
+        parts = ['Здравствуйте! Спасибо за отзыв.']
+        if analysis['sentiment'] == 'mixed':
+            parts.append('Рады, что само средство Вам понравилось.')
+        parts.append('Приносим извинения за ненадлежащее состояние упаковки' + (' и протечку средства.' if 'LEAKAGE' in complaints else '.'))
+        if 'ODOR_COMPLAINT' in complaints:
+            parts.append('Ваше замечание о неприятном запахе также требует проверки; по отзыву нельзя подтвердить причину или подмену товара.')
+        parts.append('Для проверки обратитесь в официальную поддержку маркетплейса с фотографиями упаковки, крышки и описанием проблемы.')
+        return ' '.join(parts)
     halogen = 'ламп' in name and 'галоген' in name
     dim = any(marker in text for marker in ('тускл', 'слабо свет', 'свет слаб')) and not re.search(r'(?<!\w)не\s+тускл', text)
     if halogen and dim and not complaints - {'DESCRIPTION_MISMATCH', 'NO_RESULT', 'DIM_LIGHT'}:
@@ -50,7 +106,7 @@ def product_usage_reply(review, product, facts, revision=0):
         color = ' и жёлтым' if 'желт' in text else ''
         return f'Здравствуйте! {thanks} Извините, что свет оказался тусклым{color} и не оправдал Ваших ожиданий. При недостаточном напряжении питания галогенная лампа светит слабее — это одна из возможных причин, которую стоит проверить. Рекомендуем в сервисе проверить напряжение на лампах и их установку, а также сверить маркировку с заявленными характеристиками.'
     cleaner_quality = is_cleaner(product) and any(marker in text for marker in ('плохое качество', 'качество плохое', 'некачеств'))
-    allowed_complaints = {'NO_RESULT', 'ODOR_COMPLAINT', 'WEAK_SCENT'} | ({'QUALITY_ISSUE'} if cleaner_quality else set())
+    allowed_complaints = {'NO_RESULT', 'ODOR_COMPLAINT', 'WEAK_SCENT'} | ({'QUALITY_ISSUE'} if cleaner_quality else set()) | ({'RESIDUE'} if 'полироль' in name else set())
     if complaints - allowed_complaints:
         return None
     smoke_product = any(marker in name for marker in ('дымовая шашка', 'паровая шашка'))
@@ -78,19 +134,26 @@ def product_usage_reply(review, product, facts, revision=0):
             parts.append('Нам жаль, что запах Вам не подошёл; восприятие ароматов индивидуально, поэтому можно выбрать другую композицию по Вашим предпочтениям.')
         return ' '.join(parts)
     if is_cleaner(product):
+        if 'набор' in name:
+            if analysis['sentiment'] == 'positive':
+                return positive_review_reply(review, product, revision) + ' Для каждого средства в наборе соблюдайте инструкцию на его упаковке.'
+            return intro + ' Извините, что результат Вас разочаровал. Уточните, пожалуйста, какое средство из набора Вы применяли и что обрабатывали: инструкции для разных составов могут отличаться.'
         instruction = usage_excerpt(facts)
         parts = [intro]
-        if analysis['sentiment'] == 'negative':
+        if 'RESIDUE' in complaints:
+            parts.append('Извините, что после полировки остались белые разводы и жирный слой, хотя Вы выполняли полировку по инструкции.')
+        elif analysis['sentiment'] == 'negative':
             concern = 'качество средства Вас разочаровало' if cleaner_quality else 'результат очистки Вас разочаровал'
             parts.append('Извините, что ' + concern + (' и запах оказался неприятным.' if 'ODOR_COMPLAINT' in complaints else '.'))
         elif analysis['sentiment'] == 'positive':
-            successful_cleaning = any(marker in text for marker in ('чистит', 'очистил', 'отмыл', 'справил', 'пятн', 'гудрон', 'смол'))
-            parts.append('Рады, что средство помогло справиться с загрязнениями.' if successful_cleaning else 'Рады, что Вы остались довольны покупкой.')
+            parts.append(positive_detail(review.text))
         if instruction:
-            already_followed = any(marker in text for marker in ('по инструкции', 'по инструкц', 'согласно инструкц'))
+            already_followed = any(marker in text for marker in ('по инструкции', 'по инструкц', 'согласно инструкц', 'все правильно'))
             prefix = 'Вы уже следовали инструкции; для сверки приведём способ применения производителя: ' if already_followed else 'Рекомендуем соблюдать способ применения и время выдержки, указанные производителем: '
             parts.append(prefix + instruction)
-            if analysis['sentiment'] == 'negative':
+            if 'RESIDUE' in complaints:
+                parts.append('Если разводы сохраняются, уточните, пожалуйста, на какой поверхности они остались, и обратитесь в официальную поддержку для проверки.')
+            elif analysis['sentiment'] == 'negative':
                 parts.append('Пожалуйста, уточните поверхность и загрязнение, с которыми не удалось справиться.' if already_followed else 'Если результат после применения по инструкции Вас не устроит, уточните, пожалуйста, поверхность и загрязнение, с которыми не удалось справиться.')
         else:
             parts.append('Для применения сверяйтесь с инструкцией именно на Вашей упаковке: допустимая поверхность, дозировка, время выдержки и способ удаления средства могут различаться у разных составов.')

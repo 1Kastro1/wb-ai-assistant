@@ -1,5 +1,5 @@
 import re
-from .product_guidance import product_usage_reply, is_cleaner
+from .product_guidance import product_usage_reply, is_cleaner, positive_review_reply
 from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons
 
 VIN = re.compile(r'\b[A-HJ-NPR-Z0-9]{17}\b', re.I)
@@ -134,7 +134,7 @@ def rule_reply(review, product, revision=0, facts=None):
         if review.rating >= 4:
             from .product_guidance import usage_excerpt
             trusted_facts = facts if facts is not None else (getattr(product, 'facts', None) or [])
-            if is_cleaner(product) and usage_excerpt(trusted_facts):
+            if is_cleaner(product) and 'набор' not in product.name.lower() and usage_excerpt(trusted_facts):
                 return product_usage_reply(review, product, trusted_facts, revision)
             name = getattr(product, 'name', 'товар')[:120]
             return _variant([
@@ -154,6 +154,9 @@ def rule_reply(review, product, revision=0, facts=None):
     guidance = product_usage_reply(review, product, facts if facts is not None else (getattr(product, 'facts', None) or []), revision)
     if guidance:
         return guidance
+    positive = positive_review_reply(review, product, revision)
+    if positive:
+        return positive
     if len(analysis['complaints']) > 1:
         return None
     intent = review_intent(review.text)
@@ -204,9 +207,7 @@ def safe_fallback_reply(review, product, revision=0, facts=None):
     product_text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     facts_text = ' '.join(str(f.get('text', '')) for f in (facts if facts is not None else (getattr(product, 'facts', None) or [])) if f.get('verification_status') == 'VERIFIED').lower()
     if review.rating >= 4 and analysis['sentiment'] not in ('negative', 'mixed'):
-        if 'смол' in text or 'гудрон' in text:
-            return 'Здравствуйте! Большое спасибо за такой приятный отзыв и рекомендацию! 😊 Очень рады, что очиститель отлично справился со смолой на кузове и результат вас порадовал. Пользуйтесь с удовольствием — пусть ваш автомобиль всегда радует чистотой! Будем рады видеть вас снова.'
-        return 'Здравствуйте! Большое спасибо за ваш тёплый отзыв и высокую оценку! 😊 Очень рады, что товар вас порадовал. Пользуйтесь с удовольствием, а мы будем рады видеть вас снова!'
+        return positive_review_reply(review, product, revision)
     return _variant([
         'Здравствуйте! Спасибо за отзыв. Извините, что покупка не оправдала Ваших ожиданий. Уточните, пожалуйста, что именно Вас не устроило, чтобы можно было дать подходящую рекомендацию.',
         'Здравствуйте! Благодарим за обратную связь. Приносим извинения за разочарование от покупки. Расскажите, пожалуйста, в чём проявилась проблема с товаром, чтобы можно было разобраться в Вашей ситуации.',
