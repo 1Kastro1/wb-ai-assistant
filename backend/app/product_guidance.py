@@ -9,8 +9,13 @@ def is_cleaner(product):
 
 def usage_excerpt(facts):
     """Keep actual instructions, including model-specific times and restrictions."""
+    from .verified_instructions import prefer_manufacturer_instructions
+    facts = prefer_manufacturer_instructions(facts or [])
+    primary = [f for f in facts if f.get('kind') == 'instruction' and f.get('source_type') == 'manufacturer']
+    if primary:
+        facts = primary
     result = []
-    for fact in facts or []:
+    for fact in facts:
         if fact.get('verification_status') != 'VERIFIED':
             continue
         text = str(fact.get('text', '')).strip()
@@ -23,7 +28,7 @@ def usage_excerpt(facts):
             if not sentence:
                 continue
             action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
-            if (heading or action) and sentence not in result and len(' '.join(result + [sentence])) <= 900:
+            if (heading or action) and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
                 result.append(sentence)
     return '; '.join(sentence.rstrip('.') for sentence in result) + ('.' if result else '')
 

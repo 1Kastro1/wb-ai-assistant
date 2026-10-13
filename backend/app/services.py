@@ -1,4 +1,5 @@
 from .product_guidance import usage_excerpt, product_usage_reply
+from .verified_instructions import prefer_manufacturer_instructions
 import difflib
 import json
 import re
@@ -40,7 +41,7 @@ def trusted_product_facts(db, product):
         host = (parsed.hostname or '').lower()
         if parsed.scheme == 'https' and official and (host == official or host.endswith('.' + official)):
             result.append(fact)
-    return result
+    return prefer_manufacturer_instructions(result)
 
 
 def draft_public(db, draft):
@@ -317,6 +318,7 @@ def assess_reply(review, product, reply, verified_facts=None):
             str(fact.get('text', '')) for fact in (verified_facts if verified_facts is not None else (getattr(product, 'facts', None) or []))
             if fact.get('verification_status') == 'VERIFIED'
         ).lower().replace('ё', 'е')
+        verified_facts_text = usage_excerpt(verified_facts if verified_facts is not None else (getattr(product, 'facts', None) or [])).lower().replace('ё', 'е')
         missing_steps = []
         if 'распыл' in verified_facts_text and 'распыл' not in lowered:
             missing_steps.append('распыление')
