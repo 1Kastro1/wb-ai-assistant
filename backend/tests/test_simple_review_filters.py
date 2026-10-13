@@ -3,7 +3,7 @@ import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from app.db import Product, Review, Draft
-from app.services import _review_query
+from app.services import _review_query,review_filter_counts
 
 
 class SimpleReviewFilterTests(unittest.TestCase):
@@ -41,6 +41,11 @@ class SimpleReviewFilterTests(unittest.TestCase):
         self.assertEqual(len(self.ids('all')),7)
         self.assertEqual(self.ids('positive',q='Great'),{'five'})
         self.assertEqual(self.ids('rating_only',account_id='another-store'),set())
+
+    def test_counts_are_for_full_results_and_store(self):
+        self.assertEqual(review_filter_counts(self.db),{'all':7,'positive':4,'negative':3,'rating_only':3,'manual':2})
+        self.assertEqual(review_filter_counts(self.db,q='Great')['positive'],1)
+        self.assertEqual(review_filter_counts(self.db,account_id='another-store')['all'],0)
 
 
 if __name__=='__main__':

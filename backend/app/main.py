@@ -23,7 +23,7 @@ from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for, web_research
-from .services import reviews_search, reviews_page, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public
+from .services import reviews_search, reviews_page, review_filter_counts, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
@@ -974,7 +974,7 @@ async def run_sync_job(job_id):
                         'failures': failures,
                         'message': f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
                         'proposal_id': proposal_id,
-                        **({'draft': single_draft} if is_single else {}),
+                        **({'draft': single_draft, 'selected_ids': selected_ids} if is_single else {}),
                     }
                 else:
                     store = db.get(StoreProfile, account_id)
@@ -1298,6 +1298,20 @@ def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_ratin
 @app.get('/reviews/page')
 def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = ''):
     return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids)
+
+
+@app.get('/reviews/counts')
+def review_counts(auth: AUTH, db: DB, q: str = ''):
+    return review_filter_counts(db, q=q, account_id=active_store(db, auth))
+
+
+@app.get('/drafts/{did}')
+def current_draft(did: str, auth: AUTH, db: DB):
+    item = db.get(Draft, did)
+    review = db.get(Review, item.review_id) if item else None
+    if not review or review.wb_account_id != active_store(db, auth):
+        raise HTTPException(404, 'Черновик не найден')
+    return draft_public(db, item)
 
 
 @app.get('/questions/page')

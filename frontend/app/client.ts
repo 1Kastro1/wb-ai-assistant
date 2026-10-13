@@ -11,7 +11,7 @@ export async function api(path:string,method='GET',body?:unknown,timeoutMs=18000
     const response=await fetch(API+path,{method,credentials:'include',signal:controller.signal,headers:{...(multipart?{}:{'Content-Type':'application/json'}),'X-CSRF-Token':csrf},body:body===undefined?undefined:multipart?body:JSON.stringify(body)});
     const raw=await response.text();let result:any={};
     try{result=raw?JSON.parse(raw):{}}catch{throw new Error(response.ok?'Сервер вернул некорректный ответ':'Сервер временно не ответил. Повторите попытку.')}
-    if(!response.ok)throw new Error(result.detail||'Не удалось выполнить запрос');return result;
+    if(!response.ok){const error:any=new Error(result.detail||'Не удалось выполнить запрос');error.status=response.status;throw error;}return result;
   }catch(error){
     if(controller.signal.aborted)throw new Error('Сервер не ответил вовремя. Проверьте соединение. Если задание уже запущено, его состояние доступно в разделе «Задачи».');
     throw error;
