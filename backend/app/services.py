@@ -85,6 +85,7 @@ def _addresses_review_topic(review_text, reply_text):
         (('вовремя', 'во время'), ('вовремя', 'достав')),
         (('пенится',), ('пенообраз', 'пенится')),
         (('соответствует описанию',), ('соответств', 'описан')),
+        (('понравил',), ('понравил', 'порад')),
         (('протек', 'потек', 'крышка'), ('протеч', 'упаков', 'крышк')),
         (('развод', 'вазелин'), ('развод', 'жирный слой')),
         (('воня', 'запах', 'аромат', 'пах'), ('воня', 'запах', 'аромат', 'пах')),
@@ -350,7 +351,7 @@ def assess_reply(review, product, reply, verified_facts=None):
     if reply.strip().lower() in ('спасибо за отзыв!', 'спасибо за отзыв.', 'спасибо!'):
         score = min(score, 35)
         issues.append('слишком общий ответ')
-    if review.rating >= 4 and intent in ('POSITIVE_EXPERIENCE', 'GENERAL') and (intent == 'POSITIVE_EXPERIENCE' or any(x in review.text.lower().replace('ё','е') for x in ('соответствует описанию', 'все подошло', 'все понравилось', 'работает отлично', 'хорошее качество'))):
+    if review.rating >= 4 and not analysis['complaints'] and intent in ('POSITIVE_EXPERIENCE', 'GENERAL') and (intent == 'POSITIVE_EXPERIENCE' or any(x in review.text.lower().replace('ё','е') for x in ('соответствует описанию', 'все подошло', 'все понравилось', 'работает отлично', 'хорошее качество'))):
         if any(x in lowered for x in ('жаль', 'сожале', 'извин', 'не оправдал', 'разочаровал', 'показался слаб', 'недостаточно выражен')) or re.search(r'(?<!\w)не\s+понравил', lowered):
             score = min(score, 70)
             issues.append('не трактовать положительный отзыв как жалобу')
@@ -358,7 +359,7 @@ def assess_reply(review, product, reply, verified_facts=None):
         elif any(x in lowered for x in ('ближе к потоку воздуха', 'аромат будет ощущаться лучше')):
             score = min(score, 80)
             issues.append('не предлагать решение проблемы, которой покупатель не описал')
-    if review.rating >= 4 and intent in ('WRONG_ITEM','MISSING_PARTS','DAMAGED_ITEM','FITMENT_PROBLEM','NO_RESULT','ODOR_COMPLAINT','WEAK_SCENT','DESCRIPTION_MISMATCH','PACKAGING_ISSUE','DELIVERY_ISSUE'):
+    if review.rating >= 4 and analysis['sentiment'] != 'mixed' and intent in ('WRONG_ITEM','MISSING_PARTS','DAMAGED_ITEM','FITMENT_PROBLEM','NO_RESULT','ODOR_COMPLAINT','WEAK_SCENT','DESCRIPTION_MISMATCH','PACKAGING_ISSUE','DELIVERY_ISSUE'):
         score = min(score, 80)
         issues.append('оценка и текст отзыва противоречат друг другу — проверьте тон вручную')
     if review.rating <= 2 and intent == 'POSITIVE_EXPERIENCE':
