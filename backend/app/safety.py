@@ -1,6 +1,6 @@
 import re
 from .product_guidance import product_usage_reply, is_cleaner
-from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply
+from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons
 
 VIN = re.compile(r'\b[A-HJ-NPR-Z0-9]{17}\b', re.I)
 HIGH = ('хуже тормоз', 'плохо тормоз', 'ухудшен', 'провалива', 'дым', 'перегрев', 'заклини', 'утеч', 'скрежет', 'сильн', 'не тормоз', 'отказ тормоз')
@@ -15,7 +15,7 @@ def _contains_any(value, phrases):
 
 
 def review_intent(text):
-    value = ' '.join(text.lower().replace('ё', 'е').split())
+    value = ' '.join(strip_other_product_comparisons(text).lower().replace('ё', 'е').split())
     if _contains_any(value, ('не тот товар', 'другой товар', 'пришел не тот', 'прислали не тот', 'получил не тот')):
         return 'WRONG_ITEM'
     if _contains_any(value, ('нет детал', 'не хватает', 'неполная комплектац', 'не доложили')):
@@ -40,7 +40,7 @@ def review_intent(text):
         return 'DELIVERY_ISSUE'
     if any(x in value for x in ('как пользоваться', 'как использовать', 'как применять', 'как наносить', 'способ применения', 'подскажите')) or '?' in value:
         return 'USAGE_QUESTION'
-    if _contains_any(value, ('отличный', 'понравил', 'рекомендую', 'справился', 'помог', 'подошел', 'хороший товар', 'все супер', 'всё супер', 'приятн', 'ненавязчив')):
+    if _contains_any(value, ('отличный', 'понравил', 'рекомендую', 'справился', 'помог', 'подошел', 'хороший товар', 'все супер', 'всё супер', 'супер', 'чистит все', 'очистил', 'отмыл', 'приятн', 'ненавязчив')):
         return 'POSITIVE_EXPERIENCE'
     return 'GENERAL'
 
@@ -132,7 +132,16 @@ def rule_reply(review, product, revision=0, facts=None):
     analysis = analyze_customer_message(review.text, review.rating)
     if not review.text.strip():
         if review.rating >= 4:
-            return 'Здравствуйте! Спасибо за вашу оценку. Рады, что вы выбрали наш товар!'
+            from .product_guidance import usage_excerpt
+            trusted_facts = facts if facts is not None else (getattr(product, 'facts', None) or [])
+            if is_cleaner(product) and usage_excerpt(trusted_facts):
+                return product_usage_reply(review, product, trusted_facts, revision)
+            name = getattr(product, 'name', 'товар')[:120]
+            return _variant([
+                f'Здравствуйте! Спасибо за высокую оценку товара «{name}». Нам приятно, что Вы выбрали наш магазин. Желаем Вам приятного использования!',
+                f'Здравствуйте! Благодарим за оценку товара «{name}». Рады, что Вы остались довольны покупкой. Спасибо за доверие и желаем приятного использования!',
+                f'Здравствуйте! Спасибо, что оценили товар «{name}». Ваша обратная связь важна для нас. Желаем Вам приятного использования и благодарим за выбор!',
+            ], revision)
         return 'Здравствуйте! Спасибо за оценку. Нам искренне жаль, что товар не оправдал ваших ожиданий. Нам важно понять, что можно улучшить. Если будет возможность, дополните отзыв и расскажите, пожалуйста, что именно вас не устроило.'
     if review_intent(review.text) == 'WRONG_ITEM' and len(analysis['complaints']) <= 1:
         return 'Здравствуйте! Приносим искренние извинения за то, что вам пришёл не тот товар. Понимаем ваше разочарование: вы ожидали получить именно выбранный товар. Спасибо, что сообщили нам об этой ситуации.'

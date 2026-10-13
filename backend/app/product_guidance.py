@@ -84,7 +84,8 @@ def product_usage_reply(review, product, facts, revision=0):
             concern = 'качество средства Вас разочаровало' if cleaner_quality else 'результат очистки Вас разочаровал'
             parts.append('Извините, что ' + concern + (' и запах оказался неприятным.' if 'ODOR_COMPLAINT' in complaints else '.'))
         elif analysis['sentiment'] == 'positive':
-            parts.append('Рады, что Вы остались довольны покупкой.')
+            successful_cleaning = any(marker in text for marker in ('чистит', 'очистил', 'отмыл', 'справил', 'пятн', 'гудрон', 'смол'))
+            parts.append('Рады, что средство помогло справиться с загрязнениями.' if successful_cleaning else 'Рады, что Вы остались довольны покупкой.')
         if instruction:
             already_followed = any(marker in text for marker in ('по инструкции', 'по инструкц', 'согласно инструкц'))
             prefix = 'Вы уже следовали инструкции; для сверки приведём способ применения производителя: ' if already_followed else 'Рекомендуем соблюдать способ применения и время выдержки, указанные производителем: '

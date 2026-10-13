@@ -9,9 +9,12 @@ from .safety import rule_reply, safe_fallback_reply, validate_reply, mask_vin, f
 from .services import trusted_product_facts, assess_reply, edit_draft, generate_draft
 
 
-async def refresh_unsent_drafts(db):
-    ids = list(db.scalars(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
-        Review.is_answered == False, Review.status != 'publishing').order_by(Draft.id)))
+async def refresh_unsent_drafts(db, include_questions=True):
+    query = select(Draft.id).join(Review, Review.id == Draft.review_id).where(
+        Review.is_answered == False, Review.status != 'publishing')
+    if not include_questions:
+        query = query.where(~Review.marketplace.like('%_question'))
+    ids = list(db.scalars(query.order_by(Draft.id)))
     backup = Path('/data') / ('drafts-before-owner-policy-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '.json')
     backup.write_text(json.dumps([{'id': d.id, 'review_id': d.review_id, 'revision': d.revision, 'text': d.text,
                                   'model': d.model, 'quality': d.quality, 'edits': d.edits}
@@ -36,6 +39,12 @@ async def refresh_unsent_drafts(db):
             candidates = [validate_reply(mask_vin(candidate)) for candidate in candidates if candidate]
             if not candidates:
                 candidates = [validate_reply(mask_vin(safe_fallback_reply(review, product, draft.revision, facts)))]
+            if draft.text in candidates:
+                draft.quality = assess_reply(review, product, draft.text, facts)
+                review.status = 'manual_review' if review.manual or not draft.quality.get('passed') else 'draft_ready'
+                db.commit()
+                counts['already_correct'] += 1
+                continue
             candidates = fresh_reply_variants(candidates, draft.text)
             answer = max(candidates, key=lambda value: assess_reply(review, product, value, facts)['score'])
             if answer == draft.text:

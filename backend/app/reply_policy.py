@@ -2,6 +2,15 @@ import re
 from pathlib import Path
 
 
+def strip_other_product_comparisons(text):
+    """Ignore failures attributed to other cleaners, retaining this item's complaints."""
+    effect = r'(?:помог\w*|очист\w*|отмы\w*|справ\w*)'
+    other = r'друг(?:ие|ое|ой|ая)(?:\s+(?:средств\w*|очистител\w*|состав\w*|хими\w*|продукт\w*))?'
+    text = re.sub(r'(?<!\w)не\s+' + effect + r'[^,.!?;\n]{0,60}\b' + other + r'(?=\s*[,.:!?;\n]|$)', ' ', text, flags=re.I)
+    text = re.sub(r'\bдруг(?:ие|ое|ой|ая)\s+(?:средств\w*|очистител\w*|состав\w*|хими\w*)\s+не\s+' + effect, ' ', text, flags=re.I)
+    return text
+
+
 COMPLAINT_PATTERNS = {
     'WRONG_ITEM': ('не тот товар', 'другой товар', 'пришел не тот', 'прислали не тот'),
     'MISSING_PARTS': ('не хватает', 'нет детал', 'неполная комплектац', 'не доложили', 'недостает'),
@@ -34,7 +43,7 @@ TOPIC_WORDS = {
 
 def analyze_customer_message(text, rating=None):
     """Conservative internal hints; the complete buyer text remains model input."""
-    value = ' '.join((text or '').lower().replace('ё', 'е').split())
+    value = ' '.join(strip_other_product_comparisons(text or '').lower().replace('ё', 'е').split())
     def matches(marker):
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
