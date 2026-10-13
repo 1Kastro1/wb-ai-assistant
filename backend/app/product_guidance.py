@@ -110,6 +110,11 @@ def product_usage_reply(review, product, facts, revision=0):
     if complaints - allowed_complaints:
         return None
     smoke_product = any(marker in name for marker in ('дымовая шашка', 'паровая шашка'))
+    if smoke_product:
+        from .steam_deo_guidance import steam_deo_reply
+        reviewed_reply = steam_deo_reply(review, product, revision)
+        if reviewed_reply:
+            return reviewed_reply
     no_smoke = bool(re.search(r'(?:дым|пар)\w*\s+(?:так и\s+)?не\s+(?:пош|ид|появ|выдел)|нет\s+(?:дыма|пара)|не\s+(?:пош|появ)\w*\s+(?:дым|пар)', text))
     if smoke_product and no_smoke and not complaints - {'NO_RESULT'}:
         thanks = ['Спасибо за отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что рассказали о ситуации.'][int(revision) % 3]

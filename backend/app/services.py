@@ -41,6 +41,8 @@ def trusted_product_facts(db, product):
         host = (parsed.hostname or '').lower()
         if parsed.scheme == 'https' and official and (host == official or host.endswith('.' + official)):
             result.append(fact)
+    from .steam_deo_guidance import reviewed_steam_facts
+    result.extend(fact for fact in reviewed_steam_facts(product) if fact not in result)
     return prefer_manufacturer_instructions(result)
 
 
