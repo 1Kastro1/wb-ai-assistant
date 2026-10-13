@@ -1,6 +1,7 @@
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
 import difflib
+import asyncio
 import json
 import re
 from collections import Counter
@@ -281,6 +282,11 @@ def reviews_page(db, **filters):
     rows = reviews_search(db, **{**filters, 'limit': limit, 'offset': offset})
     total = db.scalar(_review_query(filters).with_only_columns(func.count()).order_by(None)) or 0
     return {'items': rows, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(rows) < total}
+
+
+def review_filter_counts(db, q='', account_id=''):
+    return {view: db.scalar(select(func.count()).select_from(_review_query({'view':view,'q':q,'account_id':account_id}).subquery())) or 0
+            for view in ('all','positive','negative','rating_only','manual')}
 
 
 def assess_reply(review, product, reply, verified_facts=None):
@@ -598,12 +604,12 @@ async def generate_question_draft(db, question, instruction=''):
     intent = question_intent(question.text)
     if intent == 'применение' and not has_usage_instruction(verified_facts):
         try:
-            found = cached_web_instruction_sources(product) or await web_research.search_instructions(product, db)
+            found = cached_web_instruction_sources(product) or await asyncio.wait_for(web_research.search_instructions(product, db), timeout=8)
             if found:
                 remember_web_instruction_sources(product, found)
                 db.commit()
                 sources.extend([{**item, 'verification_status':'WEB_UNVERIFIED'} for item in found[:3]])
-        except ValueError:
+        except (ValueError, TimeoutError):
             pass
     examples = []
     previous = db.scalars(select(Review).where(Review.marketplace.like('%_question'), Review.product_id == question.product_id, Review.is_answered == True, Review.id != question.id).order_by(Review.created_at.desc()).limit(5))
@@ -733,10 +739,10 @@ async def generate_draft(db, review_id, instruction=''):
             web_sources = cached_web_instruction_sources(product)
             try:
                 if not web_sources:
-                    web_sources = await web_research.search_instructions(product, db)
+                    web_sources = await asyncio.wait_for(web_research.search_instructions(product, db), timeout=8)
                     remember_web_instruction_sources(product, web_sources)
                     db.commit()
-            except ValueError:
+            except (ValueError, TimeoutError):
                 web_sources = []
                 web_search_failed = True
         messages = [

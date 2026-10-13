@@ -6,6 +6,9 @@ import MarketplaceConnection from './MarketplaceConnection';
 import MarketplaceSwitcher from './MarketplaceSwitcher';
 import MarketplaceOverview from './MarketplaceOverview';
 import WorkQueue from './WorkQueue';
+import ReviewCard,{GenerationProgress} from './ReviewCard';
+import {waitForDraftJob} from './draft-job.mjs';
+import './review-ui.css';
 
 type Row = Record<string, any>;
 async function syncJob(kind:string, onUpdate?: (job:Row)=>void) {
@@ -20,17 +23,11 @@ async function syncJob(kind:string, onUpdate?: (job:Row)=>void) {
   }
   throw new Error('Синхронизация ещё выполняется. Проверьте состояние позже.');
 }
-async function singleDraftJob(reviewId:string, instruction:string) {
-  let job = await api('/jobs/single-draft','POST',{review_id:reviewId,instruction},15000);
-  const deadline=performance.now()+5*60*1000;
-  while(performance.now()<deadline) {
-    if(job.status==='completed') return job.result.draft;
-    if(['failed','interrupted','cancelled'].includes(job.status)) throw new Error(job.result?.message||'Ответ не подготовлен');
-    await new Promise(resolve=>setTimeout(resolve,2000));
-    job=await api('/jobs/'+job.id,'GET',undefined,15000);
-  }
-  throw new Error('Подготовка ответа заняла больше пяти минут. Задание продолжает выполняться на сервере. Проверьте его в разделе «Задачи» и обновите отзывы позже.');
+async function singleDraftJob(reviewId:string,instruction:string){
+  let storage=null;try{storage=window.sessionStorage}catch{}
+  return waitForDraftJob({api,reviewId,instruction,storage});
 }
+
 const nav = [['◷', 'Главная'], ['◈', 'Ассистент'], ['☷', 'Очередь ответов'], ['▤', 'Отзывы'], ['?', 'Вопросы'], ['◇', 'Товары'], ['⇄', 'Задачи'], ['☑', 'Действия'], ['🔔', 'Уведомления'], ['⌘', 'Память'], ['⚙', 'Настройки']];
 const statusLabel: Row = { unanswered: 'Без ответа', draft_ready: 'Черновик готов', manual_review: 'Ручная проверка', pending_confirmation: 'Ждёт подтверждения', published: 'Опубликован', pending: 'Ждёт подтверждения', queued: 'В очереди', running: 'Выполняется', failed: 'Ошибка', interrupted: 'Прервано', completed: 'Завершено', cancelled: 'Отменено', needs_review: 'Нужна сверка', executing: 'Выполняется' };
 const activityLabel: Row = {'/settings/wb-token':'обновил подключение Wildberries','/settings/wb-test':'проверил подключение Wildberries','/settings/assistant':'изменил состояние ассистента','/auto-replies/start':'запустил автоответы','/auto-replies/pause':'поставил автоответы на паузу','/jobs/drafts':'запустил подготовку черновиков','/actions/publish':'подготовил публикацию ответов','/settings/schedule':'изменил расписание','/settings/search':'изменил поиск инструкций','/settings/performance':'изменил режим AI','/memory/propose':'предложил правило памяти','/portable/sync-now':'создал защищённую копию','/settings/portable-sync':'изменил резервное копирование'};
@@ -51,6 +48,8 @@ export default function App() {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all'), [selected, setSelected] = useState<string[]>([]), [context, setContext] = useState<Row>({});
   const [performance, setPerformance] = useState('normal');
   const [token, setToken] = useState(''), [connectionConfig,setConnectionConfig]=useState<Row>({}), [memory, setMemory] = useState(''), [brand, setBrand] = useState(''), [brands, setBrands] = useState<Row[]>([]);
+  const [reviewCounts,setReviewCounts]=useState<Row>({});
+  const reviewSearchRequest=useRef(0);
   const [reviewPage, setReviewPage] = useState<Row>({total:0,offset:0,has_more:false}), [questionPage, setQuestionPage] = useState<Row>({total:0,offset:0,has_more:false}), [jobs, setJobs] = useState<Row[]>([]), [quality, setQuality] = useState<Row>({});
   const [stores, setStores] = useState<Row>({items:[]}), [storeName, setStoreName] = useState(''), [storeProvider,setStoreProvider]=useState('wb'), [schedule, setSchedule] = useState<Row>({enabled:false,reviews_hours:3,questions_hours:3,products_hours:24,backup_hours:24,drafts_enabled:false,question_drafts_enabled:false,drafts_hours:6,drafts_days:7,auto_propose:false,min_quality:96,max_proposals:100});
   const [notifications,setNotifications]=useState<Row>({items:[],unread:0}),[teamDashboard,setTeamDashboard]=useState<Row>({members:[],totals:{}}),[telegram,setTelegram]=useState<Row>({enabled:false,chat_id:''}),[telegramToken,setTelegramToken]=useState('');
@@ -110,11 +109,13 @@ export default function App() {
     catch(error) { setAi({available:false,models:[],message:error instanceof Error?error.message:'Не удалось проверить Ollama'}); }
   }
   async function findReviews(offset=0, append=false, view=filter) {
+    const request=++reviewSearchRequest.current;
+    void api('/reviews/counts?q='+encodeURIComponent(query),'GET',undefined,15000).then(counts=>{if(request===reviewSearchRequest.current)setReviewCounts(counts)}).catch(()=>{if(request===reviewSearchRequest.current)setReviewCounts({})});
     const params = new URLSearchParams({q:query, unanswered:String(view==='unanswered'), attention:String(view==='attention'), max_rating:String(view==='negative'?3:5), limit:'30', offset:String(offset)});
     if (['positive','negative','rating_only','manual','context'].includes(view)) params.set('view',view);
     if (view==='context') params.set('review_ids',(context.last_result_ids||[]).join(','));
     const result = await api('/reviews/page?' + params.toString());
-    setReviews(current => append ? [...current, ...result.items] : result.items); setReviewPage(result);
+    if(request===reviewSearchRequest.current){setReviews(current => append ? [...current, ...result.items] : result.items); setReviewPage(result);}
   }
   async function findProducts(offset=0, append=false) {
     const result=await api('/products/page?limit=60&offset='+offset+'&q='+encodeURIComponent(productQuery));
@@ -253,13 +254,14 @@ export default function App() {
     setDraftErrors(current => ({...current, [review.id]: ''}));
     try {
       const draft = await singleDraftJob(review.id, instruction);
+      if(review.draft&&draft.revision<review.draft.revision)throw new Error('Черновик уже изменён. Обновите список — Ваши правки сохранены.');
       setReviews(current => current.map(item => item.id === review.id ? {...item, draft, status: item.manual||!draft.quality?.passed||String(draft.model||'').startsWith('safety-fallback') ? 'manual_review' : 'draft_ready'} : item));
       setStats(current => ({...current, drafts: Number(current.drafts || 0) + (review.draft ? 0 : 1)}));
       const variants = draft.quality?.candidates_evaluated || 1;
       setNotice(review.draft ? `Ответ обновлён. Качество: ${draft.quality?.score ?? 0}/100. Проверено вариантов: ${variants}.` : `Черновик готов. Качество: ${draft.quality?.score ?? 0}/100. Проверено вариантов: ${variants}.`);
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Не удалось подготовить ответ';
-      setError(message); setDraftErrors(current => ({...current, [review.id]: message}));
+      setDraftErrors(current => ({...current, [review.id]: message}));
     } finally {
       setDraftingId(null); setBusy(false);
     }
@@ -267,7 +269,7 @@ export default function App() {
   async function generateQuestionDraft(question: Row, instruction = '') {
     setBusy(true);setDraftingId(question.id);setError('');setNotice('');setDraftErrors(current=>({...current,[question.id]:''}));
     try{const draft=await singleDraftJob(question.id,instruction);setQuestions(current=>current.map(item=>item.id===question.id?{...item,draft,status:'draft_ready'}:item));setNotice('Ответ на вопрос подготовлен и проверен.');try{setQuestionStats(await api('/questions/stats'))}catch{}}
-    catch(e){const message=e instanceof Error?e.message:'Не удалось подготовить ответ';setError(message);setDraftErrors(current=>({...current,[question.id]:message}));}
+    catch(e){const message=e instanceof Error?e.message:'Не удалось подготовить ответ';setDraftErrors(current=>({...current,[question.id]:message}));}
     finally{setDraftingId(null);setBusy(false)}
   }
   async function deleteMemory(id: string) {
@@ -369,7 +371,8 @@ export default function App() {
         </div>
         <p className="muted">{canManageStore?'Низкие оценки и опасные ситуации остаются на ручной проверке. Отправка подготовленных ответов в маркетплейс выполняется только после вашего подтверждения.':'Ваша должность разрешает просмотр общей базы. Операции выполняют владелец и назначенный менеджер маркетплейса.'}</p>
         {filter==='context'&&<p className="muted">Показаны отзывы из чата. <button className="link" onClick={()=>{setFilter('all');void run(()=>findReviews(0,false,'all'));}}>Показать все отзывы</button></p>}
-        <div className="toolbar"><input placeholder="Текст, товар или бренд" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')run(()=>findReviews())}}/><select aria-label="Фильтр отзывов" value={filter==='context'?'all':filter} onChange={e => {const view=e.target.value;setFilter(view);void run(()=>findReviews(0,false,view));}}><option value="all">Все отзывы</option><option value="positive">Отзывы 4–5</option><option value="negative">Отзывы 1–3</option><option value="rating_only">Оценка без отзыва</option><option value="manual">Ручная проверка</option></select><button disabled={busy} onClick={() => run(()=>findReviews())}>Найти</button></div>
+        <div className="review-filter-tabs" role="group" aria-label="Фильтры отзывов">{[['all','Все отзывы'],['positive','4–5 ★'],['negative','1–3 ★'],['rating_only','Без текста'],['manual','Ручная проверка']].map(([view,label])=><button key={view} className={filter===view?'active':''} aria-pressed={filter===view} disabled={busy} onClick={()=>{setFilter(view);setSelected([]);void run(()=>findReviews(0,false,view));}}><span>{label}</span><b>{reviewCounts[view]??'…'}</b></button>)}</div>
+        <div className="toolbar"><input placeholder="Текст, товар или бренд" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')run(()=>findReviews())}}/><button disabled={busy} onClick={() => run(()=>findReviews())}>Найти</button></div>
         <div className="review-list">{reviews.map(r => <ReviewCard key={r.id} review={r} checked={selected.includes(r.id)} toggle={() => setSelected(s => s.includes(r.id) ? s.filter(id => id !== r.id) : [...s, r.id])} busy={busy} assistantEnabled={assistantEnabled} generating={draftingId === r.id} generationError={draftErrors[r.id] || ''} canManage={Boolean(canManageStore)} generate={(instruction) => generateDraft(r, instruction)} save={(text,revision) => run(async () => {await api('/drafts/' + r.draft.id, 'PATCH', {text,revision}); await refresh(); setNotice('Черновик сохранён в общей базе. Новая правка учтена в стиле ответов.');})} feedback={(rating,reasons)=>run(async()=>{await api('/drafts/'+r.draft.id+'/feedback','POST',{rating,reasons});await refresh();setNotice('Оценка сохранена и будет учтена в следующих ответах.');})}/>)}
           {reviewPage.has_more && <button className="full" disabled={busy} onClick={()=>run(()=>findReviews(reviewPage.offset+reviewPage.limit,true))}>Показать ещё</button>}
           {!reviews.length && <Empty text={query.trim() || filter !== 'all' ? 'По выбранным условиям отзывы не найдены. Измените запрос или фильтр.' : 'Отзывов пока нет. Подключите активный магазин и выполните синхронизацию в настройках.'}/>}
@@ -459,29 +462,6 @@ function SyncStatus({summary,onRefresh}:{summary:Row;onRefresh:()=>void}) {
   const states:Row={never:'Ещё не синхронизировались',queued:'В очереди',running:'Синхронизация',completed:'Завершено',failed:'Ошибка',interrupted:'Прервано'};
   return <div className="card"><div className="card-heading"><div><h3>Синхронизация магазинов</h3><p className="muted">Состояние сохраняется после перезапуска сервера.</p></div><button onClick={onRefresh}>Обновить</button></div>{summary.stores?.map((store:Row)=><div key={store.store_id} className="sync-store"><b>{store.store_name}</b><div className="sync-kinds">{Object.entries(store.kinds||{}).map(([kind,raw])=>{const item=raw as Row;return <div key={kind} className="sync-kind"><small>{labels[kind]}</small><strong className={item.state==='failed'?'orange':''}>{states[item.state]||item.state}{item.state==='running'?' '+item.progress+'%':''}</strong><span>{item.last_success_at?'Последняя успешная: '+new Date(item.last_success_at).toLocaleString('ru-RU')+' · '+item.last_success_count:'Успешных загрузок ещё нет'}</span>{item.state==='failed'&&item.message&&<span className="orange">{item.message}</span>}</div>})}</div></div>)}{!summary.stores?.length&&<p className="muted">Магазины ещё не добавлены.</p>}</div>;
 }
-function ReviewCard({review:r,checked,toggle,busy,assistantEnabled,canManage,generating,generationError,generate,save,feedback}:{review:Row;checked:boolean;toggle:()=>void;busy:boolean;assistantEnabled:boolean;canManage:boolean;generating:boolean;generationError:string;generate:(instruction?:string)=>void;save:(text:string,revision:number)=>void;feedback:(rating:string,reasons:string[])=>void}) {
-  const [text,setText] = useState(r.draft?.text || '');
-  const [feedbackOpen,setFeedbackOpen]=useState(false),[feedbackReason,setFeedbackReason]=useState('');
-  useEffect(() => setText(r.draft?.text || ''),[r.draft?.text]);
-  const q = r.draft?.quality || {};
-  const qualityDetails = Object.values(q.breakdown || {}) as Row[];
-  const intent = reviewIntent(r);
-  const intentLabel:Row = {wrong_item:'Другой товар',no_effect:'Нет результата',odor:'Запах',other:'Общий отзыв'};
-  return <article className={'card review '+(r.rating<=3?'negative':'positive')}>
-    <div className="review-head"><label className="check"><input type="checkbox" checked={checked} disabled={!canManage} onChange={toggle}/><b>{r.product.name}</b></label><span className="stars">{'★'.repeat(r.rating)}<span>{'★'.repeat(5-r.rating)}</span></span></div>
-    <div className="review-meta"><span>{r.product.brand} · {r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркет':'Wildberries'} {r.product_id}</span><span>{new Date(r.created_at).toLocaleDateString('ru')}</span><span className="pill intent-pill">{intentLabel[intent]}</span><span className={'pill '+(r.manual?'amber':'')}>{statusLabel[r.status] || r.status}</span>{r.risk !== 'NORMAL' && <span className="pill amber">{r.risk}</span>}</div>
-    <div className="customer-review"><small>ОТЗЫВ ПОКУПАТЕЛЯ</small><p className="review-text">{r.text}</p></div>
-    {r.is_answered ? <blockquote>{r.existing_answer}</blockquote> : r.draft ? <div className="draft">
-      <label>Черновик ответа <span className={'pill '+(q.passed&&!(r.draft.model||'').startsWith('safety-fallback')?'green':'amber')}>{q.passed&&!(r.draft.model||'').startsWith('safety-fallback')?'Готов к проверке':'Нужна ручная проверка'}</span><textarea value={text} onChange={e => setText(e.target.value)}/></label>
-      {(q.analysis_summary||q.selection_note||qualityDetails.length>0)&&<details className="generation-analysis"><summary>Проверка ответа</summary><p className="muted">Оценка текста: {q.score??'—'}/100 · Модель: {r.draft.model}</p>{q.analysis_summary&&<p>{q.analysis_summary}</p>}{q.selection_note&&<p className="muted">{q.selection_note}. Проверено вариантов: {q.candidates_evaluated || 1}.</p>}{qualityDetails.length>0&&<div className="quality-grid">{qualityDetails.map((item:Row,index:number)=><span className="quality-detail" key={index}><small>{item.label}</small><b>{item.score}/{item.max}</b></span>)}</div>}<p className="muted">Оценка текста не подтверждает факты о товаре. Убедитесь, что инструкция опирается на проверенные сведения.</p>{q.sources?.length>0?<details><summary>Подтверждённые сведения ({q.sources.length})</summary>{q.sources.map((source:Row,index:number)=><p key={index}>{source.text} <small>Источник: {source.source}</small></p>)}</details>:<p className="orange">Подтверждённых сведений о товаре нет.</p>}{q.unverified_sources_count>0&&<p className="muted">Найдено источников на проверку: {q.unverified_sources_count}. Они не использованы в ответе.</p>}</details>}
-      {q.issues?.length>0&&<p className="orange">Проверьте: {q.issues.join('; ')}</p>}
-      <p className="muted">Подготовил: {r.draft.created_by_name||'Автоматизация'} · Последняя правка: {r.draft.updated_by_name||'Автоматизация'}</p>{r.draft.edits?.length>0&&<details><summary>История правок ({r.draft.edits.length})</summary>{r.draft.edits.map((edit:Row,index:number)=><p key={index}>{edit.by_name||'Автоматизация'} · {edit.at?new Date(edit.at).toLocaleString('ru-RU'):''}</p>)}</details>}
-      {generationError&&<p className="orange">{generationError}</p>}
-      <div className="draft-actions"><button disabled={busy||!canManage||text===r.draft.text} onClick={() => save(text,r.draft.revision)}>Сохранить правку</button><button className="primary" disabled={busy||!canManage||!assistantEnabled} aria-busy={generating} title={!assistantEnabled?'Ассистент выключен. Включите его в верхней части страницы.':!canManage?'Нет прав на подготовку ответов':busy?'Дождитесь завершения текущей операции':'Подготовить ответ'} onClick={()=>generate()}>{generating?'Подготавливаю новый вариант…':'Подобрать лучший ответ'}</button><button disabled={busy||!canManage} onClick={()=>feedback('positive',[])}>👍 Хороший ответ</button><button disabled={busy||!canManage} onClick={()=>setFeedbackOpen(true)}>👎 Нужно исправить</button></div>{feedbackOpen&&<div className="inline-editor"><input autoFocus value={feedbackReason} onChange={e=>setFeedbackReason(e.target.value)} placeholder="Что исправить: инструкция, полнота или тон?"/><button disabled={busy||!feedbackReason.trim()} onClick={()=>{feedback('negative',[feedbackReason.trim()]);setFeedbackReason('');setFeedbackOpen(false)}}>Сохранить замечание</button><button onClick={()=>setFeedbackOpen(false)}>Отмена</button></div>}{q.owner_feedback&&<p className="muted">Ваша оценка сохранена: {q.owner_feedback.rating==='positive'?'ответ подходит':'нужно улучшить'}.</p>}{generating&&<GenerationProgress/>}
-      {r.manual && <p className="orange">Опасный симптом: требуется индивидуальная ручная проверка.</p>}
-    </div> : <><button className="prepare-button" disabled={busy||!canManage||!assistantEnabled} aria-busy={generating} title={!assistantEnabled?'Ассистент выключен. Включите его в верхней части страницы.':!canManage?'Нет прав на подготовку ответов':busy?'Дождитесь завершения текущей операции':'Подготовить ответ'} onClick={()=>generate()}>{generating?'◷ Подготавливаю ответ…':'✦ Подготовить лучший ответ'}</button>{!assistantEnabled&&<p className="muted">Ассистент отключён владельцем.</p>}{generating && <GenerationProgress/>}{generationError && <p className="orange">{generationError}</p>}</>}
-  </article>;
-}
 function QuestionCard({question:q,checked,toggle,busy,assistantEnabled,canManage,generating,generationError,generate,save,publish}:{question:Row;checked:boolean;toggle:()=>void;busy:boolean;assistantEnabled:boolean;canManage:boolean;generating:boolean;generationError:string;generate:(instruction?:string)=>void;save:(text:string,revision:number)=>void;publish:()=>void}) {
   const [text,setText]=useState(q.draft?.text||'');
   useEffect(()=>setText(q.draft?.text||''),[q.draft?.text]);
@@ -493,7 +473,6 @@ function QuestionCard({question:q,checked,toggle,busy,assistantEnabled,canManage
     {q.is_answered?<blockquote>{q.existing_answer}</blockquote>:q.draft?<div className="draft"><label>Черновик ответа · {q.draft.model} {quality.score!==undefined&&<span className={'pill '+(quality.passed?'green':'amber')}>качество {quality.score}/100</span>}<textarea value={text} onChange={e=>setText(e.target.value)}/></label>{quality.analysis_summary&&<p className="muted">{quality.analysis_summary}</p>}{quality.sources?.length>0&&<details><summary>Источники ответа ({quality.sources.length})</summary>{quality.sources.map((source:Row,index:number)=><p key={index}><span className={'pill '+(source.verification_status==='VERIFIED'?'green':'amber')}>{source.verification_status==='VERIFIED'?'подтверждено':'требует проверки'}</span> {source.source||source.url||'Источник'}<br/><small>{source.text||source.snippet}</small></p>)}</details>}{quality.issues?.length>0&&<p className="orange">Проверьте: {quality.issues.join('; ')}</p>}{generationError&&<p className="orange">{generationError}</p>}<div className="draft-actions"><button disabled={busy||!canManage||text===q.draft.text} onClick={()=>save(text,q.draft.revision)}>Сохранить правку</button><button className="primary" disabled={busy||!canManage||!assistantEnabled} aria-busy={generating} title={!assistantEnabled?'Ассистент выключен. Включите его в верхней части страницы.':!canManage?'Нет прав на подготовку ответов':busy?'Дождитесь завершения текущей операции':'Подготовить ответ'} onClick={()=>generate()}>{generating?'Подготавливаю…':'Подобрать лучший ответ'}</button><button disabled={busy||!canManage} onClick={publish}>Подготовить публикацию →</button></div>{generating&&<GenerationProgress/>}</div>:<><button className="prepare-button" disabled={busy||!canManage||!assistantEnabled} aria-busy={generating} title={!assistantEnabled?'Ассистент выключен. Включите его в верхней части страницы.':!canManage?'Нет прав на подготовку ответов':busy?'Дождитесь завершения текущей операции':'Подготовить ответ'} onClick={()=>generate()}>{generating?'◷ Анализирую вопрос…':'✦ Подготовить ответ на вопрос'}</button>{!assistantEnabled&&<p className="muted">Ассистент отключён владельцем.</p>}{generating&&<GenerationProgress/>}{generationError&&<p className="orange">{generationError}</p>}</>}
   </article>;
 }
-function GenerationProgress(){return <div className="generation-progress" role="status"><div className="generation-spinner">✦</div><div><b>Готовлю лучший ответ</b><p>Понимаю обращение → проверяю товар и факты → создаю варианты → выбираю безопасный</p></div></div>}
 function ActionCard({action:a,busy,confirm,cancel,remove,scope}:{action:Row;busy:boolean;confirm:(manual:boolean)=>void;cancel:()=>void;remove:()=>void;scope:(value:string)=>void}) {
   const [ack,setAck]=useState(false);
   const [customScope,setCustomScope]=useState('');
