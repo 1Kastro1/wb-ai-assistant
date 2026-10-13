@@ -10,6 +10,7 @@ from .config import MODEL
 from .db import Account, Draft, Product, Review, StoreProfile, Session, now, setting
 from .safety import classify, mask_vin
 from .verified_instructions import attach_verified_instructions
+from .product_images import card_image_url
 from .security import guard, decrypt_secret
 
 
@@ -216,6 +217,7 @@ class WildberriesProvider:
                 pid = str(item['nmID'])
                 product = db.get(Product, pid) or Product(id=pid)
                 product.name, product.brand, product.category = item.get('title', ''), item.get('brand', ''), item.get('subjectName', '')
+                product.image_url = card_image_url(item)
                 facts = [f for f in (product.facts or []) if not str(f.get('source', '')).startswith('Карточка WB')]
                 description = str(item.get('description') or '').strip()
                 if description:
