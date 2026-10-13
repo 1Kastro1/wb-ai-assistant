@@ -72,6 +72,8 @@ def _addresses_review_topic(review_text, reply_text):
     review_value = review_text.lower().replace('ё', 'е')
     reply_value = reply_text.lower().replace('ё', 'е')
     topic_groups = (
+        (('не оправдал', 'разочаров'), ('ожидан', 'разочаров', 'извин')),
+        (('свет', 'тускл', 'слабо свет'), ('свет', 'ламп', 'ярк', 'напряж')),
         (('производител', 'маркиров', 'происхожд'), ('маркиров', 'расхожд', 'соответств')),
         (('деньги на ветер', 'толку нет', 'нет результата', 'бесполезн', 'не очищает', 'не помог'), ('результат', 'очистк', 'инструкц', 'применен', 'эффект')),
         (('воня', 'запах', 'аромат', 'пах'), ('воня', 'запах', 'аромат', 'пах')),
@@ -810,7 +812,7 @@ async def generate_draft(db, review_id, instruction=''):
     return public(draft)
 
 
-def edit_draft(db, draft_id, value, revision, actor_id=''):
+def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=True):
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
     draft = db.get(Draft, draft_id, populate_existing=True)
@@ -831,7 +833,8 @@ def edit_draft(db, draft_id, value, revision, actor_id=''):
         draft.quality = assess_question_answer(review, product, value, sources)
     else:
         draft.quality = assess_reply(review, product, value, trusted_product_facts(db, product))
-    learn_from_edit(db, draft, old, value)
+    if learn_preferences:
+        learn_from_edit(db, draft, old, value)
     review.status = 'manual_review' if review.manual or not draft.quality['passed'] else 'draft_ready'
     db.commit()
     return public(draft)
