@@ -1,4 +1,4 @@
-from .product_guidance import usage_excerpt, product_usage_reply
+from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
 import difflib
 import json
@@ -76,7 +76,17 @@ def _addresses_review_topic(review_text, reply_text):
         (('не оправдал', 'разочаров'), ('ожидан', 'разочаров', 'извин')),
         (('свет', 'тускл', 'слабо свет'), ('свет', 'ламп', 'ярк', 'напряж')),
         (('производител', 'маркиров', 'происхожд'), ('маркиров', 'расхожд', 'соответств')),
-        (('деньги на ветер', 'толку нет', 'нет результата', 'бесполезн', 'не очищает', 'не помог'), ('результат', 'очистк', 'инструкц', 'применен', 'эффект')),
+        (('деньги на ветер', 'толку нет', 'нет результата', 'не увидела результата', 'не увидел результата', 'бесполезн', 'не очищает', 'не помог'), ('результат', 'очистк', 'инструкц', 'применен', 'эффект')),
+        (('отмывает', 'нагар', 'жир'), ('очистк', 'загряз', 'нагар', 'жир')),
+        (('качеств', 'на совесть', 'клапан', 'резьба'), ('качеств', 'клапан', 'резьба')),
+        (('подош', 'встали как родные'), ('установ', 'подош', 'подбор')),
+        (('отработал', 'работает', 'рабочими'), ('работ', 'результат')),
+        (('третий раз', 'пользуюсь давно', 'не первый раз'), ('снова', 'повторн', 'доверие')),
+        (('вовремя', 'во время'), ('вовремя', 'достав')),
+        (('пенится',), ('пенообраз', 'пенится')),
+        (('соответствует описанию',), ('соответств', 'описан')),
+        (('протек', 'потек', 'крышка'), ('протеч', 'упаков', 'крышк')),
+        (('развод', 'вазелин'), ('развод', 'жирный слой')),
         (('воня', 'запах', 'аромат', 'пах'), ('воня', 'запах', 'аромат', 'пах')),
         (('скрип', 'свист', 'шум'), ('скрип', 'свист', 'шум')),
         (('тормоз', 'педал', 'скрежет'), ('тормоз', 'педал', 'скрежет', 'диагност')),
@@ -596,8 +606,11 @@ async def generate_question_draft(db, question, instruction=''):
         {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
+    voltage = battery_voltage_answer(question, product)
+    if voltage:
+        sources.append(voltage['source'])
     try:
-        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
+        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [voltage['answer']] if voltage else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
     except Exception:
         candidates = []
     checked = []
