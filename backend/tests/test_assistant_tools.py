@@ -48,6 +48,46 @@ def test_structured_tool_route(client,seeded,monkeypatch):
     assert len(response['data'])==2
 
 
+def test_assistant_handles_blank_model_search_arguments(client, seeded, monkeypatch):
+    from app.integrations import ollama
+    async def planner(*args, **kwargs):
+        return {'tool': 'reviews.search', 'arguments': {'unanswered': ''}, 'answer': ''}
+    monkeypatch.setattr(ollama, 'structured', planner)
+    response = client.post('/chat', json={'text': 'Проверь текущую ситуацию'})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body['data']) == 4
+    assert 'validation error' not in body['text'].lower()
+    assert 'account_id' not in body['context']['active_filters']
+
+
+def test_assistant_reports_pending_answers_without_model(client, seeded, monkeypatch):
+    from app.integrations import ollama
+    async def unexpected(*args, **kwargs):
+        raise AssertionError('Простой запрос должен обрабатываться без модели')
+    monkeypatch.setattr(ollama, 'structured', unexpected)
+    assert client.post('/reviews/r3/draft', json={}).status_code == 200
+    assert client.post('/actions/publish', json={'review_ids': ['r3']}).status_code == 200
+    response = client.post('/chat', json={'text': 'Какие ответы ждут подтверждения?'})
+    assert response.status_code == 200
+    body = response.json()
+    assert '1 ответ' in body['text']
+    assert body['data'][0]['count'] == 1
+
+
+def test_assistant_hides_invalid_tool_fields(client, seeded, monkeypatch):
+    from app.integrations import ollama
+    async def planner(*args, **kwargs):
+        return {'tool': 'reviews.search', 'arguments': {'unanswered': False, 'unknown': 1}, 'answer': ''}
+    monkeypatch.setattr(ollama, 'structured', planner)
+    response = client.post('/chat', json={'text': 'Проверь текущую ситуацию'})
+    assert response.status_code == 200
+    body = response.json()
+    assert body['data'] is None
+    assert 'Уточните запрос' in body['text']
+    assert 'validation error' not in body['text'].lower()
+
+
 def test_unknown_planned_tool_rejected(client,monkeypatch):
     from app.integrations import ollama
     async def planner(*args,**kwargs):return {'tool':'shell','arguments':{},'answer':''}

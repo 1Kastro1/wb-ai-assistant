@@ -5,12 +5,12 @@ type Row = Record<string, any>;
 export default function MarketplaceConnection({store,stores,name,connected,owner,canManage,busy,token,setToken,config,setConfig,status,onSelect,onSave,onTest,onSync,onHistory,productSync,reviewSync,questionSync}:Row) {
   return <div className="card">
     <div className="card-heading"><div><h3>{name}</h3><p className="muted">Подключение активного магазина и обмен с маркетплейсом</p></div><span className={'pill '+(connected?'green':'amber')}>{connected?'Подключён':'Не подключён'}</span></div>
-    <label>Магазин<select value={stores.active||''} onChange={e=>onSelect(e.target.value)}><option value="" disabled>Выберите магазин</option>{stores.items?.map((item:Row)=><option key={item.id} value={item.id}>{item.name} · {item.provider==='wb'?'Wildberries':item.provider==='ozon'?'Ozon':'Яндекс Маркет'}{item.can_operate===false?' · просмотр':''}</option>)}</select></label>
+    <label>Магазин<select value={stores.active||''} disabled={busy} onChange={e=>onSelect(e.target.value)}><option value="" disabled>Выберите магазин</option>{stores.items?.map((item:Row)=><option key={item.id} value={item.id}>{item.name} · {item.provider==='wb'?'Wildberries':item.provider==='ozon'?'Ozon':'Яндекс Маркет'}{item.can_operate===false?' · просмотр':''}</option>)}</select></label>
     {owner&&<>
       {store.provider==='ozon'&&<label>Client-Id Ozon<input value={config.client_id??store.config?.client_id??''} onChange={e=>setConfig({...config,client_id:e.target.value})} placeholder="Client-Id кабинета"/></label>}
       {store.provider==='yandex'&&<label>Business ID Яндекс Маркета<input value={config.business_id??store.config?.business_id??''} onChange={e=>setConfig({...config,business_id:e.target.value})} placeholder="Числовой ID кабинета"/></label>}
       <label>API-ключ {name}<input type="password" autoComplete="off" value={token} onChange={e=>setToken(e.target.value)} placeholder={connected?'Ключ сохранён; введите новый для замены':'Вставьте API-ключ'}/></label>
-      <button className="primary" disabled={busy||token.length<10||(store.provider==='ozon'&&!(config.client_id??store.config?.client_id))||(store.provider==='yandex'&&!(config.business_id??store.config?.business_id))} onClick={onSave}>{status.state==='working'&&status.kind==='token'?'Сохраняю…':'Сохранить подключение'}</button>
+      <button className="primary" disabled={busy||!store.id||token.length<10||(store.provider==='ozon'&&!(config.client_id??store.config?.client_id))||(store.provider==='yandex'&&!(config.business_id??store.config?.business_id))} onClick={onSave}>{status.state==='working'&&status.kind==='token'?'Сохраняю…':'Сохранить подключение'}</button>
     </>}
     <div className="button-row"><button disabled={busy||!canManage||!connected} onClick={onTest}>{status.state==='working'&&status.kind==='test'?'Проверяю…':'Проверить соединение'}</button></div>
     <hr/>

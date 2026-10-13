@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from .config import DATABASE, DATABASE_URL
@@ -20,6 +21,10 @@ engine = create_engine(DATABASE_URL, connect_args={'check_same_thread': False, '
 def pragmas(connection, _):
     if not IS_SQLITE:
         return
+    # SQLite's built-in lower() only handles ASCII. Review topics contain Cyrillic.
+    connection.create_function('unicode_casefold', 1, lambda value: str(value or '').casefold(), deterministic=True)
+    connection.create_function('unicode_dislike', 1, lambda value: int(bool(re.search(r'(?<!\w)не\s+понрав', str(value or '').casefold()))), deterministic=True)
+    connection.create_function('unicode_no_effect', 1, lambda value: int(bool(re.search(r'(?<!\w)не\s+(?:помог|работает|отмыл|очищает|очистил)', str(value or '').casefold()))), deterministic=True)
     connection.execute('PRAGMA foreign_keys=ON')
     connection.execute('PRAGMA journal_mode=WAL')
     # Prefer durability over a small write-speed gain. FULL makes SQLite wait

@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import select, func, case, text as sql_text
+from sqlalchemy import select, func, case, or_, not_, text as sql_text
 from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint
 from .integrations import ollama, wb, web_research, provider_for
@@ -177,21 +177,64 @@ def remember_web_instruction_sources(product, sources):
     } for source in sources]
 
 
-def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False):
-    query = select(Review).join(Product).where(Review.rating <= max_rating, ~Review.marketplace.like('%_question'))
-    if q:
-        query = query.where((Review.text.contains(q, autoescape=True)) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
-    if unanswered:
-        query = query.where(Review.is_answered == False)
-    if attention:
-        query = query.where((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review'))
-    if days:
+def _review_query(filters):
+    view = filters.get('view', 'all')
+    query = select(Review).join(Product)
+    if view in ('manual', 'wrong_item', 'no_effect', 'odor'):
+        query = query.outerjoin(Draft, Draft.review_id == Review.id)
+    conditions = [Review.rating <= filters.get('max_rating', 5), ~Review.marketplace.like('%_question')]
+    if filters.get('q'):
+        q = filters['q']
+        conditions.append(Review.text.contains(q, autoescape=True) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
+    if filters.get('unanswered'):
+        conditions.append(Review.is_answered == False)
+    if filters.get('attention'):
+        conditions.append((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review'))
+    if filters.get('product_id'):
+        conditions.append(Review.product_id == filters['product_id'])
+    if filters.get('account_id'):
+        conditions.append(Review.wb_account_id == filters['account_id'])
+    if filters.get('days'):
+        days = filters['days']
         start = datetime.now(timezone(timedelta(hours=3))).replace(hour=0, minute=0, second=0, microsecond=0) if days == 1 else datetime.now(timezone.utc) - timedelta(days=days)
-        query = query.where(Review.created_at >= start.isoformat())
-    if product_id:
-        query = query.where(Review.product_id == product_id)
-    if account_id:
-        query = query.where(Review.wb_account_id == account_id)
+        conditions.append(Review.created_at >= start.isoformat())
+    if view == 'context':
+        raw_ids = filters.get('review_ids', '')
+        if len(raw_ids) > 12000:
+            raise ValueError('Слишком длинная выборка отзывов')
+        ids = list(dict.fromkeys(part.strip() for part in raw_ids.split(',') if part.strip()))
+        if len(ids) > 200:
+            raise ValueError('Выберите не более 200 отзывов')
+        conditions.append(Review.id.in_(ids))
+    elif view == 'manual':
+        conditions.append(or_(Review.manual == True, Review.status == 'manual_review',
+                              Draft.quality['passed'].as_boolean() == False,
+                              Draft.model.startswith('safety-fallback')))
+    elif view in ('wrong_item', 'no_effect', 'odor'):
+        # Match the visible topic labels and review text before pagination.
+        topic_text = func.coalesce(Draft.quality['intent_label'].as_string(), '') + ' ' + Review.text
+        folded = func.unicode_casefold(topic_text) if IS_SQLITE else func.lower(topic_text)
+        def contains_any(phrases):
+            return or_(*(folded.like('%' + phrase + '%') for phrase in phrases))
+        wrong_item = contains_any(('не тот', 'другой товар', 'перепутал', 'wrong'))
+        negative_effect_phrase = (func.unicode_no_effect(topic_text) == 1 if IS_SQLITE else
+                                  topic_text.op('~*')(r'(^|[^[:alpha:]])не[[:space:]]+(помог|работает|отмыл|очищает|очистил)'))
+        no_effect = (contains_any(('нет результата', 'бесполезн', 'неэффектив')) |
+                     negative_effect_phrase |
+                     ((Review.rating <= 3) & contains_any(('эффект', 'результат'))))
+        odor_topic = contains_any(('запах', 'воняет', 'аромат', 'пахнет'))
+        dislike = (func.unicode_dislike(topic_text) == 1 if IS_SQLITE else
+                   topic_text.op('~*')(r'(^|[^[:alpha:]])не[[:space:]]+понрав'))
+        odor_complaint = contains_any(('неприят', 'воняет', 'резк', 'ужасн', 'отвратительн')) | dislike
+        odor = odor_topic & ((Review.rating <= 3) | odor_complaint | (Draft.quality['intent'].as_string() == 'ODOR_COMPLAINT'))
+        conditions.append(wrong_item if view == 'wrong_item' else
+                          no_effect & not_(wrong_item) if view == 'no_effect' else
+                          odor & not_(wrong_item) & not_(no_effect))
+    return query.where(*conditions)
+
+
+def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids=''):
+    query = _review_query(locals())
     rows = db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(max(0, offset)).limit(min(200, max(1, limit)))).all()
     result = []
     for row in rows:
@@ -207,21 +250,7 @@ def reviews_page(db, **filters):
     limit = min(200, max(1, int(filters.get('limit', 50))))
     offset = max(0, int(filters.get('offset', 0)))
     rows = reviews_search(db, **{**filters, 'limit': limit, 'offset': offset})
-    count_query = select(func.count()).select_from(Review).join(Product).where(Review.rating <= filters.get('max_rating', 5), ~Review.marketplace.like('%_question'))
-    if filters.get('q'):
-        q = filters['q']
-        count_query = count_query.where((Review.text.contains(q, autoescape=True)) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
-    if filters.get('unanswered'):
-        count_query = count_query.where(Review.is_answered == False)
-    if filters.get('attention'):
-        count_query = count_query.where((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review'))
-    if filters.get('product_id'):
-        count_query = count_query.where(Review.product_id == filters['product_id'])
-    if filters.get('account_id'):
-        count_query = count_query.where(Review.wb_account_id == filters['account_id'])
-    if filters.get('days'):
-        count_query = count_query.where(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=filters['days'])).isoformat())
-    total = db.scalar(count_query) or 0
+    total = db.scalar(_review_query(filters).with_only_columns(func.count()).order_by(None)) or 0
     return {'items': rows, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(rows) < total}
 
 
@@ -303,7 +332,7 @@ def assess_reply(review, product, reply, verified_facts=None):
         score = min(score, 35)
         issues.append('слишком общий ответ')
     if review.rating >= 4 and intent in ('POSITIVE_EXPERIENCE', 'GENERAL') and (intent == 'POSITIVE_EXPERIENCE' or any(x in review.text.lower().replace('ё','е') for x in ('соответствует описанию', 'все подошло', 'все понравилось', 'работает отлично', 'хорошее качество'))):
-        if any(x in lowered for x in ('жаль', 'сожале', 'извин', 'не оправдал', 'не понравил', 'разочаровал', 'показался слаб', 'недостаточно выражен')):
+        if any(x in lowered for x in ('жаль', 'сожале', 'извин', 'не оправдал', 'разочаровал', 'показался слаб', 'недостаточно выражен')) or re.search(r'(?<!\w)не\s+понравил', lowered):
             score = min(score, 70)
             issues.append('не трактовать положительный отзыв как жалобу')
             breakdown['relevance']['score'] = 0

@@ -1,7 +1,7 @@
 import json
 import re
 from uuid import uuid4
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, ValidationError
 from sqlalchemy import select, delete
 from .db import Conversation, Message, Memory, Product, Review, Draft, Action, ToolCall, Vehicle, VinSession, setting, public
 from .services import reviews_search, analytics, generate_draft, propose_publish, edit_draft
@@ -19,13 +19,24 @@ class ToolArgs(BaseModel):
     product_id: str = ''
 
 
+def parse_tool_args(arguments):
+    if not isinstance(arguments, dict):
+        raise ValueError('Не удалось понять параметры поиска отзывов. Уточните запрос.')
+    # The model may supply blank optional fields; account_id is always server-owned.
+    clean = {key: value for key, value in arguments.items() if value is not None and value != '' and key != 'account_id'}
+    try:
+        return ToolArgs.model_validate(clean).model_dump()
+    except ValidationError:
+        raise ValueError('Не удалось понять параметры поиска отзывов. Уточните запрос.') from None
+
+
 class ToolRegistry:
     risk = {
         'reviews.search': 'READ', 'reviews.get': 'READ', 'reviews.get_recent': 'READ', 'reviews.get_unanswered': 'READ',
         'reviews.generate_reply': 'DRAFT', 'reviews.create_draft': 'DRAFT', 'reviews.update_draft': 'DRAFT', 'reviews.publish': 'EXECUTE',
         'products.search': 'READ', 'products.get': 'READ', 'analytics.review_summary': 'READ', 'analytics.product_summary': 'READ',
         'memory.search': 'READ', 'memory.propose': 'DRAFT', 'memory.save': 'EXECUTE',
-        'system.status': 'READ', 'system.security_status': 'READ',
+        'system.status': 'READ', 'system.security_status': 'READ', 'actions.pending': 'READ',
         'compatibility.decode_vin': 'READ', 'compatibility.check': 'READ', 'compatibility.find_products': 'READ',
     }
 
@@ -46,13 +57,21 @@ class ToolRegistry:
         else:
             self.authorize(name)
         if name in ('reviews.search', 'reviews.get_recent', 'reviews.get_unanswered'):
-            args = ToolArgs(**arguments).model_dump()
+            args = parse_tool_args(arguments)
             if name == 'reviews.get_recent': args['days'] = args['days'] or 7
             if name == 'reviews.get_unanswered': args['unanswered'] = True
-            args['account_id'] = context.get('active_store_id', '')
-            rows = reviews_search(db, **args)
+            rows = reviews_search(db, **{**args, 'account_id': context.get('active_store_id', '')})
             context.update(last_result_ids=[r['id'] for r in rows], active_filters=args, active_task='reviews')
             return rows
+        if name == 'actions.pending':
+            store_id = context.get('active_store_id', '')
+            result = []
+            for action in db.scalars(select(Action).where(Action.kind == 'publish', Action.status == 'pending').order_by(Action.created_at.desc()).limit(100)):
+                ids = [item.get('review_id') for item in (action.payload or {}).get('items', [])]
+                relevant = [rid for rid in ids if (review := db.get(Review, rid)) and review.wb_account_id == store_id]
+                if relevant:
+                    result.append({'id': action.id, 'review_ids': relevant, 'count': len(relevant)})
+            return result
         if name == 'reviews.get':
             rid = arguments.get('review_id') or context.get('selected_review_id')
             if rid not in context.get('last_result_ids', []): raise ValueError('Выберите отзыв из текущей выборки')
@@ -163,6 +182,11 @@ class AssistantService:
                 context['pending_action_id'] = data['id']
                 tool = 'reviews.publish'
                 answer = f"Подготовлено подтверждение: {len(data['payload']['items'])} ответов. Откройте «Действия», проверьте тексты и подтвердите."
+            elif 'ответ' in lower and ('подтвержден' in lower or 'подтверждения' in lower or 'подтвердить' in lower):
+                tool = 'actions.pending'
+                data = await registry.dispatch(db, tool, {}, context)
+                count = sum(item['count'] for item in data)
+                answer = f'Подтверждения ожидают {count} ответов в {len(data)} действиях. Откройте «Действия», чтобы проверить их.' if count else 'Сейчас нет ответов, ожидающих подтверждения.'
             elif any(x in lower for x in ('подготовь ответ', 'ответь на', 'создай ответ', 'сделай короче')):
                 require_wb_operation('reviews.generate_reply')
                 if 'отзыв' in lower and any(x in lower for x in ('найди', 'негатив', 'без ответа')):
@@ -226,7 +250,7 @@ class AssistantService:
                 numbers = re.search(r'покажи\s+(\d+)', lower)
                 if numbers:
                     args['limit'] = min(100, int(numbers[1]))
-                args = ToolArgs(**args).model_dump()
+                args = parse_tool_args(args)
                 data = reviews_search(db, **args)
                 context['last_result_ids'], context['active_filters'] = [r['id'] for r in data], args
                 context['active_task'] = 'reviews'
@@ -256,9 +280,12 @@ class AssistantService:
             if calls > self.MAX_TOOL_CALLS_PER_MESSAGE:
                 raise ValueError('Достигнут лимит инструментов')
             db.add(ToolCall(name=tool, status='PROPOSED' if tool in ('reviews.publish', 'memory.save') else 'OK'))
-        except ValueError as error:
+        except (ValueError, TypeError) as error:
             db.rollback()
-            answer = str(error)
+            detail = str(error)
+            answer = ('Не удалось обработать параметры запроса. Уточните, какие отзывы показать.'
+                      if isinstance(error, (ValidationError, TypeError)) or 'validation error' in detail.lower() or 'input_value=' in detail
+                      else detail)
             data = None
             db.add(ToolCall(name=tool, status='ERROR'))
         answer = mask_vin(answer)
