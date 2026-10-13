@@ -86,6 +86,8 @@ def product_usage_reply(review, product, facts, revision=0):
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
     complaints = set(analysis['complaints'])
+    if review.rating == 5 and analysis['sentiment'] == 'positive' and not analysis['is_question']:
+        return positive_review_reply(review, product, revision)
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     text = review.text.lower().replace('ё', 'е')
     if complaints & {'LEAKAGE', 'PACKAGING_ISSUE'} and not complaints - {'LEAKAGE', 'PACKAGING_ISSUE', 'ODOR_COMPLAINT'}:

@@ -136,7 +136,7 @@ def rule_reply(review, product, revision=0, facts=None):
         if review.rating >= 4:
             from .product_guidance import usage_excerpt
             trusted_facts = facts if facts is not None else (getattr(product, 'facts', None) or [])
-            if is_cleaner(product) and 'набор' not in product.name.lower() and usage_excerpt(trusted_facts):
+            if review.rating < 5 and is_cleaner(product) and 'набор' not in product.name.lower() and usage_excerpt(trusted_facts):
                 return product_usage_reply(review, product, trusted_facts, revision)
             name = getattr(product, 'name', 'товар')[:120]
             return _variant([
