@@ -1,4 +1,7 @@
 import unittest
+import ast
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 from app.product_guidance import usage_excerpt
 from app.safety import rule_reply, safe_fallback_reply, validate_reply, review_intent
@@ -82,6 +85,17 @@ class ProductGuidanceTests(unittest.TestCase):
         answers = {rule_reply(self.review, self.product, revision=i, facts=self.facts) for i in range(3)}
         self.assertEqual(len(answers), 3)
         self.assertTrue(all('30 секунд' in answer for answer in answers))
+
+    def test_quality_recognizes_idiom_but_rejects_unrelated_reply(self):
+        # Isolate the pure quality helper without importing production DB dependencies.
+        app_path = Path(importlib.util.find_spec('app').submodule_search_locations[0])
+        tree = ast.parse((app_path / 'services.py').read_text(encoding='utf-8'))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == '_addresses_review_topic')
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), '<quality helper>', 'exec'), namespace)
+        matches = namespace['_addresses_review_topic']
+        self.assertTrue(matches('Деньги на ветер', 'Извините за результат очистки. По инструкции распылите средство.'))
+        self.assertFalse(matches('Деньги на ветер', 'Спасибо за покупку! Приятных поездок!'))
 
 
 if __name__ == '__main__':
