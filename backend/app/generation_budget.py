@@ -1,7 +1,7 @@
 import asyncio
 
 
-MODEL_GENERATION_SECONDS = 150
+MODEL_GENERATION_SECONDS = 30
 
 
 class GenerationBudget:

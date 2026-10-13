@@ -651,7 +651,7 @@ async def generate_draft(db, review_id, instruction=''):
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
-    structured_intents = ('WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM')
+    structured_intents = ('WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
     forced_model = None
     comparison_texts = []
     candidates_evaluated = max(1, len(rule_candidates))
