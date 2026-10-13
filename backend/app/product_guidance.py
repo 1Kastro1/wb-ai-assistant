@@ -89,13 +89,17 @@ def product_usage_reply(review, product, facts, revision=0):
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     text = review.text.lower().replace('ё', 'е')
     if complaints & {'LEAKAGE', 'PACKAGING_ISSUE'} and not complaints - {'LEAKAGE', 'PACKAGING_ISSUE', 'ODOR_COMPLAINT'}:
-        parts = ['Здравствуйте! Спасибо за отзыв.']
+        thanks = ['Спасибо за отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что рассказали о ситуации.'][int(revision) % 3]
+        parts = ['Здравствуйте! ' + thanks]
         if analysis['sentiment'] == 'mixed':
             parts.append('Рады, что само средство Вам понравилось.')
-        parts.append('Приносим извинения за ненадлежащее состояние упаковки' + (' и протечку средства.' if 'LEAKAGE' in complaints else '.'))
+        details = ['ненадлежащее состояние крышки и упаковки' if 'крышк' in text else 'ненадлежащее состояние упаковки']
+        if 'LEAKAGE' in complaints:
+            details.append('протечку средства')
         if 'ODOR_COMPLAINT' in complaints:
-            parts.append('Ваше замечание о неприятном запахе также требует проверки; по отзыву нельзя подтвердить причину или подмену товара.')
-        parts.append('Для проверки обратитесь в официальную поддержку маркетплейса с фотографиями упаковки, крышки и описанием проблемы.')
+            details.append('неприятный запах')
+        parts.append('Приносим извинения за ' + (', '.join(details[:-1]) + ' и ' + details[-1] if len(details) > 1 else details[0]) + '.')
+        parts.append('Если при получении заказа в ПВЗ Вы обнаружите повреждение упаковки или несоответствие товара описанию, Вы можете отказаться от его получения.')
         return ' '.join(parts)
     halogen = 'ламп' in name and 'галоген' in name
     dim = any(marker in text for marker in ('тускл', 'слабо свет', 'свет слаб')) and not re.search(r'(?<!\w)не\s+тускл', text)
