@@ -427,6 +427,7 @@ function ProductKnowledgeCard({product,busy,owner,canManage,onDiscuss,onRefresh,
   async function verify(index:number){await api('/products/'+product.id+'/facts/'+index+'/verify','POST');await onRefresh()}
   function trustedFact(item:Row){
     if(item.verification_status!=='VERIFIED')return false;
+    if(item.reviewed_catalog&&item.source_type==='supplier'&&item.manufacturer_article==='D38RU'&&(!product.part_number||String(product.part_number).trim().toUpperCase()==='D38RU')&&item.source==='https://leraton.ru/katalog/cleaners/osvezhiteli-vozduxa-2/dymovye-shashki/ustranitel-nepriyatnyx-zapaxov-deodorant-steam-type-ag-dymovaya-shashka-d38ru-40ml')return true;
     if(item.source==='Карточка товара'||String(item.source||'').startsWith('Карточка WB:'))return true;
     try {const url=new URL(item.source);const domain=String(product.official_domain||'').toLowerCase();return url.protocol==='https:'&&Boolean(domain)&&(url.hostname===domain||url.hostname.endsWith('.'+domain))} catch{return false}
   }
