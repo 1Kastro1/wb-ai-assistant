@@ -11,6 +11,7 @@ from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
+from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply
 from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
 
@@ -293,6 +294,9 @@ def assess_reply(review, product, reply, verified_facts=None):
         breakdown['relevance']['score'] = 12
     else:
         issues.append('ответить именно на содержание отзыва')
+    analysis = analyze_customer_message(review.text, review.rating)
+    for topic in missing_complaints(analysis, reply):
+        issues.append('не учтено существенное замечание: ' + INTENT_LABELS.get(topic, topic))
     intent = review_intent(review.text)
     combined_cleaner_complaint = cleaner_effectiveness_complaint(review, product)
     if intent == 'WRONG_ITEM':
@@ -325,10 +329,6 @@ def assess_reply(review, product, reply, verified_facts=None):
     else:
         score += 10
         breakdown['resolution']['score'] = 10
-    if any(x in lowered for x in ('напишите продавцу', 'свяжитесь с продавцом', 'обратитесь к продавцу')):
-        score = 0
-        breakdown['safety']['score'] = 0
-        issues.append('не отправлять покупателя писать продавцу')
     if reply.strip().lower() in ('спасибо за отзыв!', 'спасибо за отзыв.', 'спасибо!'):
         score = min(score, 35)
         issues.append('слишком общий ответ')
@@ -490,6 +490,8 @@ def question_intent(text):
 
 
 def safe_question_fallback(question, product, intent):
+    if analyze_customer_message(question.text)['buyer_asks_about_money']:
+        return official_support_reply()
     if intent == 'совместимость':
         # Quote only a short model designation from the customer's question; never echo a VIN.
         question_text = re.sub(r'\b[A-HJ-NPR-Z0-9]{17}\b', ' ', question.text or '', flags=re.I)
@@ -564,6 +566,7 @@ async def generate_question_draft(db, question, instruction=''):
     expected_revision = existing.revision if existing else None
     verified_facts = trusted_product_facts(db, product)
     sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
+    analysis = analyze_customer_message(question.text)
     intent = question_intent(question.text)
     if intent == 'применение' and not has_usage_instruction(verified_facts):
         try:
@@ -581,12 +584,12 @@ async def generate_question_draft(db, question, instruction=''):
             examples.append({'question': item.text, 'answer': item.existing_answer})
     memories = [memory.text for memory in db.scalars(select(Memory).where(Memory.enabled == True)) if memory.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
     messages = [
-        {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
-        {'role': 'user', 'content': json.dumps({'question': question.text, 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
+        {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8') + '\n' + customer_reply_policy()},
+        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
     try:
-        candidates = await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
+        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
     except Exception:
         candidates = []
     checked = []
@@ -706,8 +709,8 @@ async def generate_draft(db, review_id, instruction=''):
                 web_sources = []
                 web_search_failed = True
         messages = [
-            {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
-            {'role': 'user', 'content': json.dumps({'review_data': review.text, 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
+            {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\n' + customer_reply_policy() + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
+            {'role': 'user', 'content': json.dumps({'review_data': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating), 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
         best_reply, best_quality = None, {'score': -1, 'issues': []}
         valid_candidates = []
         attempt_messages = messages
