@@ -5,8 +5,7 @@ const path=require('node:path');
 const ts=require('typescript');
 const React=require('react');
 const {renderToStaticMarkup}=require('react-dom/server');
-function loadComponent(file){
- const source=fs.readFileSync(file,'utf8');
+function loadComponent(file,source=fs.readFileSync(file,'utf8')){
  const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
  const moduleObject={exports:{}};
  const localRequire=name=>name.startsWith('.')?loadComponent(path.resolve(path.dirname(file),name+'.tsx')):require(name);
@@ -30,3 +29,15 @@ exports.Card=Card;
 test('product photos load lazily with an accessible name',()=>{const html=render({review:{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp'}}});assert(html.includes('src="https://example.com/card.webp"'));assert(html.includes('loading="lazy"'));assert(html.includes('alt="Очиститель"'))});
 test('missing or unsafe photo URLs retain a product placeholder',()=>{for(const image_url of ['', 'javascript:alert(1)']){const html=render({review:{product:{name:'Очиститель',image_url}}});assert(html.includes('Фото товара отсутствует'));assert(!html.includes('<img'))}});
 test('review header keeps scheduling details collapsed and controls permission-aware',()=>{const Header=loadComponent(path.join(__dirname,'../app/ReviewHeader.tsx')).default;const html=renderToStaticMarkup(React.createElement(Header,{automation:{enabled:false},busy:false,canManage:false,assistantEnabled:true,count:30,total:220294,selected:0,onToggle(){},onCheck(){},onPublish(){}}));assert(html.includes('Расписание автоответов'));assert(!html.includes(' open='));assert(html.includes('disabled'));assert(!html.includes('class="primary"'))});
+
+test('product knowledge card renders its own thumbnail',()=>{
+ const file=path.join(__dirname,'../app/page.tsx'),page=fs.readFileSync(file,'utf8');
+ const start=page.indexOf('function ProductKnowledgeCard('),end=page.indexOf('\nfunction reviewIntent',start);
+ const fragment="import {useState,useEffect} from 'react'; import ProductThumbnail from './ProductThumbnail'; type Row=Record<string,any>;"+page.slice(start,end)+';export default ProductKnowledgeCard;';
+ const KnowledgeCard=loadComponent(file,fragment).default;
+ const html=renderToStaticMarkup(React.createElement(KnowledgeCard,{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp',facts:[]},busy:false,owner:false,canManage:true,onDiscuss(){},onRefresh(){},onRun(){}}));
+ assert(html.includes('src="https://example.com/card.webp"'));
+ assert(html.includes('product-identity'));
+ const otherStart=page.indexOf('function SyncSummary'),otherEnd=page.indexOf('function QuestionCard',otherStart);
+ assert(!page.slice(otherStart,otherEnd).includes('ProductThumbnail'));
+});

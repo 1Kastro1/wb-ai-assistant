@@ -12,3 +12,5 @@ button:focus-visible{outline:3px solid #bcb0ef;outline-offset:3px}button:hover:n
 .review-policy-note{font-size:13px;color:var(--muted);margin:0 0 16px}.compact-review .customer-review{margin-left:0;margin-right:0}.compact-review .draft{margin-left:0;margin-right:0}.compact-review:before{display:none}
 
 @media(max-width:760px){.sidebar .market-switcher{display:flex;gap:6px;margin:12px 0 0;padding:0}.sidebar .market-switcher button{min-width:120px;padding:7px 9px;margin:0}.sidebar.is-collapsed .market-switcher{display:none}}
+
+.product-identity{display:flex;align-items:center;gap:12px;margin:14px 0}.product-grid .product-identity h3{margin:0;font-size:16px}.product-grid .product-identity .product-thumbnail{margin:0}
