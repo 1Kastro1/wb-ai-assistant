@@ -4,6 +4,8 @@ from datetime import datetime
 from app.db import Draft, Job, Product, Review, Session, setting
 from app.integrations import guard, ollama, wb_question_pages
 from app.services import assess_question_answer
+from app.safety import validate_reply
+import pytest
 
 
 def add_question():
@@ -33,6 +35,39 @@ def test_battery_answer_distinguishes_nominal_voltage_from_measured_charge():
     assert inaccurate['passed'] is False
     assert 'номинальное' in inaccurate['issues'][0]
     assert careful['passed'] is True
+
+
+def test_internal_reasoning_question_draft_cannot_be_published_and_is_replaced(client, monkeypatch):
+    meta = 'Хорошо, мне нужно создать три разных безопасных варианта ответа на вопрос о совместимости. Сначала проанализирую товар и выберу лучший текст.'
+    with pytest.raises(ValueError, match='служебные рассуждения'):
+        validate_reply(meta)
+    with Session() as db:
+        db.add(Product(id='reasoning-product', name='Колодки тормозные', brand='TEST'))
+        db.flush()
+        db.add(Review(id='reasoning-question', wb_review_id='reasoning-question', product_id='reasoning-product',
+                      rating=0, text='Подойдут ли колодки для Рено Дастер К4М?', marketplace='wb_question'))
+        db.flush()
+        db.add(Draft(id='reasoning-draft', review_id='reasoning-question', text=meta, original=meta,
+                     quality={'score': 75, 'passed': False}))
+        db.commit()
+    blocked = client.post('/questions/reasoning-question/publish')
+    assert blocked.status_code == 400
+    assert 'служебные рассуждения' in blocked.json()['detail']
+    with Session() as db:
+        assert db.get(Draft, 'reasoning-draft').text == meta
+
+    valid = ('Здравствуйте! Спасибо за вопрос. В карточке товара пока нет подтверждённых данных о совместимости '
+             'колодок с Рено Дастер К4М. Не хотим вводить вас в заблуждение: без проверенного артикула и параметров '
+             'автомобиля нельзя подтвердить применяемость.')
+    async def variants(*args, **kwargs):
+        return [meta, valid]
+    monkeypatch.setattr(ollama, 'reply_variants', variants)
+    response = client.post('/questions/reasoning-question/draft', json={})
+    assert response.status_code == 200, response.text
+    draft = response.json()
+    assert draft['text'] == valid
+    assert draft['quality']['candidates_evaluated'] == 1
+    assert draft['quality']['passed'] is True
 
 
 def test_wb_question_pagination_rolls_date_window_before_offset_limit(monkeypatch):
