@@ -594,6 +594,9 @@ def assess_question_answer(question, product, answer, sources=None):
 
 
 async def generate_question_draft(db, question, instruction=''):
+    question_started = time.monotonic()
+    web_seconds = model_seconds = 0.0
+    fallback_reason = ''
     if question.is_answered:
         raise ValueError('На вопрос уже есть ответ')
     product = db.get(Product, question.product_id)
@@ -604,6 +607,7 @@ async def generate_question_draft(db, question, instruction=''):
     analysis = analyze_customer_message(question.text)
     intent = question_intent(question.text)
     if intent == 'применение' and not has_usage_instruction(verified_facts):
+        web_started = time.monotonic()
         try:
             found = cached_web_instruction_sources(product) or await asyncio.wait_for(web_research.search_instructions(product, db), timeout=8)
             if found:
@@ -612,6 +616,8 @@ async def generate_question_draft(db, question, instruction=''):
                 sources.extend([{**item, 'verification_status':'WEB_UNVERIFIED'} for item in found[:3]])
         except (ValueError, TimeoutError):
             pass
+        finally:
+            web_seconds = time.monotonic() - web_started
     examples = []
     previous = db.scalars(select(Review).where(Review.marketplace.like('%_question'), Review.product_id == question.product_id, Review.is_answered == True, Review.id != question.id).order_by(Review.created_at.desc()).limit(5))
     for item in previous:
@@ -626,10 +632,14 @@ async def generate_question_draft(db, question, instruction=''):
     voltage = battery_voltage_answer(question, product)
     if voltage:
         sources.append(voltage['source'])
+    uses_model = not analysis['buyer_asks_about_money'] and not voltage
+    model_started = time.monotonic()
     try:
         candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [voltage['answer']] if voltage else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
-    except Exception:
+    except Exception as error:
+        fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
         candidates = []
+    model_seconds = time.monotonic() - model_started if uses_model else 0.0
     checked = []
     for candidate in candidates:
         try:
@@ -648,6 +658,8 @@ async def generate_question_draft(db, question, instruction=''):
         quality = assess_question_answer(question, product, reply, sources)
         quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
         model = 'question-safety-1.0'
+    route = 'fallback' if model.startswith('question-safety') else 'model' if uses_model else 'rules'
+    quality['timing'] = {'total_seconds': round(time.monotonic() - question_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     quality['candidates_evaluated'] = len(checked)
     quality['analysis_summary'] = f'Определён тип вопроса: {intent}. Ответ проверен на соответствие вопросу, подтверждённым фактам и правилам безопасности.'
     db.refresh(question)
@@ -657,8 +669,8 @@ async def generate_question_draft(db, question, instruction=''):
     if (draft.revision if draft else None) != expected_revision:
         raise ValueError('Черновик изменён во время генерации')
     if draft:
-        draft.edits = draft.edits + [{'old': draft.text, 'new': reply, 'at': now()}]
-        draft.text, draft.revision, draft.model, draft.quality = reply, draft.revision + 1, model, quality
+        edit_draft(db, draft.id, reply, draft.revision, learn_preferences=False)
+        draft.model, draft.quality = model, quality
     else:
         draft = Draft(id=str(uuid4()), review_id=question.id, text=reply, original=reply, model=model, quality=quality)
         db.add(draft)
@@ -859,11 +871,13 @@ async def generate_draft(db, review_id, instruction=''):
 def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=True):
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
-    draft = db.get(Draft, draft_id, populate_existing=True)
+    review_id = db.scalar(select(Draft.review_id).where(Draft.id == draft_id))
+    # Use the same lock order as publication: review first, then draft.
+    review = db.scalar(select(Review).where(Review.id == review_id).with_for_update().execution_options(populate_existing=True))
+    draft = db.scalar(select(Draft).where(Draft.id == draft_id).with_for_update().execution_options(populate_existing=True))
     if not draft or draft.revision != revision:
         raise ValueError('Черновик изменился. Обновите страницу')
-    review = db.get(Review, draft.review_id, populate_existing=True)
-    if review.status == 'publishing' or review.is_answered:
+    if not review or review.status == 'publishing' or review.is_answered:
         raise ValueError('Этот ответ уже публикуется или опубликован')
     value = validate_reply(value)
     old = draft.text
@@ -916,7 +930,7 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
     # Reserve the action and unique per-review publication slots atomically.
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
-    action = db.get(Action, action_id, populate_existing=True)
+    action = db.scalar(select(Action).where(Action.id == action_id).with_for_update().execution_options(populate_existing=True))
     if not action:
         raise ValueError('Действие не найдено')
     if action.status != 'pending':
@@ -935,9 +949,10 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
         raise ValueError('Режим изменён после подготовки действия. Подготовьте новое подтверждение')
     if not test and not REAL_PUBLISH:
         raise ValueError('Реальная публикация не разрешена при запуске приложения')
-    for item in action.payload['items']:
-        draft, review = db.get(Draft, item['draft_id']), db.get(Review, item['review_id'])
-        if not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
+    for item in sorted(action.payload['items'], key=lambda entry: entry['review_id']):
+        review = db.scalar(select(Review).where(Review.id == item['review_id']).with_for_update().execution_options(populate_existing=True))
+        draft = db.scalar(select(Draft).where(Draft.id == item['draft_id']).with_for_update().execution_options(populate_existing=True))
+        if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
         if review.manual and not manual_ack:
             raise ValueError('Нужно отдельное подтверждение ручной проверки опасного отзыва')

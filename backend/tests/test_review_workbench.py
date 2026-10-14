@@ -140,5 +140,13 @@ class WorkbenchTests(unittest.TestCase):
         with self.factory() as db:set_setting(db,'assistant_enabled',False);db.commit()
         self.assertEqual(self.client.post('/jobs/selected-drafts',json={'review_ids':['r1']}).status_code,400)
 
+    def test_question_generation_records_timing_and_model_unavailability(self):
+        with self.factory() as db:
+            with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('Offline'))),patch('app.services.web_research.search_instructions',new=AsyncMock(return_value=[])):
+                result=asyncio.run(main.generate_draft(db,'question'))
+            self.assertEqual(result['quality']['timing']['route'],'fallback')
+            self.assertEqual(result['quality']['timing']['fallback_reason'],'unavailable')
+            self.assertGreaterEqual(result['quality']['timing']['total_seconds'],0)
+
 
 if __name__=='__main__':unittest.main()
