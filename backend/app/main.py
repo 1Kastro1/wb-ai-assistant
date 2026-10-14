@@ -29,6 +29,7 @@ from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
 from .maintenance import backup, portable_backup, portable_restore, portable_verify, database_health, recovery_snapshot
 from . import voice
+from .activity_history import activity_page, rule_details
 
 
 @asynccontextmanager
@@ -100,7 +101,7 @@ async def boundary(request, call_next):
                 parts = [part for part in request.url.path.split('/') if part]
                 entity_type = parts[0] if parts else ''
                 entity_id = parts[1] if len(parts) > 1 and len(parts[1]) < 100 else ''
-                audit_db.add(Activity(user_id=actor['user_id'], username=actor['username'], method=request.method, path=request.url.path[:300], status=response.status_code, entity_type=entity_type, entity_id=entity_id, details={'query_keys':sorted(request.query_params.keys())}))
+                audit_db.add(Activity(user_id=actor['user_id'], username=actor['username'], method=request.method, path=request.url.path[:300], status=response.status_code, entity_type=entity_type, entity_id=entity_id, details={'query_keys':sorted(request.query_params.keys()), **getattr(request.state,'activity_details',{})}))
                 audit_db.commit()
         except Exception:
             pass
@@ -422,6 +423,11 @@ def users_list(auth: OWNER, db: DB):
 @app.get('/team/activity')
 def team_activity(auth: OWNER, db: DB):
     return [public(item) for item in db.scalars(select(Activity).order_by(Activity.id.desc()).limit(200)).all()]
+
+
+@app.get('/activity/page')
+def user_activity(auth: AUTH, db: DB, q: str = '', user_id: str = '', before: int = 0, limit: int = 50):
+    return activity_page(db,auth,q,user_id,before,limit)
 
 
 @app.get('/team/dashboard')
@@ -1806,7 +1812,7 @@ action_lock = asyncio.Lock()
 
 
 @app.post('/actions/{aid}/confirm')
-async def confirmation(aid: str, body: Confirm, auth: AUTH, db: DB):
+async def confirmation(aid: str, body: Confirm, request: Request, auth: AUTH, db: DB):
     action = db.get(Action, aid)
     if action and action.kind == 'publish':
         marketplace_operator(auth)
@@ -1818,11 +1824,14 @@ async def confirmation(aid: str, body: Confirm, auth: AUTH, db: DB):
     elif action and action.kind == 'memory':
         owner(auth)
     async with action_lock:
-        return await confirm_action(db, aid, body.manual_ack, auth['user_id'])
+        result = await confirm_action(db, aid, body.manual_ack, auth['user_id'])
+        if action and action.kind == 'memory' and result.get('status') == 'completed':
+            request.state.activity_details = rule_details(action.payload,'rule_added')
+        return result
 
 
 @app.post('/actions/{aid}/cancel')
-def cancel(aid: str, auth: AUTH, db: DB):
+def cancel(aid: str, request: Request, auth: AUTH, db: DB):
     action = db.get(Action, aid)
     if not action or action.status != 'pending':
         raise ValueError('Действие уже обработано')
@@ -1842,6 +1851,8 @@ def cancel(aid: str, auth: AUTH, db: DB):
             if review.status == 'pending_confirmation':
                 review.status = 'manual_review' if review.manual else 'draft_ready'
     db.commit()
+    if action.kind == 'memory':
+        request.state.activity_details = rule_details(action.payload,'rule_rejected')
     return {'ok': True}
 
 
@@ -1852,20 +1863,22 @@ class MemoryInput(Payload):
 
 
 @app.post('/memory/propose')
-def memory_propose(body: MemoryInput, auth: AUTH, db: DB):
+def memory_propose(body: MemoryInput, request: Request, auth: AUTH, db: DB):
     action = Action(id=str(uuid4()), kind='memory', payload=body.model_dump())
     db.add(action)
     db.commit()
+    request.state.activity_details = rule_details(action.payload,'rule_proposed')
     return public(action)
 
 
 @app.patch('/actions/{aid}/memory')
-def memory_scope(aid: str, body: MemoryInput, auth: OWNER, db: DB):
+def memory_scope(aid: str, body: MemoryInput, request: Request, auth: OWNER, db: DB):
     action = db.get(Action, aid)
     if not action or action.status != 'pending' or action.kind != 'memory':
         raise ValueError('Нет ожидающего предложения памяти')
     action.payload = body.model_dump()
     db.commit()
+    request.state.activity_details = rule_details(action.payload,'rule_updated')
     return public(action)
 
 
@@ -1875,12 +1888,15 @@ def memories(auth: AUTH, db: DB):
 
 
 @app.delete('/memory/{mid}')
-def memory_delete(mid: str, auth: OWNER, db: DB):
+def memory_delete(mid: str, request: Request, auth: OWNER, db: DB):
+    existing = db.get(Memory,mid)
+    details = rule_details(public(existing),'rule_deleted') if existing else {}
     result = db.execute(delete(Memory).where(Memory.id == mid))
     if result.rowcount != 1:
         db.rollback()
         raise HTTPException(404, 'Правило уже удалено или не найдено')
     db.commit()
+    request.state.activity_details = details
     return {'ok': True, 'id': mid}
 
 
@@ -1895,7 +1911,7 @@ chat_lock = asyncio.Lock()
 
 
 @app.post('/chat')
-async def chat(body: Chat, auth: AUTH, db: DB):
+async def chat(body: Chat, request: Request, auth: AUTH, db: DB):
     if not setting(db, 'assistant_enabled', True):
         raise ValueError('Ассистент отключён владельцем')
     async with chat_lock:
@@ -1904,7 +1920,11 @@ async def chat(body: Chat, auth: AUTH, db: DB):
         selection = {**body.selection, 'active_store_id':store_id}
         assigned = auth['role'] == 'owner' or '*' in (auth.get('store_ids') or []) or store_id in (auth.get('store_ids') or [])
         allowed = assigned and ('*' in auth.get('permissions', []) or bool(store and store.provider + ':operate' in auth.get('permissions', [])))
-        return await assistant.send(db, body.text, body.conversation_id, selection, body.voice_mode, allowed)
+        result = await assistant.send(db, body.text, body.conversation_id, selection, body.voice_mode, allowed)
+        data = result.get('data')
+        if isinstance(data,dict) and data.get('kind') == 'memory' and isinstance(data.get('payload'),dict):
+            request.state.activity_details = rule_details(data['payload'],'rule_proposed')
+        return result
 
 
 class VoiceText(Payload):
