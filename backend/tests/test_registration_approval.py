@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from argon2 import PasswordHasher
 from app import main
 from app.db import Base, User, RegistrationRequest, LoginSession, Activity, StoreProfile, set_setting
+from app.security import digest
 
 
 class RegistrationTests(unittest.TestCase):
@@ -172,6 +173,35 @@ class RegistrationTests(unittest.TestCase):
         self.restart_application()
         with self.factory() as db:
             self.assertEqual(db.get(User,'owner').password_hash,'legacy-hash')
+
+    def seed_real_sessions(self):
+        main.app.dependency_overrides.pop(main.authorize)
+        with self.factory() as db:
+            db.add_all([LoginSession(id=digest('current-session'),user_id='approver',csrf='csrf-test',expires=int(main.time.time())+1000),
+                        LoginSession(id=digest('another-session'),user_id='approver',csrf='other-csrf',expires=int(main.time.time())+1000)])
+            db.commit()
+        self.client.cookies.set('wb_session','current-session')
+
+    def test_logout_revokes_current_session_and_clears_cookie(self):
+        self.seed_real_sessions()
+        response=self.client.post('/auth/logout',headers={'X-CSRF-Token':'csrf-test'})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertIn('Max-Age=0',response.headers['set-cookie'])
+        with self.factory() as db:
+            self.assertIsNone(db.get(LoginSession,digest('current-session')))
+            self.assertIsNotNone(db.get(LoginSession,digest('another-session')))
+            self.assertIsNotNone(db.get(User,'approver'))
+        self.assertEqual(self.client.get('/auth/session').status_code,401)
+
+    def test_logout_without_valid_csrf_does_not_remove_session(self):
+        self.seed_real_sessions()
+        self.assertEqual(self.client.post('/auth/logout').status_code,403)
+        with self.factory() as db:self.assertIsNotNone(db.get(LoginSession,digest('current-session')))
+
+    def test_repeated_logout_returns_unauthorized_for_frontend_recovery(self):
+        self.seed_real_sessions()
+        self.client.post('/auth/logout',headers={'X-CSRF-Token':'csrf-test'})
+        self.assertEqual(self.client.post('/auth/logout',headers={'X-CSRF-Token':'csrf-test'}).status_code,401)
 
 
 if __name__=='__main__':unittest.main()
