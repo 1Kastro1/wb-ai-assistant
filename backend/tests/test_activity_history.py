@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from fastapi import Request
 from fastapi.testclient import TestClient
-from app.db import Base,Activity,User,Memory
+from app.db import Base,Activity,User,Memory,StoreProfile
 from app.activity_history import activity_page,rule_details
 from app import main
 
@@ -19,6 +19,7 @@ class ActivityHistoryTests(unittest.TestCase):
         with self.factory() as db:
             db.add_all([User(id='owner',username='owner',display_name='Владелец',password_hash='unused',role='owner'),
                         User(id='colleague',username='colleague',display_name='Коллега',password_hash='unused',role='manager')])
+            db.add(StoreProfile(id='owner',name='Мой магазин',provider='wb'))
             db.commit()
         self.actor={'role':'owner','user_id':'owner','username':'owner','permissions':['*'],'store_ids':['*']}
         self.previous_overrides=dict(main.app.dependency_overrides)
@@ -104,6 +105,23 @@ class ActivityHistoryTests(unittest.TestCase):
     def test_rejected_validation_is_not_logged_as_success(self):
         self.assertEqual(self.client.post('/memory/propose',json={'text':'x'}).status_code,422)
         self.assertEqual(self.client.get('/activity/page').json()['items'],[])
+
+    def test_rule_edit_and_rejection_keep_the_changed_text_and_scope(self):
+        action=self.client.post('/memory/propose',json={'text':'Первое правило'}).json()
+        response=self.client.patch('/actions/'+action['id']+'/memory',json={'text':'Не обещать компенсацию','scope':'brand:KANGAROO'})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(self.client.post('/actions/'+action['id']+'/cancel').status_code,200)
+        items=self.client.get('/activity/page').json()['items']
+        self.assertEqual([item['details']['event'] for item in items[:2]],['rule_rejected','rule_updated'])
+        self.assertTrue(all(item['details']['rule']=='Не обещать компенсацию' and item['details']['scope']=='brand:KANGAROO' for item in items[:2]))
+
+    def test_rule_proposed_through_chat_is_also_recorded(self):
+        response=self.client.post('/chat',json={'text':'Запомни: не используй слово «уважаемый»'})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['data']['kind'],'memory')
+        record=self.client.get('/activity/page').json()['items'][0]
+        self.assertEqual(record['details']['event'],'rule_proposed')
+        self.assertEqual(record['details']['rule'],'не используй слово «уважаемый»')
 
 
 if __name__=='__main__':
