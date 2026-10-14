@@ -24,7 +24,7 @@ from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for, web_research
-from .services import reviews_search, reviews_page, review_filter_counts, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public
+from .services import reviews_search, reviews_page, review_filter_counts, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public, review_items
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
@@ -1503,14 +1503,9 @@ def questions_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = Fals
     else:
         total = db.scalar(select(func.count()).select_from(Review).join(Product).where(*conditions)) or 0
         rows = list(db.scalars(ordered.offset(offset).limit(limit)))
-    items = []
-    for row in rows:
-        item = public(row)
-        item['product'] = public(db.get(Product, row.product_id))
-        draft = db.scalar(select(Draft).where(Draft.review_id == row.id))
-        item['draft'] = draft_public(db, draft)
-        item['question_type'] = question_intent(row.text)
-        items.append(item)
+    items = review_items(db, rows)
+    for item in items:
+        item['question_type'] = question_intent(item['text'])
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total}
 
 

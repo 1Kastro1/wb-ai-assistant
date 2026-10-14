@@ -26,6 +26,7 @@ import './workbench.css';
 import BatchDraftPanel from './BatchDraftPanel';
 import GenerationMetrics from './GenerationMetrics';
 import {workspaceResources,createWorkspaceLoader,readViewPreferences} from './workspace-data.mjs';
+import {createBackgroundPoller,createScrollSaver} from './background-work.mjs';
 import {startSelectedDrafts} from './batch-job.mjs';
 
 type Row = Record<string, any>;
@@ -75,8 +76,9 @@ export default function App() {
   const [performance, setPerformance] = useState('normal');
   const [token, setToken] = useState(''), [connectionConfig,setConnectionConfig]=useState<Row>({}), [memory, setMemory] = useState(''), [brand, setBrand] = useState(''), [brands, setBrands] = useState<Row[]>([]);
   const [reviewCounts,setReviewCounts]=useState<Row>({});
-  const reviewSearchRequest=useRef(0);
+  const reviewSearchRequest=useRef(0),productSearchRequest=useRef(0),questionSearchRequest=useRef(0),activeJobs=useRef(false);
   const [reviewPage, setReviewPage] = useState<Row>({total:0,offset:0,has_more:false}), [questionPage, setQuestionPage] = useState<Row>({total:0,offset:0,has_more:false}), [jobs, setJobs] = useState<Row[]>([]), [quality, setQuality] = useState<Row>({});
+  activeJobs.current=jobs.some(job=>['queued','running'].includes(job.status));
   const [stores, setStores] = useState<Row>({items:[]}), [storeName, setStoreName] = useState(''), [storeProvider,setStoreProvider]=useState('wb'), [schedule, setSchedule] = useState<Row>({enabled:false,reviews_hours:3,questions_hours:3,products_hours:24,backup_hours:24,drafts_enabled:false,question_drafts_enabled:false,drafts_hours:6,drafts_days:7,auto_propose:false,min_quality:96,max_proposals:100});
   const [notifications,setNotifications]=useState<Row>({items:[],unread:0}),[teamDashboard,setTeamDashboard]=useState<Row>({members:[],totals:{}}),[telegram,setTelegram]=useState<Row>({enabled:false,chat_id:''}),[telegramToken,setTelegramToken]=useState('');
   const [autoReplies, setAutoReplies] = useState<Row>({enabled:false,state:'paused'});
@@ -154,12 +156,15 @@ export default function App() {
     }finally{if(request===reviewSearchRequest.current)setReviewLoading(false)}
   }
   async function findProducts(offset=0, append=false) {
+    const request=++productSearchRequest.current,scope=visibleScope.current;
     const result=await api('/products/page?limit=60&offset='+offset+'&q='+encodeURIComponent(productQuery));
+    if(request!==productSearchRequest.current||scope!==visibleScope.current)return;
     setProducts(current=>append?[...current,...result.items]:result.items);setProductPage(result);
   }
   async function findQuestions(offset=0, append=false) {
+    const request=++questionSearchRequest.current,scope=visibleScope.current;
     const params=new URLSearchParams({q:questionQuery,unanswered:String(questionFilter==='unanswered'),status:questionFilter==='draft'||questionFilter==='answered'?questionFilter:'',kind:questionKind,limit:'30',offset:String(offset)});
-    const result=await api('/questions/page?'+params.toString());setQuestions(current=>append?[...current,...result.items]:result.items);setQuestionPage(result);
+    const result=await api('/questions/page?'+params.toString());if(request!==questionSearchRequest.current||scope!==visibleScope.current)return;setQuestions(current=>append?[...current,...result.items]:result.items);setQuestionPage(result);
   }
   async function saveStoreToken() {
     setWbStatus({state:'working',kind:'token',message:'Шифрую и сохраняю токен…'});
@@ -183,10 +188,10 @@ export default function App() {
   }
   const viewKey='workspace-view:'+currentUser.id+':'+(stores.active||'unassigned');visibleScope.current=viewKey;
   function persistView(){if(!logged||viewReady!==viewKey)return;const value={...viewPreferences.current,page,filter,query,productQuery,questionQuery,questionFilter,questionKind};viewPreferences.current=value;try{sessionStorage.setItem(viewKey,JSON.stringify(value))}catch{}}
-  useEffect(()=>{if(!logged||!ready)return;let storage=null;try{storage=sessionStorage}catch{};const saved=readViewPreferences(storage,viewKey);viewPreferences.current=saved;if(restoredScope.current&&restoredScope.current!==viewKey)workspaceLoader.current.clear();restoredScope.current=viewKey;reviewViews.current.clear();reviewSearchRequest.current++;setFilter(saved.filter==='context'?'all':saved.filter);setQuery(saved.query);setProductQuery(saved.productQuery);setQuestionQuery(saved.questionQuery);setQuestionFilter(saved.questionFilter);setQuestionKind(saved.questionKind);if(saved.exists&&nav.some(([,name])=>name===saved.page))setPage(saved.page);setSelected([]);setViewReady(viewKey);},[logged,ready,viewKey]);
+  useEffect(()=>{if(!logged||!ready)return;let storage=null;try{storage=sessionStorage}catch{};const saved=readViewPreferences(storage,viewKey);viewPreferences.current=saved;if(restoredScope.current&&restoredScope.current!==viewKey)workspaceLoader.current.clear();restoredScope.current=viewKey;reviewViews.current.clear();reviewSearchRequest.current++;productSearchRequest.current++;questionSearchRequest.current++;setFilter(saved.filter==='context'?'all':saved.filter);setQuery(saved.query);setProductQuery(saved.productQuery);setQuestionQuery(saved.questionQuery);setQuestionFilter(saved.questionFilter);setQuestionKind(saved.questionKind);if(saved.exists&&nav.some(([,name])=>name===saved.page))setPage(saved.page);setSelected([]);setViewReady(viewKey);},[logged,ready,viewKey]);
   useEffect(()=>{persistView()},[viewReady,page,filter,query,productQuery,questionQuery,questionFilter,questionKind]);
   useEffect(()=>{if(!logged||!ready||viewReady!==viewKey)return;const request=++sectionSequence.current;scrollReady.current=false;setSectionLoading(true);setSectionError('');async function load(){try{await refresh(page,false);if(request!==sectionSequence.current)return;if(page==='Отзывы')await findReviews(0,false,filter,true);if(page==='Вопросы')await findQuestions();if(page==='Настройки'&&settingsTab==='connections')await refreshAi()}catch(e){if(request===sectionSequence.current)setSectionError(e instanceof Error?e.message:'Не удалось загрузить раздел')}finally{if(request===sectionSequence.current)setSectionLoading(false)}}void load();return()=>{sectionSequence.current++}},[logged,ready,page,settingsTab,viewReady]);
-  useEffect(()=>{if(!logged||viewReady!==viewKey)return;const saveScroll=()=>{if(!scrollReady.current)return;viewPreferences.current.scroll={...(viewPreferences.current.scroll||{}),[page]:window.scrollY};persistView()};window.addEventListener('scroll',saveScroll,{passive:true});return()=>{window.removeEventListener('scroll',saveScroll)}},[logged,viewReady,page,filter,query]);
+  useEffect(()=>{if(!logged||viewReady!==viewKey)return;const saver=createScrollSaver(()=>{if(!scrollReady.current)return;viewPreferences.current.scroll={...(viewPreferences.current.scroll||{}),[page]:window.scrollY};persistView()});const saveScroll=()=>saver.schedule();window.addEventListener('scroll',saveScroll,{passive:true});return()=>{window.removeEventListener('scroll',saveScroll);saver.flush()}},[logged,viewReady,page,filter,query]);
   useEffect(()=>{if(!logged||viewReady!==viewKey||sectionLoading||reviewLoading)return;const target=Number(viewPreferences.current.scroll?.[page])||0;const frame=requestAnimationFrame(()=>{window.scrollTo({top:target,behavior:'instant'});scrollReady.current=true});return()=>cancelAnimationFrame(frame)},[page,viewReady,sectionLoading,reviewLoading]);
   useEffect(()=>{const preventLoss=(event:BeforeUnloadEvent)=>{if(Object.values(pendingEdits).some(Boolean)){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',preventLoss);return()=>window.removeEventListener('beforeunload',preventLoss)},[pendingEdits]);
   useEffect(() => { let stopped=false;async function initialize(){try{let r;try{r=await api('/auth/session','GET',undefined,12000)}catch(e){if((e as {status?:number}).status!==401)throw e;const status=await api('/auth/status','GET',undefined,12000);if(!stopped){setInitialized(status.initialized);setReady(true)}return}if(stopped)return;setCsrf(r.csrf);setCurrentUser(r.user||{});setLogged(true);setStartupPhase('workspace');if(!r.user?.must_change_password){await refresh('shell',false,r.user?.role)}if(!stopped)setReady(true)}catch(e){if(!stopped)setStartupError(e instanceof Error?e.message:'Не удалось подключиться к серверу.')}}void initialize();return()=>{stopped=true}},[]);
@@ -204,22 +209,19 @@ export default function App() {
   useEffect(()=>{for(const job of jobs)if(!jobStatuses.current[job.id])jobStatuses.current[job.id]=job.status},[jobs]);
   useEffect(() => {
     if (!logged || !['Настройки','Отзывы','Вопросы'].includes(page)) return;
-    const timer = window.setInterval(() => { if(document.visibilityState==='hidden')return;Promise.all([api('/jobs'),api('/auto-replies/status')]).then(async ([items,status])=>{
+    const poller=createBackgroundPoller({load:()=>Promise.all([api('/jobs'),api('/auto-replies/status')]),isVisible:()=>document.visibilityState==='visible',isActive:()=>activeJobs.current,onValue:async([items,status]:[Row[],Row])=>{
+      activeJobs.current=items.some((job:Row)=>['queued','running'].includes(job.status));
       setBatchJob(current=>current?(items as Row[]).find(item=>item.id===current.id)||current:(items as Row[]).find(item=>item.result?.manual_batch&&item.result?.account_id===stores.active&&item.result?.requested_by===currentUser.id&&['queued','running'].includes(item.status))||null);
       const finished=(items as Row[]).some(job=>['queued','running'].includes(jobStatuses.current[job.id])&&['completed','failed','interrupted','cancelled'].includes(job.status)&&['drafts','question_drafts'].includes(job.kind));
       for(const job of items as Row[])jobStatuses.current[job.id]=job.status;
       setJobs(items);setAutoReplies(status);
       if(finished&&page==='Отзывы')await findReviews();
       if(finished&&page==='Вопросы'){await findQuestions();setQuestionStats(await api('/questions/stats'))}
-    }).catch(() => {}); }, 3000);
-    return () => window.clearInterval(timer);
-  }, [logged,page,filter,query,questionFilter,questionQuery,questionKind,stores.active,currentUser.id]);
+    }});poller.start();const wake=()=>poller.wake();document.addEventListener('visibilitychange',wake);return()=>{poller.stop();document.removeEventListener('visibilitychange',wake)};
+  }, [logged,page,filter,query,questionFilter,questionQuery,questionKind,stores.active,currentUser.id,activeJobs.current]);
   useEffect(() => {
     if (!logged || !(page==='Главная' || (page==='Настройки' && settingsTab==='connections'))) return;
-    const update=()=>{void api('/sync/status').then(setSyncReport).catch(()=>{})};
-    update();
-    const timer=window.setInterval(update,15000);
-    return ()=>window.clearInterval(timer);
+    const poller=createBackgroundPoller({load:()=>api('/sync/status'),onValue:setSyncReport,isVisible:()=>document.visibilityState==='visible'});poller.start();const wake=()=>poller.wake();document.addEventListener('visibilitychange',wake);return()=>{poller.stop();document.removeEventListener('visibilitychange',wake)};
   },[logged,page,settingsTab]);
   async function logoutAccount(){if(loggingOut)return;setLoggingOut(true);setError('');try{await Promise.all(Array.from(draftFlushers.current.values()).map(flush=>flush()));await endSession(api);try{stopWakeListening();stopSpeaking();const current=recorder.current;if(current){current.stream.getTracks().forEach((track:MediaStreamTrack)=>track.stop());void current.context.close();recorder.current=null;}}catch{}setCsrf('');setCurrentUser({});setLogged(false);try{for(const key of Object.keys(sessionStorage))if(key.startsWith('draft-job:')||key.startsWith('draft-edit:')||key==='registration-receipt')sessionStorage.removeItem(key)}catch{}window.location.replace(window.location.pathname);}catch(e){setError(e instanceof Error?e.message:'Не удалось выйти. Повторите попытку.');setLoggingOut(false)}}
   async function login(e: FormEvent) { e.preventDefault(); await run(async () => { if(!initialized && password !== confirmation) throw new Error('Пароли не совпадают'); const path=registering?'/auth/register':initialized?'/auth/login':'/auth/setup';const payload=registering?{username,password}:initialized?{username,password}:{username,password,confirmation,display_name:'Владелец'};const r = await api(path,'POST',payload); if(registering){setRegistrationReceipt(r);try{sessionStorage.setItem('registration-receipt',JSON.stringify(r))}catch{}setPassword('');setConfirmation('');window.history.replaceState(null,'',window.location.pathname);return;} setCsrf(r.csrf); setCurrentUser(r.user||{}); setCurrentPassword(r.user?.must_change_password?password:''); setPassword(''); setConfirmation(''); setInitialized(true); setLogged(true);if(registering){window.history.replaceState(null,'',window.location.pathname);setInviteToken('');} if(!r.user?.must_change_password){await refresh('shell',false,r.user?.role);} }); }

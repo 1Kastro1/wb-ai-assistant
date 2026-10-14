@@ -18,8 +18,8 @@ function render(overrides={}){
  return renderToStaticMarkup(React.createElement(Card,{review,checked:false,toggle(){},busy:false,assistantEnabled:true,canManage:true,generating:false,generationError:'',generate(){},save(){},feedback(){},...overrides,review}));
 }
 test('rating-only card removes the empty customer block',()=>{const html=render();assert(!html.includes('ОТЗЫВ ПОКУПАТЕЛЯ'));assert(html.includes('Оценка без текста'));assert(html.includes('Готов к отправке'))});
-test('low-rated draft needs review despite a passed text score',()=>{const html=render({review:{rating:2,text:'Плохое качество'}});assert(html.includes('Нужна проверка'));assert(!html.includes('Готов к отправке'));assert(html.includes('has-text'))});
-test('history is collapsed by default',()=>{const html=render();assert(html.includes('История правок'));assert(html.includes('Прежний текст'));assert(html.includes('Новый текст'));assert(!html.includes(' open='))});
+test('low-rated draft needs review despite a passed text score',()=>{const html=render({review:{rating:2,text:'Плохое качество'}});assert(html.includes('Нужна проверка'));assert(!html.includes('Готов к отправке'));assert(!html.includes('textarea'))});
+test('collapsed rows do not mount editors or edit history',()=>{const html=render();assert(!html.includes('textarea'));assert(!html.includes('История правок'));assert(!html.includes('Прежний текст'));assert(!html.includes(' open='));assert(html.includes('Открыть ответ'))});
 test('generation retains text and disables editor',()=>{const html=render({generating:true,busy:true});assert(html.includes('Готовится'));assert(html.includes('Спасибо за оценку!'));assert(/textarea[^>]+disabled/.test(html));assert(html.includes('0 сек.'))});
 test('recoverable waiting failure retains text and offers continuation',()=>{const html=render({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));assert(html.includes('Спасибо за оценку!'));assert(html.includes('Предыдущий ответ сохранён'))});
 test('terminal failure has a retry action',()=>{assert(render({generationError:'Не удалось завершить подготовку.'}).includes('Повторить попытку'))});

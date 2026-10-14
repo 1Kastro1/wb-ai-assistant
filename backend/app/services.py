@@ -48,16 +48,17 @@ def trusted_product_facts(db, product):
     return prefer_manufacturer_instructions(result)
 
 
-def draft_public(db, draft):
+def draft_public(db, draft, actors=None):
     if not draft:
         return None
     item = public(draft)
     for key in ('created_by', 'updated_by'):
-        actor = db.get(User, item[key]) if item[key] else None
+        actor = (actors.get(item[key]) if actors is not None else db.get(User, item[key])) if item[key] else None
         item[key + '_name'] = actor.display_name if actor else ('Автоматизация' if not item[key] else 'Бывший сотрудник')
-    for edit in item.get('edits') or []:
+    item['edits'] = [dict(edit) for edit in item.get('edits') or []]
+    for edit in item['edits']:
         actor_id = edit.get('by')
-        actor = db.get(User, actor_id) if actor_id and actor_id != 'automation' else None
+        actor = (actors.get(actor_id) if actors is not None else db.get(User, actor_id)) if actor_id and actor_id != 'automation' else None
         edit['by_name'] = actor.display_name if actor else ('Автоматизация' if actor_id in ('', None, 'automation') else 'Бывший сотрудник')
     return item
 INTENT_LABELS = {
@@ -264,17 +265,28 @@ def _review_query(filters):
     return query.where(*conditions)
 
 
-def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids=''):
-    query = _review_query(locals())
-    rows = db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(max(0, offset)).limit(min(200, max(1, limit)))).all()
+def review_items(db, rows):
+    """Serialize one page with bounded queries, including authors of historical edits."""
+    if not rows:
+        return []
+    products = {p.id: p for p in db.scalars(select(Product).where(Product.id.in_({r.product_id for r in rows})))}
+    drafts = {d.review_id: d for d in db.scalars(select(Draft).where(Draft.review_id.in_([r.id for r in rows])))}
+    actor_ids = {actor for d in drafts.values() for actor in (d.created_by, d.updated_by) if actor}
+    actor_ids.update(edit.get('by') for d in drafts.values() for edit in d.edits or [] if edit.get('by') not in (None, '', 'automation'))
+    actors = {u.id: u for u in db.scalars(select(User).where(User.id.in_(actor_ids)))} if actor_ids else {}
     result = []
     for row in rows:
         item = public(row)
-        item['product'] = public(db.get(Product, row.product_id))
-        draft = db.scalar(select(Draft).where(Draft.review_id == row.id))
-        item['draft'] = draft_public(db, draft)
+        item['product'] = public(products.get(row.product_id))
+        item['draft'] = draft_public(db, drafts.get(row.id), actors)
         result.append(item)
     return result
+
+
+def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids=''):
+    query = _review_query(locals())
+    rows = db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(max(0, offset)).limit(min(200, max(1, limit)))).all()
+    return review_items(db, rows)
 
 
 def reviews_page(db, **filters):
@@ -286,8 +298,16 @@ def reviews_page(db, **filters):
 
 
 def review_filter_counts(db, q='', account_id=''):
-    return {view: db.scalar(select(func.count()).select_from(_review_query({'view':view,'q':q,'account_id':account_id}).subquery())) or 0
-            for view in ('all','positive','negative','rating_only','manual')}
+    query = _review_query({'q':q, 'account_id':account_id}).outerjoin(Draft, Draft.review_id == Review.id)
+    empty_text = func.trim(func.replace(func.replace(func.replace(func.coalesce(Review.text, ''), '\n', ''), '\r', ''), '\t', '')) == ''
+    manual = or_(Review.manual == True, Review.status == 'manual_review',
+                 Draft.quality['passed'].as_boolean() == False, Draft.model.startswith('safety-fallback'))
+    values = db.execute(query.with_only_columns(func.count(),
+        func.sum(case((Review.rating.between(4, 5), 1), else_=0)),
+        func.sum(case((Review.rating.between(1, 3), 1), else_=0)),
+        func.sum(case((empty_text, 1), else_=0)),
+        func.sum(case((manual, 1), else_=0))).order_by(None)).one()
+    return dict(zip(('all', 'positive', 'negative', 'rating_only', 'manual'), (value or 0 for value in values)))
 
 
 def assess_reply(review, product, reply, verified_facts=None):
