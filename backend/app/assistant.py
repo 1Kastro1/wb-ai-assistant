@@ -174,7 +174,7 @@ class AssistantService:
                 db.commit()
                 data = public(action)
                 tool = 'memory.propose'
-                answer = 'Предложено правило. Выберите область и подтвердите сохранение в разделе «Действия».'
+                answer = 'Предложено правило. Выберите область и подтвердите сохранение в окне «На подтверждение».'
             elif any(x in lower for x in ('публикуй', 'опубликуй', 'отправь ответы')):
                 require_wb_operation('reviews.publish')
                 ids = context.get('drafted_ids') or context.get('last_result_ids', [])
@@ -271,7 +271,7 @@ class AssistantService:
                     if tool.startswith('reviews.') and isinstance(data, list):
                         answer = f'Найдено отзывов: {len(data)}. Результаты доступны в разделе «Отзывы».'
                     elif tool in ('reviews.publish','memory.propose','memory.save'):
-                        answer = 'Предложение подготовлено. Проверьте его и подтвердите в разделе «Действия».'
+                        answer = 'Предложение подготовлено. Проверьте его и подтвердите в окне «На подтверждение».'
                     else:
                         # Do not let a second LLM transform structured evidence into false fitment.
                         answer = 'Результат инструмента '+tool+':\n'+json.dumps(data,ensure_ascii=False,indent=2)[:10000]
