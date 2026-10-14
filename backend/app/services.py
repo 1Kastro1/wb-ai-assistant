@@ -2,6 +2,7 @@ from .product_guidance import usage_excerpt, product_usage_reply, battery_voltag
 from .verified_instructions import prefer_manufacturer_instructions
 import difflib
 import asyncio
+import time
 import json
 import re
 from collections import Counter
@@ -667,6 +668,9 @@ async def generate_question_draft(db, question, instruction=''):
 
 
 async def generate_draft(db, review_id, instruction=''):
+    generation_started = time.monotonic()
+    web_seconds = model_seconds = 0.0
+    fallback_reason = ''
     if not setting(db, 'assistant_enabled', True):
         raise ValueError('Ассистент отключён владельцем')
     review = db.get(Review, review_id)
@@ -739,7 +743,11 @@ async def generate_draft(db, review_id, instruction=''):
             web_sources = cached_web_instruction_sources(product)
             try:
                 if not web_sources:
-                    web_sources = await asyncio.wait_for(web_research.search_instructions(product, db), timeout=8)
+                    web_started = time.monotonic()
+                    try:
+                        web_sources = await asyncio.wait_for(web_research.search_instructions(product, db), timeout=8)
+                    finally:
+                        web_seconds += time.monotonic() - web_started
                     remember_web_instruction_sources(product, web_sources)
                     db.commit()
             except (ValueError, TimeoutError):
@@ -754,9 +762,11 @@ async def generate_draft(db, review_id, instruction=''):
         last_candidate = ''
         model_unavailable = False
         budget = GenerationBudget()
+        model_started = time.monotonic()
         try:
             seed_candidates = await budget.run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
-        except Exception:
+        except Exception as error:
+            fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
             # A connection failure should immediately use the safe local path instead
             # of holding the browser open for several identical network retries.
             seed_candidates = []
@@ -781,6 +791,7 @@ async def generate_draft(db, review_id, instruction=''):
                 if candidate_quality['score'] >= MIN_DRAFT_QUALITY:
                     issues.append('создать ещё один самостоятельный вариант, чтобы выбрать лучший')
             except TimeoutError:
+                fallback_reason = 'timeout'
                 # Keep the best checked candidate or the existing safe fallback.
                 break
             except Exception as error:
@@ -792,6 +803,7 @@ async def generate_draft(db, review_id, instruction=''):
                     {'role': 'assistant', 'content': last_candidate},
                     {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания; давай советы по применению только из verified_usage_instruction и verified_facts. Верни только ответ.'},
                 ]
+        model_seconds = time.monotonic() - model_started
         fallback = validate_reply(safe_fallback_reply(review, product, generation_revision, trusted_product_facts(db, product)))
         fallback_quality = assess_reply(review, product, fallback, verified_facts)
         candidates_evaluated = len(valid_candidates)
@@ -823,6 +835,8 @@ async def generate_draft(db, review_id, instruction=''):
     quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы.'
     quality['sources'] = [{'text': f.get('text', ''), 'source': f.get('source', ''), 'verification_status': 'VERIFIED'} for f in trusted_product_facts(db, product)]
     quality['unverified_sources_count'] = len(web_sources)
+    route = 'fallback' if model.startswith('safety-fallback') else 'model' if model.split(' · ')[0] == MODEL else 'rules'
+    quality['timing'] = {'total_seconds': round(time.monotonic() - generation_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     # Generation may have awaited Ollama while another request published the review.
     db.refresh(review)
     if review.is_answered or review.status == 'publishing':
@@ -858,11 +872,14 @@ def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=Tru
     if actor_id:
         draft.updated_by = actor_id
     product = db.get(Product, review.product_id)
+    generation_timing = (draft.quality or {}).get('timing')
     if review.marketplace.endswith('_question'):
         sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in trusted_product_facts(db, product)]
         draft.quality = assess_question_answer(review, product, value, sources)
     else:
         draft.quality = assess_reply(review, product, value, trusted_product_facts(db, product))
+    if generation_timing:
+        draft.quality = {**draft.quality, 'timing': generation_timing}
     if learn_preferences:
         learn_from_edit(db, draft, old, value)
     review.status = 'manual_review' if review.manual or not draft.quality['passed'] else 'draft_ready'

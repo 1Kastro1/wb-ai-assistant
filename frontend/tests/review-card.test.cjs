@@ -8,7 +8,7 @@ const {renderToStaticMarkup}=require('react-dom/server');
 function loadComponent(file,source=fs.readFileSync(file,'utf8')){
  const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
  const moduleObject={exports:{}};
- const localRequire=name=>name.startsWith('.')?loadComponent(path.resolve(path.dirname(file),name+'.tsx')):require(name);
+ const localRequire=name=>{if(!name.startsWith('.'))return require(name);const target=path.resolve(path.dirname(file),name);return loadComponent(fs.existsSync(target)?target:target+'.tsx')};
  new Function('require','module','exports',compiled)(localRequire,moduleObject,moduleObject.exports);
  return moduleObject.exports;
 }
@@ -18,12 +18,12 @@ function render(overrides={}){
  return renderToStaticMarkup(React.createElement(Card,{review,checked:false,toggle(){},busy:false,assistantEnabled:true,canManage:true,generating:false,generationError:'',generate(){},save(){},feedback(){},...overrides,review}));
 }
 test('rating-only card removes the empty customer block',()=>{const html=render();assert(!html.includes('ОТЗЫВ ПОКУПАТЕЛЯ'));assert(html.includes('Оценка без текста'));assert(html.includes('Готов к отправке'))});
-test('low-rated draft needs review despite a passed text score',()=>{const html=render({review:{rating:2,text:'Плохое качество'}});assert(html.includes('Нужно проверить'));assert(!html.includes('Готов к отправке'));assert(html.includes('has-text'))});
+test('low-rated draft needs review despite a passed text score',()=>{const html=render({review:{rating:2,text:'Плохое качество'}});assert(html.includes('Нужна проверка'));assert(!html.includes('Готов к отправке'));assert(html.includes('has-text'))});
 test('history is collapsed by default',()=>{const html=render();assert(html.includes('История правок'));assert(html.includes('Прежний текст'));assert(html.includes('Новый текст'));assert(!html.includes(' open='))});
-test('generation retains text and disables editor',()=>{const html=render({generating:true,busy:true});assert(html.includes('Генерируется'));assert(html.includes('Спасибо за оценку!'));assert(/textarea[^>]+disabled/.test(html));assert(html.includes('0 сек.'))});
+test('generation retains text and disables editor',()=>{const html=render({generating:true,busy:true});assert(html.includes('Готовится'));assert(html.includes('Спасибо за оценку!'));assert(/textarea[^>]+disabled/.test(html));assert(html.includes('0 сек.'))});
 test('recoverable waiting failure retains text and offers continuation',()=>{const html=render({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));assert(html.includes('Спасибо за оценку!'));assert(html.includes('Предыдущий ответ сохранён'))});
 test('terminal failure has a retry action',()=>{assert(render({generationError:'Не удалось завершить подготовку.'}).includes('Повторить попытку'))});
-test('published review offers no regeneration or save',()=>{const html=render({review:{is_answered:true,existing_answer:'Опубликованный ответ'}});assert(html.includes('Отправлен'));assert(!html.includes('Новый вариант'));assert(!html.includes('Сохранить</button>'))});
+test('published review offers no regeneration or save',()=>{const html=render({review:{is_answered:true,existing_answer:'Опубликованный ответ'}});assert(html.includes('Отправлено'));assert(!html.includes('Новый вариант'));assert(!html.includes('Сохранить</button>'))});
 exports.Card=Card;
 
 test('product photos load lazily with an accessible name',()=>{const html=render({review:{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp'}}});assert(html.includes('src="https://example.com/card.webp"'));assert(html.includes('loading="lazy"'));assert(html.includes('alt="Очиститель"'))});

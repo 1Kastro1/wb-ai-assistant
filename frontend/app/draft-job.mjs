@@ -24,6 +24,7 @@ export async function waitForDraftJob(options) {
   if(!job?.id)throw new Error('Ответ сервера не получен. Повторите попытку.');
   keep(job.id);
   while(now()<deadline){
+    options.onUpdate?.(job);
     if(job.status==='completed'){
       if(!job.result?.draft){clear();throw new Error('Черновик не получен. Обновите список отзывов.')}
       let draft=job.result.draft;
