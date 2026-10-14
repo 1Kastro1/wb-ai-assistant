@@ -30,7 +30,7 @@ class QuestionVinTests(unittest.TestCase):
             for store_id, provider in [('owner', 'wb'), ('ozon-store', 'ozon'),
                                        ('yandex-store', 'yandex')]:
                 db.add(StoreProfile(id=store_id, name=provider, provider=provider,
-                                    client_id='123', business_id='456'))
+                                    config={'client_id': '123', 'business_id': '456'}))
                 db.add(Account(id=store_id, encrypted_token='fake-encrypted-token'))
             db.commit()
         self.auth = {'role': 'owner', 'username': 'vin-tester', 'user_id': 'actor',
