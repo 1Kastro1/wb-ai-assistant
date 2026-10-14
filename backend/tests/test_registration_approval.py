@@ -1,5 +1,6 @@
 """Disposable database only: register, decide, login, revoke and preserve history."""
 import unittest
+import asyncio
 from unittest.mock import patch
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker
@@ -8,7 +9,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 from argon2 import PasswordHasher
 from app import main
-from app.db import Base, User, RegistrationRequest, LoginSession, Activity, StoreProfile
+from app.db import Base, User, RegistrationRequest, LoginSession, Activity, StoreProfile, set_setting
 
 
 class RegistrationTests(unittest.TestCase):
@@ -145,6 +146,32 @@ class RegistrationTests(unittest.TestCase):
         self.client.cookies.set('wb_session',token)
         self.assertEqual(self.client.get('/auth/session').status_code,401)
         self.assertEqual(self.client.get('/registration-requests').status_code,401)
+
+    def restart_application(self):
+        async def idle_scheduler():
+            await asyncio.Future()
+        async def restart():
+            # Real startup against the disposable DB; migrations are mocked.
+            with patch('alembic.command.upgrade'), patch('app.main.scheduler_loop',idle_scheduler):
+                async with main.lifespan(main.app):
+                    pass
+        asyncio.run(restart())
+
+    def test_restart_does_not_recreate_removed_legacy_owner(self):
+        with self.factory() as db:
+            set_setting(db,'password_hash','legacy-hash');db.commit()
+        self.restart_application();self.restart_application()
+        with self.factory() as db:
+            self.assertIsNone(db.get(User,'owner'))
+            self.assertEqual(db.get(User,'approver').username,'ismailov.kamil')
+            self.assertEqual(db.scalar(select(func.count()).select_from(User)),1)
+
+    def test_legacy_owner_still_migrates_when_no_accounts_exist(self):
+        with self.factory() as db:
+            db.delete(db.get(User,'approver'));set_setting(db,'password_hash','legacy-hash');db.commit()
+        self.restart_application()
+        with self.factory() as db:
+            self.assertEqual(db.get(User,'owner').password_hash,'legacy-hash')
 
 
 if __name__=='__main__':unittest.main()
