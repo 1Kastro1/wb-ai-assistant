@@ -31,6 +31,7 @@ from .safety import mask_vin
 from .maintenance import backup, portable_backup, portable_restore, portable_verify, database_health, recovery_snapshot
 from . import voice
 from .activity_history import activity_page, rule_details
+from .generation_monitor import generation_metrics
 
 
 @asynccontextmanager
@@ -902,8 +903,8 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB):
 def auto_replies_status(db):
     schedule = schedule_get(None, db)
     enabled = bool(schedule.get('enabled') and schedule.get('drafts_enabled'))
-    current_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
-    last_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.not_in(['queued', 'running'])).order_by(Job.created_at.desc()))
+    current_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.result['manual_batch'].as_boolean().is_not(True)).order_by(Job.created_at.desc()))
+    last_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.not_in(['queued', 'running']), Job.result['manual_batch'].as_boolean().is_not(True)).order_by(Job.created_at.desc()))
     next_run_at = None
     if enabled:
         last_run = float(schedule.get('last_drafts', time.time()))
@@ -954,7 +955,7 @@ def pause_auto_replies(auth: MARKET_OPERATOR, db: DB):
     schedule = schedule_get(auth, db)
     schedule['drafts_enabled'] = False
     set_setting(db, 'automation_schedule', schedule)
-    for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
+    for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.result['manual_batch'].as_boolean().is_not(True), Job.result['account_id'].as_string() == active_store(db, auth))):
         job.cancel_requested = True
         if job.status == 'queued':
             job.status = 'cancelled'
@@ -986,6 +987,12 @@ async def run_sync_job(job_id):
                     job.status, job.result = 'cancelled', {'message': 'Задание отменено'}
                     db.commit()
                 return
+            started_clock = time.monotonic()
+            queue_seconds = max(0, time.time() - datetime.fromisoformat(job.created_at).timestamp())
+            manual_batch = bool((job.result or {}).get('manual_batch'))
+            requested_by = (job.result or {}).get('requested_by', '')
+            job_metadata = {key: job.result[key] for key in ('operation_key', 'operation_requested_ids', 'skipped') if key in (job.result or {})}
+            job.result = {**(job.result or {}), 'started_at': now()}
             job.status, job.progress, job.attempts = 'running', 1, job.attempts + 1
             kind = job.kind
             account_id = (job.result or {}).get('account_id') or setting(db, 'active_store', 'owner')
@@ -1028,16 +1035,18 @@ async def run_sync_job(job_id):
                     ))
                     total, processed, failed, failures = len(ids), 0, 0, []
                     single_draft = None
+                    job.result = {**job.result, 'total': total, 'processed': 0, 'failed': 0}
+                    db.commit()
                     for index, review_id in enumerate(ids, 1):
                         if cancelled():
                             raise asyncio.CancelledError
                         try:
                             single_draft = await generate_draft(db, review_id, (job.result or {}).get('instruction', '') if is_single else '')
-                            if is_single and (job.result or {}).get('requested_by'):
+                            if requested_by:
                                 stored_draft = db.get(Draft, single_draft['id'])
                                 if not stored_draft.created_by:
-                                    stored_draft.created_by = job.result['requested_by']
-                                stored_draft.updated_by = job.result['requested_by']
+                                    stored_draft.created_by = requested_by
+                                stored_draft.updated_by = requested_by
                                 db.commit()
                                 single_draft = draft_public(db, stored_draft)
                             processed += 1
@@ -1048,10 +1057,12 @@ async def run_sync_job(job_id):
                             failed += 1
                             if len(failures) < 20:
                                 failures.append({'review_id': review_id, 'reason': (str(error) or type(error).__name__)[:300]})
+                        job.result = {**(job.result or {}), 'processed': processed, 'failed': failed, 'total': total, 'failures': failures}
+                        db.flush()
                         update_progress(round(index / max(1, total) * 100))
                     schedule = setting(db, 'automation_schedule', {})
                     proposal_id = None
-                    if schedule.get('auto_propose') and not is_questions and not is_single:
+                    if schedule.get('auto_propose') and not is_questions and not is_single and not manual_batch:
                         minimum = max(70, min(100, int(schedule.get('min_quality', 96))))
                         limit = max(1, min(100, int(schedule.get('max_proposals', 100))))
                         candidate_rows = db.execute(
@@ -1078,8 +1089,8 @@ async def run_sync_job(job_id):
                         'since': since,
                         'failures': failures,
                         'message': f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
-                        'proposal_id': proposal_id,
-                        **({'draft': single_draft, 'selected_ids': selected_ids} if is_single else {}),
+                        'proposal_id': proposal_id, 'selected_ids': selected_ids, 'manual_batch': manual_batch, 'requested_by': requested_by,
+                        **({'draft': single_draft} if is_single else {}),
                     }
                 else:
                     store = db.get(StoreProfile, account_id)
@@ -1132,6 +1143,7 @@ async def run_sync_job(job_id):
                     message = f'{default_message} {detail}'
                     job.status, job.result = 'failed', {**(job.result or {}), 'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail, 'finished_at': now()}
                     add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
+            job.result = {**job_metadata, **(job.result or {}), 'timing': {'queue_seconds': round(queue_seconds, 2), 'processing_seconds': round(time.monotonic() - started_clock, 2)}, 'finished_at': now()}
             db.commit()
 
 
@@ -1276,6 +1288,57 @@ async def schedule_all_drafts(background: BackgroundTasks, auth: AUTH, db: DB):
     db.commit()
     background.add_task(run_job_queue)
     return public(job)
+
+
+selected_drafts_lock = asyncio.Lock()
+
+
+class SelectedDraftsInput(Payload):
+    review_ids: list[str] = Field(min_length=1, max_length=100)
+    operation_key: str = Field(default='', max_length=80)
+
+
+@app.post('/jobs/selected-drafts')
+async def schedule_selected_drafts(body: SelectedDraftsInput, background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB):
+    async with selected_drafts_lock:
+        can(auth, 'assistant:use')
+        if not setting(db, 'assistant_enabled', True):
+            raise ValueError('Сначала включите ассистента')
+        active = active_store(db, auth)
+        store = db.get(StoreProfile, active)
+        if not store:
+            raise HTTPException(404, 'Магазин не найден')
+        can_operate_store(auth, store)
+        ids = list(dict.fromkeys(body.review_ids))
+        rows = list(db.scalars(select(Review).where(Review.id.in_(ids), Review.wb_account_id == active, ~Review.marketplace.like('%_question'))))
+        if len(rows) != len(ids):
+            raise HTTPException(404, 'Один из выбранных отзывов недоступен')
+        if body.operation_key:
+            previous = db.scalar(select(Job).where(Job.kind == 'drafts', Job.result['operation_key'].as_string() == body.operation_key, Job.result['requested_by'].as_string() == auth['user_id'], Job.result['account_id'].as_string() == active))
+            if previous:
+                if sorted((previous.result or {}).get('operation_requested_ids') or []) != sorted(ids):
+                    raise HTTPException(409, 'Этот запрос уже использован для другой подборки')
+                return public(previous)
+        existing_ids = set(db.scalars(select(Draft.review_id).where(Draft.review_id.in_(ids))))
+        eligible = sorted(row.id for row in rows if not row.is_answered and row.status != 'publishing' and row.id not in existing_ids)
+        for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.result['account_id'].as_string() == active)):
+            if (job.result or {}).get('manual_batch') and sorted((job.result or {}).get('selected_ids') or []) == eligible:
+                return public(job)
+        if not eligible:
+            raise HTTPException(409, 'У выбранных отзывов уже есть ответы или черновики. Ваши правки сохранены')
+        job = Job(id=str(uuid4()), kind='drafts', priority=45, max_attempts=1,
+                  result={'account_id': active, 'selected_ids': eligible, 'requested_by': auth['user_id'],
+                          'manual_batch': True, 'operation_key': body.operation_key, 'operation_requested_ids': sorted(ids), 'total': len(eligible), 'processed': 0, 'failed': 0,
+                          'skipped': len(ids) - len(eligible), 'message': 'Выбранные отзывы поставлены в очередь'})
+        db.add(job)
+        db.commit()
+        background.add_task(run_job_queue)
+        return public(job)
+
+
+@app.get('/generation/metrics')
+def reply_generation_metrics(auth: OWNER, db: DB):
+    return generation_metrics(db, active_store(db, auth))
 
 
 @app.get('/jobs/drafts/preview')
@@ -1813,6 +1876,8 @@ def draft_edit(did: str, body: DraftEdit, auth: MARKET_OPERATOR, db: DB):
         raise HTTPException(404, 'Черновик не найден')
     store = db.get(StoreProfile, review.wb_account_id)
     can_operate_store(auth, store)
+    if existing.revision != body.revision:
+        raise HTTPException(409, 'Черновик изменён другим пользователем. Сверьте версии перед сохранением')
     result = edit_draft(db, did, body.text, body.revision, auth['user_id'])
     return draft_public(db, db.get(Draft, did))
 
