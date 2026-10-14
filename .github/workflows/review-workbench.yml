@@ -50,6 +50,8 @@ jobs:
           python -m unittest discover -s backend/tests -p 'test_review_workbench.py'
           python -m unittest discover -s backend/tests -p 'test_registration_approval.py'
           python -m unittest discover -s backend/tests -p 'test_activity_history.py'
+      - name: Verify question VIN display and resync
+        run: python -m unittest discover -s backend/tests -p 'test_question_vin.py'
       - name: Verify simultaneous PostgreSQL editing
         env:
           DATABASE_URL: postgresql+psycopg://test_runner:disposable-test-password@127.0.0.1:5432/wb_workbench_tests

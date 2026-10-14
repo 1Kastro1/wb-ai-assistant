@@ -325,7 +325,8 @@ class WildberriesProvider:
                     if not row:
                         row = Review(id=account_id + ':' + stored_id, wb_account_id=account_id, wb_review_id=stored_id, product_id=pid, rating=0, text='', status='unanswered', marketplace='wb_question')
                     answer = item.get('answer') or {}
-                    row.text = mask_vin(str(item.get('text') or '').strip())
+                    # Preserve the buyer's VIN for the authenticated questions view.
+                    row.text = str(item.get('text') or '').strip()
                     row.created_at = str(item.get('createdDate') or now())
                     row.is_answered = bool(answer and answer.get('text'))
                     row.existing_answer = mask_vin(str(answer.get('text') or ''))
@@ -399,7 +400,8 @@ def upsert_market_question(db, store, external_id, product_external_id, product_
     row = db.scalar(select(Review).where(Review.wb_account_id == store.id, Review.wb_review_id == stored_id))
     if not row:
         row = Review(id=f'{store.id}:{stored_id}', wb_account_id=store.id, wb_review_id=stored_id, product_id=product_id, rating=0, status='unanswered', marketplace=f'{store.provider}_question')
-    row.text = mask_vin(str(text or '').strip())
+    # Preserve the buyer's VIN for the authenticated questions view.
+    row.text = str(text or '').strip()
     row.created_at = str(created_at or now())
     row.is_answered = bool(answered)
     row.status = 'published' if answered else ('draft_ready' if db.scalar(select(Draft).where(Draft.review_id == row.id)) else 'unanswered')
