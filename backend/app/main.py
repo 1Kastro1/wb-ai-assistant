@@ -43,7 +43,7 @@ async def lifespan(app):
     with Session() as db:
         db.merge(StoreProfile(id='owner', name='Мой магазин', provider='wb'))
         legacy_hash = setting(db, 'password_hash')
-        if legacy_hash and not db.get(User, 'owner'):
+        if legacy_hash and not db.scalar(select(func.count()).select_from(User)):
             db.add(User(id='owner', username='owner', display_name='Владелец', password_hash=legacy_hash, role='owner', position='Владелец', permissions=['*'], store_ids=['*'], enabled=True, must_change_password=False))
         if not setting(db, 'active_store'):
             set_setting(db, 'active_store', 'owner')
