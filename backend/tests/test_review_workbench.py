@@ -46,6 +46,48 @@ class WorkbenchTests(unittest.TestCase):
         response=self.client.post('/jobs/selected-drafts',json={'review_ids':list(ids)})
         self.assertEqual(response.status_code,200,response.text);return response.json()
 
+    def test_page_query_count_is_bounded_and_historical_authors_are_preserved(self):
+        from sqlalchemy import event
+        from app.services import reviews_page
+        with self.factory() as db:
+            for i in range(30):
+                pid='perf-product-'+str(i);rid='perf-review-'+str(i)
+                db.add(Product(id=pid,name=pid));db.flush()
+                db.add(Review(id=rid,wb_review_id=rid,product_id=pid,rating=5,text='ok',wb_account_id='owner'));db.flush()
+                db.add(Draft(id='perf-draft-'+str(i),review_id=rid,text='Спасибо',created_by='actor',updated_by='deleted',edits=[{'by':'actor','old':'a','new':'b'}]))
+            db.commit()
+        statements=[]
+        def count(conn,cursor,statement,parameters,context,executemany):
+            if statement.lstrip().upper().startswith('SELECT'):statements.append(statement)
+        event.listen(self.engine,'before_cursor_execute',count)
+        try:
+            with self.factory() as db:
+                result=reviews_page(db,account_id='owner',q='perf-product',limit=30)
+                self.assertEqual(result['total'],30)
+                self.assertLessEqual(len(statements),5)
+                for item in result['items']:
+                    self.assertEqual(item['draft']['created_by_name'],'Камиль')
+                    self.assertEqual(item['draft']['updated_by_name'],'Бывший сотрудник')
+                    self.assertEqual(item['draft']['edits'][0]['by_name'],'Камиль')
+        finally:event.remove(self.engine,'before_cursor_execute',count)
+
+    def test_filter_totals_match_original_predicates_with_one_query(self):
+        from sqlalchemy import event
+        from app.services import _review_query,review_filter_counts
+        with self.factory() as db:
+            db.get(Review,'r2').manual=True
+            db.get(Review,'r1').text=' \n\t'
+            db.commit()
+            expected={view:db.scalar(select(func.count()).select_from(_review_query({'view':view,'account_id':'owner'}).subquery())) for view in ('all','positive','negative','rating_only','manual')}
+            statements=[]
+            def count(*args):statements.append(args[2])
+            event.listen(self.engine,'before_cursor_execute',count)
+            try:
+                self.assertEqual(review_filter_counts(db,account_id='owner'),expected)
+                self.assertEqual(len(statements),1)
+                self.assertEqual(review_filter_counts(db,q='not-found',account_id='owner'),dict.fromkeys(expected,0))
+            finally:event.remove(self.engine,'before_cursor_execute',count)
+
     async def generate(self,db,rid,instruction=''):
         draft=Draft(id='d-'+rid,review_id=rid,text='Здравствуйте! Спасибо за Ваш отзыв.',original='original',quality={'passed':True,'score':100,'timing':{'total_seconds':1,'route':'rules'}})
         db.add(draft);db.commit();return main.public(draft)
