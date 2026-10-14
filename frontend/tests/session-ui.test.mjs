@@ -1,0 +1,15 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+import {endSession} from '../app/session-actions.mjs';
+const require=createRequire(import.meta.url),fs=require('node:fs'),path=require('node:path'),ts=require('typescript'),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../app');
+function load(name){const module={exports:{}};const code=ts.transpileModule(fs.readFileSync(path.join(root,name+'.tsx'),'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;new Function('require','module','exports',code)(require,module,module.exports);return module.exports.default}
+test('logout sends a bounded server request',async()=>{let args;await endSession(async(...values)=>{args=values});assert.deepEqual(args,['/auth/logout','POST',undefined,15000])});
+test('already expired session still permits returning to login',async()=>{await endSession(async()=>{throw Object.assign(new Error('Expired'),{status:401})})});
+test('network and csrf failures never claim a successful logout',async()=>{for(const status of [undefined,403,500])await assert.rejects(endSession(async()=>{throw Object.assign(new Error('Failed'),{status})}),/Failed/)});
+test('logout is accessible and shows pending state',()=>{const html=renderToStaticMarkup(React.createElement(load('LogoutButton'),{pending:true,onLogout(){}}));assert(html.includes('Выйти из аккаунта'));assert(html.includes('Выходим…'));assert(html.includes('disabled'));assert(html.includes('aria-busy="true"'))});
+test('startup shows real stages and a retry on errors without fictional percentages',()=>{const Screen=load('StartupScreen');for(const phase of ['account','workspace']){const html=renderToStaticMarkup(React.createElement(Screen,{phase,onRetry(){}}));assert(html.includes(phase==='account'?'Проверяем Ваш аккаунт':'Загружаем данные магазинов'));assert(!html.includes('%'));assert(html.includes('role="status"'))}const failed=renderToStaticMarkup(React.createElement(Screen,{error:'Нет соединения',onRetry(){}}));assert(failed.includes('role="alert"'));assert(failed.includes('Попробовать ещё раз'))});
+test('logout is in the header and clears account view before navigating',()=>{const page=fs.readFileSync(path.join(root,'page.tsx'),'utf8');const header=page.slice(page.indexOf('<main className="main"><header>'),page.indexOf('</header>'));assert(header.includes('<LogoutButton'));assert(page.includes("window.location.replace(window.location.pathname)"));assert(page.includes("await endSession(api)"));assert(page.includes("key.startsWith('draft-job:')"));assert(page.includes('setCurrentUser({});setLogged(false)'));assert(page.includes('<StartupScreen'))});
+test('loading animation respects reduced motion',()=>{const css=fs.readFileSync(path.join(root,'startup.css'),'utf8');assert(css.includes('prefers-reduced-motion:reduce'));assert(css.includes('animation:none'))});
