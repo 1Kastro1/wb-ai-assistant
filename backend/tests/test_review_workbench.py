@@ -54,7 +54,7 @@ class WorkbenchTests(unittest.TestCase):
                 pid='perf-product-'+str(i);rid='perf-review-'+str(i)
                 db.add(Product(id=pid,name=pid));db.flush()
                 db.add(Review(id=rid,wb_review_id=rid,product_id=pid,rating=5,text='ok',wb_account_id='owner'));db.flush()
-                db.add(Draft(id='perf-draft-'+str(i),review_id=rid,text='Спасибо',created_by='actor',updated_by='deleted',edits=[{'by':'actor','old':'a','new':'b'}]))
+                db.add(Draft(id='perf-draft-'+str(i),review_id=rid,text='Спасибо',original='Спасибо',created_by='actor',updated_by='deleted',edits=[{'by':'actor','old':'a','new':'b'}]))
             db.commit()
         statements=[]
         def count(conn,cursor,statement,parameters,context,executemany):

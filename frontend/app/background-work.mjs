@@ -1,5 +1,8 @@
-/** One request at a time. Idle or hidden tabs should not continually poll. */
-export function createBackgroundPoller({load,onValue=()=>{},onError=()=>{},isActive=()=>false,isVisible=()=>true,setTimer=setTimeout,clearTimer=clearTimeout,activeDelay=3000,idleDelay=15000,errorDelay=30000}){
+/** One request at a time. Idle or hidden tabs should not continually poll.
+ * @param {any} options
+ */
+export function createBackgroundPoller(options){
+ const {load,onValue=()=>{},onError=()=>{},isActive=()=>false,isVisible=()=>true,setTimer=setTimeout,clearTimer=clearTimeout,activeDelay=3000,idleDelay=15000,errorDelay=30000}=options;
  let stopped=false,running=false,timer=null;
  const schedule=delay=>{if(!stopped)timer=setTimer(tick,delay)};
  async function tick(){
