@@ -74,6 +74,18 @@ class User(Base):
     created_at: Mapped[str] = mapped_column(String, default=now)
 
 
+class RegistrationRequest(Base):
+    __tablename__ = 'registration_requests'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    username: Mapped[str] = mapped_column(String, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    receipt_hash: Mapped[str] = mapped_column(String, unique=True)
+    status: Mapped[str] = mapped_column(String, default='pending')
+    created_at: Mapped[str] = mapped_column(String, default=now)
+    reviewed_at: Mapped[str] = mapped_column(String, default='')
+    reviewed_by: Mapped[str] = mapped_column(String, default='')
+
+
 class TeamInvite(Base):
     __tablename__ = 'team_invites'
     token_hash: Mapped[str] = mapped_column(String, primary_key=True)

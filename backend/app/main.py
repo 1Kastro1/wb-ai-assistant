@@ -19,6 +19,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select, delete, text, func, case
+from sqlalchemy.exc import IntegrityError
 from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
@@ -261,6 +262,14 @@ async def login(body: Password, response: Response, request: Request, db: DB):
             raise HTTPException(429, 'Слишком много попыток. Повторите через 5 минут')
         user = db.scalar(select(User).where(User.username == username))
         if not user:
+            pending = db.scalar(select(RegistrationRequest).where(RegistrationRequest.username == username, RegistrationRequest.status == 'pending'))
+            if pending:
+                try:
+                    PasswordHasher().verify(pending.password_hash, body.password)
+                except (VerificationError, InvalidHashError):
+                    pass
+                else:
+                    raise HTTPException(403, 'Ваша заявка ожидает одобрения владельцем')
             attempts.append(current)
             if not db.scalar(select(func.count()).select_from(User)):
                 raise HTTPException(409, 'Сначала создайте аккаунт владельца')
@@ -293,11 +302,26 @@ class InviteInput(Payload):
 
 
 class RegisterInput(Payload):
-    invite: str = Field(min_length=32, max_length=128)
     username: str = Field(min_length=3, max_length=64)
-    display_name: str = Field(min_length=2, max_length=100)
     password: str = Field(min_length=12, max_length=1024)
-    confirmation: str = Field(min_length=12, max_length=1024)
+
+
+class RegistrationReceipt(Payload):
+    receipt: str = Field(min_length=32, max_length=128)
+
+
+class RegistrationDecision(Payload):
+    decision: Literal['accept', 'reject']
+    position: Literal['Менеджер WB', 'Менеджер Ozon', 'Менеджер Яндекс Маркет'] = 'Менеджер WB'
+
+
+REGISTRATION_APPROVER = 'ismailov.kamil'
+registration_attempts = {}
+
+
+def registration_owner(auth):
+    if auth['role'] != 'owner' or auth['username'] != REGISTRATION_APPROVER:
+        raise HTTPException(403, 'Заявками управляет ismailov.kamil')
 
 
 @app.post('/auth/invites')
@@ -327,30 +351,87 @@ def invite_details(token: str, db: DB):
 
 
 @app.post('/auth/register')
-async def register_colleague(body: RegisterInput, response: Response, request: Request, db: DB):
-    if body.password != body.confirmation:
-        raise ValueError('Пароли не совпадают')
+async def register_colleague(body: RegisterInput, request: Request, db: DB):
     username = normalized_username(body.username)
-    password_hash = PasswordHasher().hash(body.password)
+    if len(username) < 3:
+        raise ValueError('Логин должен содержать не менее 3 символов')
+    async with register_lock:
+        current = time.time()
+        key = request.client.host if request.client else 'unknown'
+        for old_key in list(registration_attempts):
+            registration_attempts[old_key] = [t for t in registration_attempts[old_key] if current - t < 600]
+            if not registration_attempts[old_key]:
+                del registration_attempts[old_key]
+        attempts = registration_attempts.setdefault(key, [])
+        if len(attempts) >= 20 or len(registration_attempts) > 5000:
+            raise HTTPException(429, 'Слишком много заявок. Повторите через 10 минут')
+        attempts.append(current)
+        approver = db.scalar(select(User).where(User.username == REGISTRATION_APPROVER, User.enabled == True, User.role == 'owner'))
+        if not approver:
+            raise HTTPException(503, 'Регистрация временно недоступна. Обратитесь к владельцу')
+        if db.scalar(select(User.id).where(User.username == username)) or db.scalar(select(RegistrationRequest.id).where(RegistrationRequest.username == username)):
+            raise HTTPException(409, 'Этот логин уже занят или заявка уже отправлена. Попробуйте войти либо выберите другой логин')
+        receipt = secrets.token_urlsafe(32)
+        item = RegistrationRequest(id=str(uuid4()), username=username, password_hash=PasswordHasher().hash(body.password), receipt_hash=digest(receipt), status='pending')
+        db.add(item)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, 'Заявка с таким логином уже отправлена') from None
+    return {'status': 'pending', 'username': username, 'receipt': receipt}
+
+
+@app.post('/auth/registration/status')
+def registration_status(body: RegistrationReceipt, db: DB):
+    item = db.scalar(select(RegistrationRequest).where(RegistrationRequest.receipt_hash == digest(body.receipt)))
+    if not item:
+        raise HTTPException(404, 'Заявка не найдена')
+    return {'status': item.status, 'username': item.username}
+
+
+@app.get('/registration-requests')
+def registration_requests(auth: AUTH, db: DB):
+    registration_owner(auth)
+    return [{'id': item.id, 'username': item.username, 'created_at': item.created_at}
+            for item in db.scalars(select(RegistrationRequest).where(RegistrationRequest.status == 'pending').order_by(RegistrationRequest.created_at))]
+
+
+@app.post('/registration-requests/{request_id}/decision')
+async def registration_decide(request_id: str, body: RegistrationDecision, request: Request, auth: AUTH, db: DB):
+    registration_owner(auth)
     async with register_lock:
         db.rollback()
         db.execute(text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
-        invitation = db.scalar(select(TeamInvite).where(TeamInvite.token_hash == digest(body.invite)).with_for_update())
-        if not invitation or invitation.used_by or invitation.expires < time.time():
-            raise HTTPException(404, 'Приглашение недействительно или уже использовано')
-        if db.scalar(select(User.id).where(User.username == username)):
-            raise HTTPException(409, 'Пользователь с таким логином уже существует')
-        user = User(id=str(uuid4()), username=username, display_name=body.display_name.strip(),
-                    password_hash=password_hash, role='member', position=invitation.position,
-                    permissions=permission_preset(invitation.position), store_ids=invitation.store_ids,
-                    enabled=True, must_change_password=False)
-        token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
-        invitation.used_by = user.id
-        db.add(user)
-        db.add(LoginSession(id=digest(token), expires=int(time.time() + SESSION_SECONDS), csrf=csrf, user_id=user.id))
-        db.commit()
-    set_session_cookie(response, request, token)
-    return session_response(user, csrf)
+        item = db.scalar(select(RegistrationRequest).where(RegistrationRequest.id == request_id).with_for_update())
+        if not item:
+            raise HTTPException(404, 'Заявка не найдена')
+        if item.status != 'pending':
+            raise HTTPException(409, 'Эта заявка уже рассмотрена. Обновите список')
+        if body.decision == 'accept':
+            if db.scalar(select(User.id).where(User.username == item.username)):
+                raise HTTPException(409, 'Такой пользователь уже существует')
+            stores = list(db.scalars(select(StoreProfile.id).where(StoreProfile.provider == provider_for_position(body.position))))
+            user = User(id=str(uuid4()), username=item.username, display_name=item.username, password_hash=item.password_hash,
+                        role='member', position=body.position, permissions=permission_preset(body.position),
+                        store_ids=stores, enabled=True, must_change_password=False)
+            db.add(user)
+            item.status = 'accepted'
+        else:
+            item.status = 'rejected'
+        item.password_hash = ''
+        item.reviewed_at, item.reviewed_by = now(), auth['user_id']
+        request.state.activity_details = {'event': 'registration_' + item.status, 'target_username': item.username}
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, 'Пользователь уже создан. Обновите список') from None
+    return {'status': item.status}
+
+
+def provider_for_position(position):
+    return {'Менеджер WB': 'wb', 'Менеджер Ozon': 'ozon', 'Менеджер Яндекс Маркет': 'yandex'}[position]
 
 
 @app.post('/auth/setup')
@@ -477,6 +558,24 @@ def users_state(user_id: str, body: TeamUserState, auth: OWNER, db: DB):
         db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
     db.commit()
     return public_user(user)
+
+
+@app.delete('/users/{user_id}')
+def users_delete(user_id: str, request: Request, auth: OWNER, db: DB):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, 'Пользователь не найден')
+    if user.id == auth['user_id'] or user.role == 'owner':
+        raise HTTPException(409, 'Аккаунт владельца и собственный аккаунт удалить нельзя')
+    request.state.activity_details = {'event': 'user_deleted', 'target_username': user.username}
+    db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+    # Preserve authored drafts, rules and audit history; only remove account access.
+    registration = db.scalar(select(RegistrationRequest).where(RegistrationRequest.username == user.username))
+    if registration:
+        registration.status = 'deleted'
+    db.delete(user)
+    db.commit()
+    return {'ok': True}
 
 
 @app.post('/users/{user_id}/password')
