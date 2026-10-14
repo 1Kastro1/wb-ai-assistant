@@ -1,5 +1,7 @@
 /** Recover an accepted selection after a disconnect without creating another job. */
-export async function startSelectedDrafts({api,reviewIds,userId,storeId,storage=null,makeKey=()=>crypto.randomUUID()}){
+/** @param {any} options */
+export async function startSelectedDrafts(options){
+ const {api,reviewIds,userId,storeId,storage=null,makeKey=()=>crypto.randomUUID()}=options;
  const ids=[...new Set(reviewIds)].sort(),key='batch-job:'+userId+':'+storeId;
  let record;try{record=JSON.parse(storage?.getItem(key)||'null')}catch{}
  if(record?.jobId&&JSON.stringify(record.ids)===JSON.stringify(ids)){
