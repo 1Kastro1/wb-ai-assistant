@@ -142,14 +142,15 @@ export default function App() {
   async function findReviews(offset=0,append=false,view=filter,reuse=false){
     scrollReady.current=false;const request=++reviewSearchRequest.current,key=currentUser.id+':'+stores.active+':'+view+':'+query,cached=reviewViews.current.get(key);setReviewLoading(true);
     try{
-      if(reuse&&cached&&Date.now()-cached.at<15000){setReviews(cached.items);setReviewPage(cached.page);setReviewCounts(cached.counts||{});return}
-      void api('/reviews/counts?q='+encodeURIComponent(query),'GET',undefined,15000).then(counts=>{if(request===reviewSearchRequest.current){setReviewCounts(counts);const entry=reviewViews.current.get(key);if(entry)entry.counts=counts}}).catch(()=>{});
+      let loadedCounts=cached?.counts;
+      if(reuse&&cached&&Date.now()-cached.at<15000){setReviews(cached.items);setReviewPage(cached.page);if(cached.counts)setReviewCounts(cached.counts);return}
+      void api('/reviews/counts?q='+encodeURIComponent(query),'GET',undefined,15000).then(counts=>{loadedCounts=counts;if(request===reviewSearchRequest.current){setReviewCounts(counts);const entry=reviewViews.current.get(key);if(entry)entry.counts=counts}}).catch(()=>{});
       const limit=append?30:Math.max(30,Math.min(100,cached?.items.length||viewPreferences.current.reviewLimit||30));
       const params=new URLSearchParams({q:query,unanswered:String(view==='unanswered'),attention:String(view==='attention'),max_rating:String(view==='negative'?3:5),limit:String(limit),offset:String(offset)});
       if(['positive','negative','rating_only','manual','context'].includes(view))params.set('view',view);
       if(view==='context')params.set('review_ids',(context.last_result_ids||[]).join(','));
       const result=await api('/reviews/page?'+params,'GET',undefined,15000);
-      if(request===reviewSearchRequest.current){const items=append?[...(cached?.items||reviews),...result.items]:result.items;setReviews(items);setReviewPage(result);reviewViews.current.set(key,{items,page:result,at:Date.now(),counts:cached?.counts});viewPreferences.current.reviewLimit=Math.min(100,items.length);persistView()}
+      if(request===reviewSearchRequest.current){const items=append?[...(cached?.items||reviews),...result.items]:result.items;setReviews(items);setReviewPage(result);reviewViews.current.set(key,{items,page:result,at:Date.now(),counts:loadedCounts});viewPreferences.current.reviewLimit=Math.min(100,items.length);persistView()}
     }finally{if(request===reviewSearchRequest.current)setReviewLoading(false)}
   }
   async function findProducts(offset=0, append=false) {
