@@ -48,7 +48,7 @@ class OwnerReviewCases(unittest.TestCase):
                     db.add(product);db.flush()
                     review=Review(id='r'+str(index),wb_review_id=str(index),product_id=product.id,rating=case['rating'],text=case['text'],risk='NORMAL',wb_account_id='owner')
                     db.add(review);db.commit()
-                    with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('Модель недоступна'))),patch('app.services.ollama.reply',new=AsyncMock(side_effect=ValueError('Модель недоступна'))),patch('app.services.web_research.search_instructions',new=AsyncMock(return_value=[])):
+                    with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('Модель недоступна'))),patch('app.services.ollama.chat',new=AsyncMock(side_effect=ValueError('Модель недоступна'))),patch('app.services.web_research.search_instructions',new=AsyncMock(return_value=[])):
                         result=asyncio.run(generate_draft(db,review.id))
                     answer=result['text'];validate_reply(answer)
                     for word in case['contains']:self.assertIn(word.lower(),answer.lower())

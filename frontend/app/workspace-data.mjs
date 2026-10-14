@@ -2,7 +2,7 @@
 export function workspaceResources({page='shell',settingsTab='connections',owner=false,days=0,productQuery=''}={}){
  const common=[['stores','/stores'],['actions','/actions'],['assistant','/settings/assistant'],['notifications','/notifications'],...(owner?[['security','/security']]:[])];
  const sections={
-  'Ассистент':[['conversations','/conversations'],['voice','/voice/status']],
+  'Ассистент':[['conversations','/conversations'],['voice','/voice/status'],['ai','/ollama'],['stats','/analytics'],['questionStats','/questions/stats']],
   'Главная':[['stats','/analytics'],['system','/system/status'],['quality','/quality-report'],['overview','/analytics/marketplaces?days='+days],['sync','/sync/status']],
   'Отзывы':[['jobs','/jobs'],['auto','/auto-replies/status']],
   'Вопросы':[['jobs','/jobs'],['questionStats','/questions/stats']],
