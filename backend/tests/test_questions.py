@@ -189,13 +189,14 @@ def test_assistant_toggle_stops_generation_chat_and_queued_drafts(client, seeded
 
 def test_wb_questions_sync_is_idempotent(client, monkeypatch):
     calls = []
+    question_text = 'Подойдёт ли товар для Hyundai Tucson VIN KMHJT81VDFU123855?'
 
     async def request(provider, operation, **kwargs):
         calls.append(operation)
         if operation == 'questions' and kwargs['params']['isAnswered'] == 'false':
             return {'data': {'questions': [{
                 'id': 'remote-question',
-                'text': 'Как пользоваться товаром?',
+                'text': question_text,
                 'createdDate': '2026-10-02T10:00:00Z',
                 'productDetails': {'nmId': 77, 'productName': 'Очиститель', 'brandName': 'Kangaroo'},
             }]}}
@@ -206,6 +207,14 @@ def test_wb_questions_sync_is_idempotent(client, monkeypatch):
     monkeypatch.setattr(guard, 'request', request)
     saved = client.post('/settings/wb-token', json={'token': 'fake-token-for-question-tests-with-safe-length-1234567890'})
     assert saved.status_code == 200, saved.text
+    # Resync must restore a VIN that an earlier version masked in storage.
+    with Session() as db:
+        db.add(Product(id='77', name='Очиститель', brand='Kangaroo'))
+        db.flush()
+        db.add(Review(id='owner:question:remote-question', wb_account_id='owner',
+                      wb_review_id='question:remote-question', product_id='77', rating=0,
+                      marketplace='wb_question', text='Подойдёт ли товар для Hyundai Tucson VIN KMH***********855?'))
+        db.commit()
     for _ in range(2):
         response = client.post('/sync/questions')
         assert response.status_code == 200, response.text
@@ -213,6 +222,10 @@ def test_wb_questions_sync_is_idempotent(client, monkeypatch):
     page = client.get('/questions/page').json()
     assert page['total'] == 1
     assert page['items'][0]['wb_review_id'] == 'question:remote-question'
+    assert page['items'][0]['text'] == question_text
+    with Session() as db:
+        assert db.get(Review, 'owner:question:remote-question').text == question_text
+    assert client.get('/questions/page', params={'q': 'KMHJT81VDFU123855'}).json()['total'] == 1
     assert calls.count('questions') == 4
 
 
@@ -238,3 +251,9 @@ def test_question_stats_filters_and_batch_job(client, seeded, monkeypatch):
     response = client.post('/jobs/question-drafts', json={'question_ids': ['owner:question:q-1']})
     assert response.status_code == 200, response.text
     assert response.json()['kind'] == 'question_drafts'
+
+
+
+def test_full_vin_in_public_question_reply_is_still_rejected():
+    with pytest.raises(ValueError, match='Полный VIN'):
+        validate_reply('Здравствуйте! Ваш VIN KMHJT81VDFU123855.')

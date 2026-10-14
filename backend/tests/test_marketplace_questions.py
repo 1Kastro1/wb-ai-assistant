@@ -9,6 +9,7 @@ from app.security import guard
 
 @pytest.mark.parametrize('provider', ['ozon', 'yandex'])
 def test_marketplace_questions_appear_in_active_store(client, monkeypatch, provider):
+    question_text = 'Подойдёт ли товар для Hyundai Tucson VIN KMHJT81VDFU123855?'
     created = client.post('/stores', json={'name': provider.title() + ' shop', 'provider': provider, 'client_id': '123', 'business_id': '456'})
     assert created.status_code == 200
     store_id = created.json()['id']
@@ -22,10 +23,10 @@ def test_marketplace_questions_appear_in_active_store(client, monkeypatch, provi
     async def request(service, operation, **kwargs):
         calls.append((service, operation, kwargs))
         if provider == 'ozon':
-            return {'questions': [{'id': 'q-1', 'sku': 1234, 'text': 'Подойдёт ли товар?', 'status': 'NEW', 'created_at': '2026-10-11T10:00:00Z'}]}
+            return {'questions': [{'id': 'q-1', 'sku': 1234, 'text': question_text, 'status': 'NEW', 'created_at': '2026-10-11T10:00:00Z'}]}
         if kwargs['body']['needAnswer']:
-            return {'result': {'questions': [{'questionIdentifiers': {'id': 777, 'offerId': 'SKU-1'}, 'text': 'Как использовать?', 'createdAt': '2026-10-11T10:00:00Z'}]}}
-        return {'result': {'questions': [{'questionIdentifiers': {'id': 777, 'offerId': 'SKU-1'}, 'text': 'Как использовать?', 'createdAt': '2026-10-11T10:00:00Z'}]}}
+            return {'result': {'questions': [{'questionIdentifiers': {'id': 777, 'offerId': 'SKU-1'}, 'text': question_text, 'createdAt': '2026-10-11T10:00:00Z'}]}}
+        return {'result': {'questions': [{'questionIdentifiers': {'id': 777, 'offerId': 'SKU-1'}, 'text': question_text, 'createdAt': '2026-10-11T10:00:00Z'}]}}
     monkeypatch.setattr(guard, 'request', request)
 
     with Session() as db:
@@ -36,6 +37,8 @@ def test_marketplace_questions_appear_in_active_store(client, monkeypatch, provi
     assert page['total'] == 1
     assert page['items'][0]['marketplace'] == provider + '_question'
     assert page['items'][0]['is_answered'] is False
+    assert page['items'][0]['text'] == question_text
+    assert client.get('/questions/page', params={'q': 'KMHJT81VDFU123855'}).json()['total'] == 1
     assert client.get('/questions/stats').json()['unanswered'] == 1
     assert client.get('/reviews/page').json()['total'] == 0
     assert client.get('/products/page').json()['total'] == 1
