@@ -268,4 +268,44 @@ class FitmentTests(unittest.TestCase):
         response=self.client.get('/fitment/questions/fit-q/research');self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(response.json()['status'],'ACCESS_REQUIRED');self.assertEqual(response.json()['saved_fitment']['status'],'FIT');self.assertTrue(response.json()['can_confirm'])
 
+    def test_frame_routes_to_catalog_without_reasking_for_vin(self):
+        from app.services import question_intent
+        from app.vehicle_identifiers import vehicle_identifiers
+        text='Здравствуйте. На Toyota vellfire AGH30-0000123 подойдут?'
+        self.assertEqual(vehicle_identifiers(text),['AGH30-0000123'])
+        self.assertEqual(question_intent('AGH30-0000123'),'совместимость')
+        self.assertFalse(oem_numbers('AGH30-0000123'))
+        self.seed(text);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+        self.assertNotIn('Пришлите',self.answer()['text'])
+        pending=self.client.get('/fitment/questions').json()
+        self.assertEqual(next(q for q in pending if q['id']=='fit-q')['vin'],'AGH30-0000123')
+
+    def test_confirmed_frame_is_exact_private_and_reusable(self):
+        from app.safety import mask_vin
+        self.seed('Toyota AGH30-0000123')
+        body={'brand':'NITTO','part_number':'00123','wb_nm_id':'100001','source':'https://uniqom.ru/original-catalogs?identString=AGH30-0000123','fit':True,'oe_brand':'TOYOTA','oe_number':'04465-28520','remember_cross':True}
+        response=self.client.post('/fitment/questions/fit-q/evidence',json=body)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(self.answer()['text'],'Вам подойдет данный товар.')
+        with self.factory() as db:
+            imports=list(db.scalars(select(FitmentImport)))
+            self.assertNotIn('0000123',str([x.rows for x in imports])+str([x.source for x in imports]))
+            db.get(Review,'fit-q').text='Toyota agh30 – 0000123';db.commit()
+        self.assertEqual(self.answer()['status'],'FIT')
+        with self.factory() as db:db.get(Review,'fit-q').text='Toyota AGH30-0000124';db.commit()
+        self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+        self.assertNotIn('0000123',mask_vin('Кузов AGH30-0000123'))
+
+    def test_frame_excel_alias_and_multiple_vehicles(self):
+        self.seed('AGH30-0000123')
+        row=self.row();row.pop('vin');row['frame']='AGH30-0000123';self.upload([row])
+        self.assertEqual(self.answer()['status'],'FIT')
+        with self.factory() as db:db.get(Review,'fit-q').text='AGH30-0000123 или '+VIN;db.commit()
+        self.assertEqual(self.answer()['status'],'NEEDS_VIN')
+
+    def test_frame_does_not_replace_oem_or_wb_ids(self):
+        from app.vehicle_identifiers import vehicle_identifiers
+        for text in ('OEM 04465-28520','15208-65F0A','WB 143760622','AGH30','2022 год','OEM AGH30-0000123','AGH30-0000123XYZ'):
+            with self.subTest(text=text):self.assertFalse(vehicle_identifiers(text))
+
 if __name__=='__main__':unittest.main()

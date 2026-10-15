@@ -8,7 +8,8 @@ from urllib.parse import urljoin, urlsplit, parse_qs, urlencode
 import httpx
 from sqlalchemy import select
 from .db import Audit, Session, Product, StoreListing, FitmentImport, now, setting, set_setting
-from .fitment_catalog import VIN, norm, vin_key, fitment_answer, oe_numbers
+from .vehicle_identifiers import mask_frames
+from .fitment_catalog import VIN, vehicle_identifiers, norm, vin_key, fitment_answer, oe_numbers
 
 PARTS = {
     'oil_filter': (r'фильтр.*маслян|маслян.*фильтр', 'Filters', ('engine oil filter','oil filter')),
@@ -20,14 +21,14 @@ PARTS = {
     'brake_disc': (r'диск.*тормоз|тормоз.*диск', 'Brake system', ('brake disc','brake rotor')),
 }
 STATUSES = {
-    'FOUND':'Оригинальный OEM найден в каталоге по VIN.',
+    'FOUND':'Оригинальный OEM найден в каталоге по VIN или Frame.',
     'MULTIPLE_VEHICLES':'Каталог вернул несколько вариантов автомобиля. Нужна проверка модификации.',
     'NEEDS_REVIEW':'Найдены сведения, но применяемость требует проверки.',
     'ACCESS_REQUIRED':'Каталог ограничил доступ с сервера. Откройте его в браузере.',
     'NOT_FOUND':'Каталог не вернул подходящих данных. Это не означает отсутствие товара.',
     'UNAVAILABLE':'Каталог временно недоступен. Сохранённый ответ и данные не потеряны.',
     'UNSUPPORTED':'Для этой категории нужен ручной выбор детали в каталоге.',
-    'NEEDS_VIN':'Для поиска нужен один полный VIN автомобиля.',
+    'NEEDS_VIN':'Для поиска нужен один полный VIN или Frame автомобиля.',
 }
 LOOKUP_LIMIT = asyncio.Semaphore(2)
 
@@ -172,7 +173,7 @@ catalog = PublicCatalog()
 
 
 def cache_key(db,question,product):
-    vins={v.upper() for v in VIN.findall(question.text or '')}
+    vins=set(vehicle_identifiers(question.text))
     fingerprint=vin_key(db,question.wb_account_id,next(iter(vins))) if len(vins)==1 else hashlib.sha256(question.text.encode()).hexdigest()
     return 'internet-fitment:'+question.wb_account_id+':'+hashlib.sha256((fingerprint+product.id+norm(product.category)+'v1').encode()).hexdigest()
 
@@ -196,7 +197,7 @@ def own_candidates(db,product,oems):
 
 async def research_question(db,question,product,force=False):
     original=(question.text,question.product_id)
-    vins={v.upper() for v in VIN.findall(question.text or '')};part=target_part(product)
+    vins=set(vehicle_identifiers(question.text));part=target_part(product)
     if len(vins)!=1:return {'status':'NEEDS_VIN','message':STATUSES['NEEDS_VIN'],'checked_at':now()}
     if not part:return {'status':'UNSUPPORTED','message':STATUSES['UNSUPPORTED'],'checked_at':now()}
     key=cache_key(db,question,product);previous=setting(db,key,{})
@@ -204,7 +205,7 @@ async def research_question(db,question,product,force=False):
     if previous and time.time()-previous.get('at',0)<(60 if force else ttl):return {**previous['result'],'cached':True}
     vin=next(iter(vins));result={'status':'UNAVAILABLE','sources':[],'oem_candidates':[],'vehicles':[]}
     async def decode():
-        try:return await catalog.decode(vin)
+        try:return await catalog.decode(vin) if VIN.fullmatch(vin) else {}
         except (ValueError,TypeError,KeyError):return {}
     async def lookup():
         try:return await catalog.lookup(vin,part)
@@ -233,6 +234,6 @@ async def research_question(db,question,product,force=False):
     result['our_candidates']=own_candidates(db,{'store':question.wb_account_id,'category':product.category},oems)
     # Defense in depth: no VIN in stored messages, catalog metadata or query links.
     import json
-    result=json.loads(json.dumps(result,ensure_ascii=False).replace(vin,'[VIN скрыт]'))
+    result=json.loads(mask_frames(json.dumps(result,ensure_ascii=False).replace(vin,'[VIN / Frame скрыт]')))
     set_setting(db,key,{'at':time.time(),'result':result});db.commit()
     return result
