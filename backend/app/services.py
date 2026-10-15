@@ -1,4 +1,4 @@
-from .fitment_catalog import fitment_answer, oem_numbers
+from .fitment_catalog import VIN, fitment_answer, oem_numbers
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
 import difflib
@@ -530,7 +530,8 @@ def analytics(db, days=0, product_id='', account_id=''):
 
 
 def question_intent(text):
-    if oem_numbers(text):return 'совместимость'
+    # Buyers often send only the vehicle and VIN, without asking "will it fit".
+    if VIN.search(text or '') or oem_numbers(text):return 'совместимость'
     value = (text or '').lower().replace('ё', 'е')
     patterns = (
         ('применение', r'как (?:использ|примен)|инструкц|сколько нанос|разводит|дозиров'),

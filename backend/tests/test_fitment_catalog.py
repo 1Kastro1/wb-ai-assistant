@@ -45,6 +45,35 @@ class FitmentTests(unittest.TestCase):
     def test_missing_catalog_never_means_no_stock_or_fit(self):
         self.seed();r=self.answer();self.assertEqual(r['status'],'NEEDS_CATALOG');self.assertNotIn('нет товара',r['text'])
 
+    def test_vehicle_and_vin_without_question_words_routes_to_catalog(self):
+        from app.services import question_intent
+        for text in ('Субару форестер vin: JF1SJ5LA3EG137463', VIN, 'VIN: '+VIN.lower()):
+            with self.subTest(text=text):self.assertEqual(question_intent(text),'совместимость')
+        self.seed(VIN);self.upload([self.row()])
+        with self.factory() as db, patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
+            draft=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')))
+            self.assertEqual(draft['text'],'Вам подойдет данный товар.')
+            self.assertEqual(draft['quality']['intent_label'],'совместимость');model.assert_not_called()
+
+    def test_bare_vin_without_catalog_stays_manual_without_general_model_reply(self):
+        self.seed(VIN)
+        with self.factory() as db, patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
+            draft=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')))
+            self.assertEqual(draft['quality']['fitment']['status'],'NEEDS_CATALOG')
+            self.assertFalse(draft['quality']['passed']);model.assert_not_called()
+
+    def test_vin_oem_finds_another_brand_only_from_our_wb_store(self):
+        self.seed(VIN)
+        with self.factory() as db:
+            db.get(Product,'100002').brand='AVANTECH'
+            db.get(Product,'100003').brand='AVANTECH';db.commit()
+        anchor=self.row();anchor.update(brand='SUZUKI',part_number='16510-82703',wb_nm_id='')
+        ours=self.oem_row(brand='AVANTECH',part_number='AF123',wb_nm_id='100002')
+        foreign=self.oem_row(brand='AVANTECH',part_number='AF456',wb_nm_id='100003')
+        self.upload([anchor,ours,foreign])
+        result=self.answer();self.assertEqual(result['status'],'ALTERNATIVE')
+        self.assertIn('AVANTECH AF123',result['text']);self.assertIn('100002',result['text']);self.assertNotIn('100003',result['text'])
+
     def test_incomplete_vehicle_requests_vin(self):
         self.seed('Подойдет на Suzuki SX4?');self.assertEqual(self.answer()['status'],'NEEDS_VIN')
 
