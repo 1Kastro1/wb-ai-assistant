@@ -221,4 +221,47 @@ class FitmentTests(unittest.TestCase):
         pending=self.client.get('/fitment/questions').json();self.assertEqual(next(q for q in pending if q['id']=='fit-q')['oe_number'],'1651082703')
         response=self.client.post('/fitment/questions/fit-q/evidence',json=body);self.assertEqual(response.status_code,200,response.text);self.assertEqual(self.answer()['status'],'ALTERNATIVE')
 
+    def test_owner_can_save_vin_oem_and_reuse_cross_for_another_vin(self):
+        from app.fitment_catalog import vin_key
+        self.seed(VIN)
+        body={'brand':'NITTO','part_number':'00123','wb_nm_id':'100001','source':'https://uniqom.ru/original-catalogs?identString='+VIN,'fit':True,'oe_brand':'SUZUKI','oe_number':'16510-82703','remember_cross':True}
+        first=self.client.post('/fitment/questions/fit-q/evidence',json=body)
+        self.assertEqual(first.status_code,200,first.text);self.assertTrue(first.json()['reusable_cross']);self.assertEqual(self.answer()['status'],'FIT')
+        self.assertTrue(self.client.post('/fitment/questions/fit-q/evidence',json=body).json()['duplicate'])
+        with self.factory() as db:
+            self.assertEqual(db.get(Product,'100001').part_number,'00123')
+            imports=list(db.scalars(select(FitmentImport)));self.assertEqual(len(imports),1);self.assertEqual(len(imports[0].rows),3);self.assertNotIn(VIN,str(imports[0].rows)+imports[0].source)
+            # A new VIN is never assumed to share the same original OEM.
+            db.get(Review,'fit-q').text='JS2YA4150B6100001';db.commit()
+        self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+        anchor=self.row();anchor.update(vin='JS2YA4150B6100001',brand='SUZUKI',part_number='16510-82703',wb_nm_id='')
+        self.upload([anchor]);self.assertEqual(self.answer()['status'],'FIT')
+
+    def test_reusable_cross_requires_paired_oem_and_cannot_reuse_a_negative(self):
+        self.seed(VIN)
+        body={'brand':'NITTO','part_number':'00123','wb_nm_id':'100001','source':'https://uniqom.ru/original-catalogs','fit':True,'remember_cross':True}
+        self.assertEqual(self.client.post('/fitment/questions/fit-q/evidence',json=body).status_code,400)
+        body.update(oe_brand='SUZUKI',oe_number='16510-82703',fit=False)
+        self.assertEqual(self.client.post('/fitment/questions/fit-q/evidence',json=body).status_code,400)
+        body.update(fit=True,oe_number=VIN)
+        self.assertEqual(self.client.post('/fitment/questions/fit-q/evidence',json=body).status_code,400)
+
+    def test_reusable_evidence_cannot_change_brand_article_or_foreign_store(self):
+        self.seed(VIN)
+        with self.factory() as db:db.get(Product,'100001').part_number='00123';db.commit()
+        body={'brand':'NITTO','part_number':'00123','wb_nm_id':'100001','source':'https://uniqom.ru/original-catalogs','fit':True,'oe_brand':'SUZUKI','oe_number':'1651082703','remember_cross':True}
+        for updates in ({'brand':'OTHER'},{'part_number':'WRONG'},{'wb_nm_id':'100003'}):
+            self.assertEqual(self.client.post('/fitment/questions/fit-q/evidence',json={**body,**updates}).status_code,400)
+        self.auth['role']='manager'
+        self.assertEqual(self.client.post('/fitment/questions/fit-q/evidence',json=body).status_code,403)
+
+    def test_research_shows_saved_fitment_even_when_last_internet_attempt_failed(self):
+        from app.db import set_setting
+        from app.internet_fitment import cache_key
+        self.seed(VIN);self.upload([self.row()])
+        with self.factory() as db:
+            set_setting(db,cache_key(db,db.get(Review,'fit-q'),db.get(Product,'100001')),{'result':{'status':'ACCESS_REQUIRED'}});db.commit()
+        response=self.client.get('/fitment/questions/fit-q/research');self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['status'],'ACCESS_REQUIRED');self.assertEqual(response.json()['saved_fitment']['status'],'FIT');self.assertTrue(response.json()['can_confirm'])
+
 if __name__=='__main__':unittest.main()

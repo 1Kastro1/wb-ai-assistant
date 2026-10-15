@@ -659,6 +659,8 @@ async def generate_question_draft(db, question, instruction=''):
         research=await research_question(db,question,product)
         fitment=fitment_answer(db,question,db.get(Product,question.product_id))
         fitment['internet']=research
+        if fitment['status']=='NEEDS_CATALOG':
+            fitment['pending_reason']=research.get('message','Требуется проверка оригинального OEM по каталогу')
         fitment['sources']+=research.get('sources',[])
         web_seconds=time.monotonic()-web_started
     voltage = battery_voltage_answer(question, product)
