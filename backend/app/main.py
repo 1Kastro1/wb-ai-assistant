@@ -35,7 +35,7 @@ from .maintenance import backup, portable_backup, portable_restore, portable_ver
 from . import voice
 from .activity_history import activity_page, rule_details
 from .generation_monitor import generation_metrics
-from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vin_key, oem_numbers
+from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vin_key, oem_numbers, fitment_answer, save_question_evidence
 
 
 @asynccontextmanager
@@ -2229,7 +2229,7 @@ def fitment_research_question(qid,auth,db):
 def fitment_last_research(qid: str,auth: AUTH,db: DB):
     from .internet_fitment import last_research
     q,p=fitment_research_question(qid,auth,db)
-    return last_research(db,q,p)
+    return {**last_research(db,q,p),'saved_fitment':fitment_answer(db,q,p),'product':{'id':p.id,'brand':p.brand,'part_number':p.part_number,'name':p.name},'can_confirm':auth['role']=='owner'}
 
 
 class FitmentResearchInput(Payload):
@@ -2251,6 +2251,9 @@ class FitmentEvidenceInput(Payload):
     wb_nm_id: str=Field(default='',max_length=12)
     source: str=Field(min_length=8,max_length=1000)
     fit: bool=True
+    oe_brand: str=Field(default='',max_length=100)
+    oe_number: str=Field(default='',max_length=40)
+    remember_cross: bool=False
 
 
 @app.post('/fitment/questions/{question_id}/evidence')
@@ -2271,11 +2274,8 @@ def fitment_question_evidence(question_id: str, body: FitmentEvidenceInput, auth
         if not linked or linked.marketplace!='wb' or not listed:raise ValueError('Нужен артикул WB из ассортимента этого магазина')
         if linked.brand and norm(linked.brand)!=norm(body.brand):raise ValueError('Бренд не совпадает с карточкой WB')
         if linked.part_number and norm(linked.part_number)!=norm(body.part_number):raise ValueError('Артикул производителя не совпадает с карточкой WB')
-    row={'brand':body.brand,'part_number':body.part_number,'wb_nm_id':body.wb_nm_id,'category':p.category,'fit':body.fit}
-    if vins:row['vin_hash']=vin_key(db,store,next(iter(vins)))
-    if oems:row['oe_number']=next(iter(oems))
-    db.add(FitmentImport(id=str(uuid4()),store_id=store,source=body.source,digest=secrets.token_hex(32),verified=True,complete=False,rows=[row]));db.commit()
-    return {'ok':True,'message':'Результат подбора сохранён. Подготовьте новый вариант ответа на вопрос.'}
+    result=save_question_evidence(db,q,p,body.model_dump())
+    return {'ok':True,**result,'message':'Результат подбора сохранён. Подготовьте новый вариант ответа на вопрос.'}
 
 
 @app.get('/catalog')

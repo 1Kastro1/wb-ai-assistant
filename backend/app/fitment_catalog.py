@@ -130,6 +130,40 @@ def vehicle_match(text,row,hashed):
     if len(set(years))!=1 or not row['year_from']<=int(years[0])<=row['year_to']:return False
     return all(not row.get(key) or contains(text,row[key]) for key in ('engine_code','engine','drive','axle','position','pr_code','market','generation'))
 
+
+def save_question_evidence(db,question,product,body):
+    """Owner-reviewed VIN evidence, with separately confirmed reusable OEM crosses."""
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    vins={v.upper() for v in VIN.findall(question.text or '')};oems=oem_numbers(question.text)
+    oe=body.get('oe_number','').strip().upper();oe_brand=body.get('oe_brand','').strip()
+    reuse=body.get('remember_cross',False)
+    if bool(oe)!=bool(oe_brand):raise ValueError('Укажите вместе оригинальный OEM-номер и его марку')
+    if oe and (not re.fullmatch(r'[A-Z0-9][A-Z0-9./-]{3,39}',oe) or not any(c.isdigit() for c in oe) or VIN.fullmatch(oe)):
+        raise ValueError('Укажите один оригинальный OEM-номер детали')
+    if oe and oems and norm(oe) not in oems:raise ValueError('OEM не совпадает с номером в вопросе покупателя')
+    if reuse and (len(vins)!=1 or not oe or not oe_brand or not body.get('wb_nm_id') or not body.get('fit')):
+        raise ValueError('Для повторного использования подтвердите VIN, оригинальный OEM и подходящий товар WB')
+    row={'brand':body['brand'].strip(),'part_number':body['part_number'].strip(),'wb_nm_id':body.get('wb_nm_id',''),'category':product.category,'fit':body['fit']}
+    if not row['brand'] or not row['part_number']:raise ValueError('Нужны бренд и артикул детали')
+    if vins:row['vin_hash']=vin_key(db,question.wb_account_id,next(iter(vins)))
+    if oe or oems:row['oe_number']=oe or next(iter(oems))
+    if oe_brand:row['oe_brand']=oe_brand
+    rows=[row]
+    if reuse:
+        rows.append({'brand':oe_brand,'part_number':oe,'category':product.category,'fit':True,'vin_hash':row['vin_hash']})
+        rows.append({k:v for k,v in row.items() if k!='vin_hash'})
+    parsed=urlsplit(body['source'])
+    # Full VINs belong only to the original question, never to source URLs.
+    source=urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode([(k,v) for k,v in parse_qsl(parsed.query) if not VIN.search(v) and k.lower() not in ('vin','identstring')]),''))
+    digest=hashlib.sha256(json.dumps([question.wb_account_id,source,rows],sort_keys=True).encode()).hexdigest()
+    old=db.scalar(select(FitmentImport).where(FitmentImport.store_id==question.wb_account_id,FitmentImport.digest==digest,FitmentImport.active==True))
+    if not old:db.add(FitmentImport(id=str(uuid4()),store_id=question.wb_account_id,source=source,digest=digest,verified=True,complete=False,rows=rows))
+    if reuse:
+        linked=db.get(Product,row['wb_nm_id'])
+        if linked and not linked.part_number:linked.part_number=row['part_number']
+    db.commit()
+    return {'duplicate':bool(old),'reusable_cross':reuse,'fitment':fitment_answer(db,question,product)}
+
 def fitment_answer(db,question,product):
     store=question.wb_account_id
     vins=VIN.findall(question.text or '')
@@ -153,9 +187,10 @@ def fitment_answer(db,question,product):
     oem_ambiguous=False
     if requested_oem:
         candidates=[(r,c) for r,c in rows if requested_oem & oe_numbers(r) and (direct(r) or (category and norm(r.get('category'))==category))]
-        brands={r.get('oe_brand','') for r,_ in candidates if r.get('oe_brand')}
-        named={brand for brand in brands if contains(question.text,brand)}
-        if named:candidates=[(r,c) for r,c in candidates if r.get('oe_brand') in named]
+        labels={r['oe_brand'] for r,_ in candidates if r.get('oe_brand')}
+        brands={norm(brand) for brand in labels}
+        named={norm(brand) for brand in labels if contains(question.text,brand)}
+        if named:candidates=[(r,c) for r,c in candidates if norm(r.get('oe_brand','')) in named]
         oem_ambiguous=len(requested_oem)>1 or len(named or brands)>1
         # A supplied VIN or catalog restrictions cannot be overridden by an unscoped cross.
         if hashed:
@@ -188,4 +223,4 @@ def fitment_answer(db,question,product):
         return result('UNAVAILABLE','Для данного автомобиля нет товара в наличии.')
     if requested_oem:return result('NEEDS_CATALOG','Уточняем аналог по указанному оригинальному OEM-номеру. Для точного подбора пришлите, пожалуйста, VIN автомобиля.')
     if not vins:return result('NEEDS_VIN','Пришлите, пожалуйста, VIN автомобиля для точного подбора детали.')
-    return result('NEEDS_CATALOG','Уточняем подходящую деталь по Вашему VIN в каталоге UNIQOM.')
+    return result('NEEDS_CATALOG','Для точного подбора необходимо подтвердить оригинальный OEM-номер детали по VIN Вашего автомобиля.')
