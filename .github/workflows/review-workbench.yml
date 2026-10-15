@@ -49,6 +49,7 @@ jobs:
           python -m unittest discover -s backend/tests -p 'test_owner_review_cases.py'
           python -m unittest discover -s backend/tests -p 'test_review_workbench.py'
           python -m unittest discover -s backend/tests -p 'test_fitment_catalog.py'
+          python -m unittest discover -s backend/tests -p 'test_internet_fitment.py'
           python -m unittest discover -s backend/tests -p 'test_registration_approval.py'
           python -m unittest discover -s backend/tests -p 'test_activity_history.py'
       - name: Verify question VIN display and resync

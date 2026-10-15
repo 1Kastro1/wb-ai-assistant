@@ -2204,6 +2204,47 @@ def fitment_pending_questions(auth: AUTH, db: DB):
     return [{'id':q.id,'text':q.text,'product_id':q.product_id,'vin':next(iter(FITMENT_VIN.findall(q.text)),''),'oe_number':next(iter(oem_numbers(q.text)),'') if len(oem_numbers(q.text))==1 else '', 'name':db.get(Product,q.product_id).name} for q in questions if question_intent(q.text)=='совместимость'][:50]
 
 
+@app.get('/fitment/internet/settings')
+def internet_fitment_settings(auth: AUTH,db: DB):
+    return {'enabled':bool(setting(db,'internet-fitment-enabled:'+active_store(db,auth),False)),'providers':['PartSouq — публичный каталог OEM','NHTSA vPIC — сведения об автомобиле'],'timeout_seconds':18}
+
+
+class InternetFitmentSettings(Payload):
+    enabled: bool
+
+
+@app.post('/fitment/internet/settings')
+def internet_fitment_settings_update(body: InternetFitmentSettings,auth: OWNER,db: DB):
+    set_setting(db,'internet-fitment-enabled:'+active_store(db,auth),body.enabled);db.commit()
+    return {'enabled':body.enabled}
+
+
+def fitment_research_question(qid,auth,db):
+    q=db.get(Review,qid)
+    if not q or q.wb_account_id!=active_store(db,auth) or not q.marketplace.endswith('_question'):raise HTTPException(404,'Вопрос не найден')
+    return q,db.get(Product,q.product_id)
+
+
+@app.get('/fitment/questions/{qid}/research')
+def fitment_last_research(qid: str,auth: AUTH,db: DB):
+    from .internet_fitment import last_research
+    q,p=fitment_research_question(qid,auth,db)
+    return last_research(db,q,p)
+
+
+class FitmentResearchInput(Payload):
+    refresh: bool=False
+
+
+@app.post('/fitment/questions/{qid}/research')
+async def fitment_research(qid: str,body: FitmentResearchInput,auth: MARKET_OPERATOR,db: DB):
+    from .internet_fitment import research_question
+    q,p=fitment_research_question(qid,auth,db)
+    can_operate_store(auth,db.get(StoreProfile,q.wb_account_id))
+    if not setting(db,'internet-fitment-enabled:'+q.wb_account_id,False):raise ValueError('Владелец может включить интернет-подбор в разделе Товары')
+    return await research_question(db,q,p,body.refresh)
+
+
 class FitmentEvidenceInput(Payload):
     brand: str=Field(min_length=1,max_length=100)
     part_number: str=Field(min_length=1,max_length=100)
@@ -2221,7 +2262,7 @@ def fitment_question_evidence(question_id: str, body: FitmentEvidenceInput, auth
     if len(vins)>1 or len(oems)>1 or (not vins and not oems):raise ValueError('Для подтверждения нужен один полный VIN или оригинальный OEM-номер в вопросе покупателя')
     p=db.get(Product,q.product_id)
     host=(urlsplit(body.source).hostname or '').lower();official=str(setting(db,'official_domain:'+p.id,'')).lower()
-    if not body.source.startswith('https://') or not (host=='uniqom.ru' or host.endswith('.uniqom.ru') or (official and (host==official or host.endswith('.'+official)))):raise ValueError('Используйте ссылку UNIQOM или официальный домен производителя из карточки товара')
+    if not body.source.startswith('https://') or not (host in ('uniqom.ru','partsouq.com') or host.endswith('.uniqom.ru') or (official and (host==official or host.endswith('.'+official)))):raise ValueError('Используйте ссылку UNIQOM, PartSouq или официальный домен производителя из карточки товара')
     if body.wb_nm_id and not re.fullmatch(r'[1-9][0-9]{0,11}',body.wb_nm_id):raise ValueError('Неверный артикул Wildberries')
     if body.wb_nm_id:
         linked=db.get(Product,body.wb_nm_id)
