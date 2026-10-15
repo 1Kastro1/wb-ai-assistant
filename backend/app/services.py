@@ -652,6 +652,14 @@ async def generate_question_draft(db, question, instruction=''):
     ]
     candidates = []
     fitment = fitment_answer(db, question, product) if intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк', product.name, re.I) or re.search(r'\b[A-HJ-NPR-Z0-9]{17}\b',question.text,re.I) or oem_numbers(question.text)) else None
+    if fitment and fitment['status']=='NEEDS_CATALOG' and setting(db,'internet-fitment-enabled:'+question.wb_account_id,False):
+        from .internet_fitment import research_question
+        web_started=time.monotonic()
+        research=await research_question(db,question,product)
+        fitment=fitment_answer(db,question,db.get(Product,question.product_id))
+        fitment['internet']=research
+        fitment['sources']+=research.get('sources',[])
+        web_seconds=time.monotonic()-web_started
     voltage = battery_voltage_answer(question, product)
     if voltage:
         sources.append(voltage['source'])
