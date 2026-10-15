@@ -187,9 +187,10 @@ def fitment_answer(db,question,product):
     oem_ambiguous=False
     if requested_oem:
         candidates=[(r,c) for r,c in rows if requested_oem & oe_numbers(r) and (direct(r) or (category and norm(r.get('category'))==category))]
-        brands={r.get('oe_brand','') for r,_ in candidates if r.get('oe_brand')}
-        named={brand for brand in brands if contains(question.text,brand)}
-        if named:candidates=[(r,c) for r,c in candidates if r.get('oe_brand') in named]
+        labels={r['oe_brand'] for r,_ in candidates if r.get('oe_brand')}
+        brands={norm(brand) for brand in labels}
+        named={norm(brand) for brand in labels if contains(question.text,brand)}
+        if named:candidates=[(r,c) for r,c in candidates if norm(r.get('oe_brand','')) in named]
         oem_ambiguous=len(requested_oem)>1 or len(named or brands)>1
         # A supplied VIN or catalog restrictions cannot be overridden by an unscoped cross.
         if hashed:

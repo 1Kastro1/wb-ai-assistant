@@ -204,6 +204,10 @@ class FitmentTests(unittest.TestCase):
         with self.factory() as db:db.get(Review,'fit-q').text='OEM 16510-82703 или OEM 90915-10001';db.commit()
         self.assertEqual(self.answer()['status'],'CONFLICT')
 
+    def test_oem_brand_capitalization_is_not_a_catalog_conflict(self):
+        self.seed('OEM 16510-82703');self.upload([self.oem_row(oe_brand='SUZUKI'),self.oem_row(oe_brand='Suzuki')])
+        self.assertEqual(self.answer()['status'],'FIT')
+
     def test_oem_cannot_override_vin_or_catalog_restrictions(self):
         self.seed('OEM 16510-82703 '+VIN);self.upload([self.oem_row()]);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
         with self.factory() as db:db.get(Review,'fit-q').text='OEM 16510-82703';db.commit()
