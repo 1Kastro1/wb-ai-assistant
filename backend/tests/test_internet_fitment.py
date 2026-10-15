@@ -36,6 +36,14 @@ class InternetFitmentTests(unittest.TestCase):
     def research(self,force=False):
         with self.factory() as db:return asyncio.run(internet.research_question(db,db.get(Review,'fit-q'),db.get(Product,'100001'),force))
 
+    def test_frame_skips_vin_only_decoder_and_is_not_persisted(self):
+        with self.factory() as db:db.get(Review,'fit-q').text='AGH30-0000123';db.commit()
+        with patch.object(internet.catalog,'decode',new=AsyncMock()) as decode, patch.object(internet.catalog,'lookup',new=AsyncMock(return_value={'status':'ACCESS_REQUIRED'})) as lookup:
+            result=self.research()
+            self.assertEqual(result['status'],'ACCESS_REQUIRED');decode.assert_not_called()
+            lookup.assert_awaited_once_with('AGH30-0000123','oil_filter')
+        with self.factory() as db:self.assertNotIn('0000123',str([vars(x) for x in db.scalars(select(Setting))]))
+
     def test_network_allowlist_rejects_arbitrary_hosts_paths_and_credentials(self):
         for url in ('http://partsouq.com/en/search/all','https://partsouq.com.evil.test/en/search/all','https://partsouq.com/en/user/auth','https://x@partsouq.com/en/search/all','https://127.0.0.1/en/search/all'):
             with self.assertRaises(ValueError):internet.safe_catalog_url(url)

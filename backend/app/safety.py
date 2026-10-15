@@ -1,3 +1,4 @@
+from .vehicle_identifiers import mask_frames
 import re
 from .product_guidance import product_usage_reply, is_cleaner, positive_review_reply
 from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons
@@ -72,7 +73,7 @@ def fresh_reply_variants(candidates, previous=''):
 
 
 def mask_vin(text):
-    return VIN.sub(lambda m: m[0][:3] + '***********' + m[0][-3:], text)
+    return mask_frames(VIN.sub(lambda m: m[0][:3] + '***********' + m[0][-3:], text))
 
 
 def classify(text, category=''):

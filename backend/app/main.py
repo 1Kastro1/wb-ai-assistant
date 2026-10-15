@@ -35,7 +35,7 @@ from .maintenance import backup, portable_backup, portable_restore, portable_ver
 from . import voice
 from .activity_history import activity_page, rule_details
 from .generation_monitor import generation_metrics
-from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vin_key, oem_numbers, fitment_answer, save_question_evidence
+from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vehicle_identifiers, vin_key, oem_numbers, fitment_answer, save_question_evidence
 
 
 @asynccontextmanager
@@ -2201,7 +2201,7 @@ def fitment_template(auth: AUTH):
 @app.get('/fitment/questions')
 def fitment_pending_questions(auth: AUTH, db: DB):
     questions=list(db.scalars(select(Review).where(Review.wb_account_id==active_store(db,auth),Review.marketplace.like('%_question'),Review.is_answered==False).order_by(Review.created_at.desc()).limit(200)))
-    return [{'id':q.id,'text':q.text,'product_id':q.product_id,'vin':next(iter(FITMENT_VIN.findall(q.text)),''),'oe_number':next(iter(oem_numbers(q.text)),'') if len(oem_numbers(q.text))==1 else '', 'name':db.get(Product,q.product_id).name} for q in questions if question_intent(q.text)=='совместимость'][:50]
+    return [{'id':q.id,'text':q.text,'product_id':q.product_id,'vin':next(iter(vehicle_identifiers(q.text)),''),'oe_number':next(iter(oem_numbers(q.text)),'') if len(oem_numbers(q.text))==1 else '', 'name':db.get(Product,q.product_id).name} for q in questions if question_intent(q.text)=='совместимость'][:50]
 
 
 @app.get('/fitment/internet/settings')
@@ -2260,9 +2260,9 @@ class FitmentEvidenceInput(Payload):
 def fitment_question_evidence(question_id: str, body: FitmentEvidenceInput, auth: OWNER, db: DB):
     store=active_store(db,auth);q=db.get(Review,question_id)
     if not q or q.wb_account_id!=store or not q.marketplace.endswith('_question'):raise HTTPException(404,'Вопрос не найден')
-    vins=set(v.upper() for v in FITMENT_VIN.findall(q.text))
+    vins=set(vehicle_identifiers(q.text))
     oems=oem_numbers(q.text)
-    if len(vins)>1 or len(oems)>1 or (not vins and not oems):raise ValueError('Для подтверждения нужен один полный VIN или оригинальный OEM-номер в вопросе покупателя')
+    if len(vins)>1 or len(oems)>1 or (not vins and not oems):raise ValueError('Для подтверждения нужен один полный VIN, Frame или оригинальный OEM-номер в вопросе покупателя')
     p=db.get(Product,q.product_id)
     host=(urlsplit(body.source).hostname or '').lower();official=str(setting(db,'official_domain:'+p.id,'')).lower()
     if not body.source.startswith('https://') or not (host in ('uniqom.ru','partsouq.com') or host.endswith('.uniqom.ru') or (official and (host==official or host.endswith('.'+official)))):raise ValueError('Используйте ссылку UNIQOM, PartSouq или официальный домен производителя из карточки товара')
