@@ -116,4 +116,14 @@ class FitmentTests(unittest.TestCase):
     def test_template_is_a_downloadable_excel_compatible_file(self):
         response=self.client.get('/fitment/template');self.assertEqual(response.status_code,200);self.assertIn('attachment',response.headers['content-disposition']);self.assertIn('wb_nm_id',response.text)
 
+    def test_real_xlsx_upload_with_russian_headers_is_used_in_an_answer(self):
+        from openpyxl import Workbook
+        self.seed();book=Workbook();book.active.append(['Бренд','Артикул производителя','Артикул WB','Категория','vin','Подходит']);book.active.append(['NITTO','00123',100001,'Масляные фильтры',VIN,'да']);data=io.BytesIO();book.save(data)
+        result=self.client.post('/fitment/catalogs/import',data={'source':'Наш проверенный каталог','verified':'true','complete':'false'},files={'file':('catalog.xlsx',data.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
+        self.assertEqual(result.status_code,200,result.text);self.assertEqual(result.json()['rows'],1);self.assertEqual(self.answer()['status'],'FIT')
+
+    def test_disabled_catalog_stops_influencing_answers_and_can_be_reenabled(self):
+        self.seed();item=self.upload([self.row()]);r=self.client.post('/fitment/catalogs/'+item['id']+'/enabled',json={'active':False});self.assertEqual(r.status_code,200);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+        self.client.post('/fitment/catalogs/'+item['id']+'/enabled',json={'active':True});self.assertEqual(self.answer()['status'],'FIT')
+
 if __name__=='__main__':unittest.main()
