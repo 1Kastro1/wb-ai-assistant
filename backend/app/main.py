@@ -1,6 +1,7 @@
 import os
 import re
 import zipfile
+import csv
 import secrets
 import time
 import hashlib
@@ -2177,7 +2178,7 @@ async def fitment_catalog_upload(auth: OWNER, db: DB, file: UploadFile=File(...)
     if not 2<=len(source)<=1000:raise ValueError('Укажите название или ссылку на источник каталога')
     raw=await file.read(10*1024*1024+1)
     try:return await asyncio.to_thread(import_cross_catalog,db,raw,file.filename or '',active_store(db,auth),source,verified,complete)
-    except (KeyError,TypeError,UnicodeError,StopIteration,zipfile.BadZipFile):raise ValueError('Не удалось прочитать каталог. Проверьте формат XLSX или CSV') from None
+    except (KeyError,TypeError,UnicodeError,StopIteration,zipfile.BadZipFile,csv.Error):raise ValueError('Не удалось прочитать каталог. Проверьте формат XLSX или CSV') from None
 
 
 class CatalogEnabled(Payload):
@@ -2223,7 +2224,7 @@ def fitment_question_evidence(question_id: str, body: FitmentEvidenceInput, auth
     if body.wb_nm_id and not re.fullmatch(r'[1-9][0-9]{0,11}',body.wb_nm_id):raise ValueError('Неверный артикул Wildberries')
     if body.wb_nm_id:
         linked=db.get(Product,body.wb_nm_id)
-        listed=body.wb_nm_id==q.product_id or db.get(StoreListing,(store,body.wb_nm_id)) or db.scalar(select(Review.id).where(Review.wb_account_id==store,Review.product_id==body.wb_nm_id).limit(1))
+        listed=body.wb_nm_id==q.product_id or db.get(StoreListing,(store,body.wb_nm_id))
         from .fitment_catalog import norm
         if not linked or linked.marketplace!='wb' or not listed:raise ValueError('Нужен артикул WB из ассортимента этого магазина')
         if linked.brand and norm(linked.brand)!=norm(body.brand):raise ValueError('Бренд не совпадает с карточкой WB')

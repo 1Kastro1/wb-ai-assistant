@@ -13,6 +13,7 @@ from .db import FitmentImport, StoreListing, Product, Review, setting, set_setti
 FIELDS = ('brand','part_number','wb_nm_id','oe_number','category','make','model','year_from','year_to','body','engine_code','vin','fit','stock','cross_brand','cross_number','engine','drive','axle','position','pr_code','market','generation','production_date_from','production_date_to','notes','vin_range')
 ALIASES = {'бренд':'brand','артикул производителя':'part_number','артикул детали':'part_number','артикул wb':'wb_nm_id','артикул wildberries':'wb_nm_id','код wb':'wb_nm_id','oem':'oe_number','oe':'oe_number','категория':'category','марка':'make','модель':'model','год с':'year_from','год по':'year_to','кузов':'body','двигатель':'engine_code','подходит':'fit','остаток':'stock','бренд аналога':'cross_brand','артикул аналога':'cross_number'}
 VIN = re.compile(r'(?<![A-Z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Z0-9])',re.I)
+ALIASES.update({'артикул':'part_number','производитель':'brand','марка автомобиля':'make','модель автомобиля':'model','ограничения':'notes','примечание':'notes','ось':'axle','сторона':'position','привод':'drive','код двигателя':'engine_code','pr код':'pr_code','part number':'part_number','article':'part_number','wb id':'wb_nm_id'})
 
 def norm(value):
     return re.sub(r'[^a-zа-яё0-9]','',str(value or '').casefold())
@@ -136,8 +137,6 @@ def fitment_answer(db,question,product):
     for row,catalog in positives:
         candidate=db.get(Product,row['wb_nm_id'])
         listing=db.get(StoreListing,(store,row['wb_nm_id']))
-        if not listing:
-            listing=db.scalar(select(Review.id).where(Review.wb_account_id==store,Review.product_id==row['wb_nm_id']).limit(1))
         conflicting=any(other.get('wb_nm_id')==row['wb_nm_id'] and not other['fit'] for other,_ in matches)
         if candidate and candidate.marketplace=='wb' and listing and not conflicting and row.get('stock',1)>0:
             alternatives.append(row)

@@ -99,4 +99,21 @@ class FitmentTests(unittest.TestCase):
             result=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')));self.assertFalse(result['quality']['passed'])
             with self.assertRaisesRegex(ValueError,'подбор'):propose_publish(db,['fit-q'])
 
+    def test_review_history_alone_is_not_evidence_of_a_current_seller_listing(self):
+        self.seed()
+        with self.factory() as db:
+            db.add(Review(id='old',wb_review_id='old',product_id='100003',rating=5,text='',wb_account_id='owner'));db.commit()
+        row=self.row();row.update(wb_nm_id='100003');self.upload([row]);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+
+    def test_owner_can_save_a_reviewed_uniqom_result_but_not_an_arbitrary_domain(self):
+        self.seed();body={'brand':'NITTO','part_number':'00123','wb_nm_id':'100001','source':'https://uniqom.ru/original-catalogs','fit':True}
+        r=self.client.post('/fitment/questions/fit-q/evidence',json=body);self.assertEqual(r.status_code,200,r.text);self.assertEqual(self.answer()['status'],'FIT')
+        body['source']='https://uniqom.ru.evil.example/catalog';self.assertEqual(self.client.post('/fitment/questions/fit-q/evidence',json=body).status_code,400)
+
+    def test_unknown_catalog_restrictions_require_manual_review(self):
+        self.seed();row=self.row();row['notes']='Только для конкретной комплектации';self.upload([row]);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+
+    def test_template_is_a_downloadable_excel_compatible_file(self):
+        response=self.client.get('/fitment/template');self.assertEqual(response.status_code,200);self.assertIn('attachment',response.headers['content-disposition']);self.assertIn('wb_nm_id',response.text)
+
 if __name__=='__main__':unittest.main()
