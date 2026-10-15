@@ -7,7 +7,7 @@ from unittest.mock import patch,AsyncMock
 from sqlalchemy import select
 from test_review_workbench import WorkbenchTests
 from app.db import Product,Review,StoreListing,FitmentImport,Draft
-from app.fitment_catalog import import_cross_catalog,fitment_answer,parse_rows
+from app.fitment_catalog import import_cross_catalog,fitment_answer,parse_rows,oem_numbers
 from app.services import generate_question_draft,propose_publish
 
 VIN='TSMJYBA2S00828853'
@@ -140,5 +140,56 @@ class FitmentTests(unittest.TestCase):
                 module.upgrade();module.upgrade()
             self.assertIn('fitment_imports',inspect(connection).get_table_names());self.assertIn('store_listings',inspect(connection).get_table_names())
         with self.factory() as db:self.assertIsNotNone(db.get(Product,'p'))
+
+    def oem_row(self,**extra):
+        row=self.row();row.pop('vin');row.update(oe_number='16510-82703',oe_brand='SUZUKI');row.update(extra);return row
+
+    def test_explicit_oem_matches_normalized_number_and_short_reply_without_model(self):
+        self.seed('Оригинальный номер: 1651082703');self.upload([self.oem_row()])
+        with self.factory() as db:
+            with patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
+                draft=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')))
+                self.assertEqual(draft['text'],'Вам подойдет данный товар.');model.assert_not_called()
+
+    def test_oem_alternative_uses_our_wb_code_and_skips_zero_stock_and_foreign_store(self):
+        self.seed('Есть аналог OEM 16510-82703?')
+        self.upload([self.oem_row(wb_nm_id='100002',part_number='4SF-102',stock='0'),self.oem_row(wb_nm_id='100003',part_number='FOREIGN')])
+        self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+        self.upload([self.oem_row(wb_nm_id='100002',part_number='4SF-102',stock='2')])
+        answer=self.answer();self.assertEqual(answer['status'],'ALTERNATIVE');self.assertIn('100002',answer['text']);self.assertNotIn('не подходит',answer['text'])
+
+    def test_oem_never_matches_a_prefix_or_arbitrary_wb_id_or_vin(self):
+        self.seed('Подойдет вместо 16510-8270?');self.upload([self.oem_row()]);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+        self.assertFalse(oem_numbers('Артикул WB 1651082703, 2018 год '+VIN));self.assertFalse(oem_numbers('VIN '+VIN))
+
+    def test_oem_without_verified_evidence_stays_manual_and_publish_is_blocked(self):
+        self.seed('OEM 16510-82703');self.upload([self.oem_row()],verified=False)
+        with self.factory() as db:
+            draft=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')));self.assertFalse(draft['quality']['passed'])
+            with self.assertRaises(ValueError):propose_publish(db,['fit-q'])
+
+    def test_oem_brand_collision_or_multiple_requested_numbers_requires_clarification(self):
+        self.seed('OEM 16510-82703');self.upload([self.oem_row(),self.oem_row(oe_brand='TOYOTA',wb_nm_id='100002')]);self.assertEqual(self.answer()['status'],'CONFLICT')
+        with self.factory() as db:db.get(Review,'fit-q').text='SUZUKI OEM 16510-82703';db.commit()
+        self.assertEqual(self.answer()['status'],'FIT')
+        with self.factory() as db:db.get(Review,'fit-q').text='OEM 16510-82703 или OEM 90915-10001';db.commit()
+        self.assertEqual(self.answer()['status'],'CONFLICT')
+
+    def test_oem_cannot_override_vin_or_catalog_restrictions(self):
+        self.seed('OEM 16510-82703 '+VIN);self.upload([self.oem_row()]);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+        with self.factory() as db:db.get(Review,'fit-q').text='OEM 16510-82703';db.commit()
+        self.upload([self.oem_row(notes='Только при специальной комплектации')])
+        with self.factory() as db:
+            first=db.scalar(select(FitmentImport).order_by(FitmentImport.created_at));first.active=False;db.commit()
+        self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
+
+    def test_vin_original_oem_anchor_finds_branded_oe_analog(self):
+        self.seed();anchor=self.row();anchor.update(brand='SUZUKI',part_number='16510-82703',wb_nm_id='')
+        self.upload([anchor,self.oem_row()]);self.assertEqual(self.answer()['status'],'FIT')
+
+    def test_owner_can_confirm_an_oem_question_without_vin(self):
+        self.seed('OEM 16510-82703');body={'brand':'NITTO','part_number':'4SF-102','wb_nm_id':'100002','source':'https://uniqom.ru/search?term=16510-82703','fit':True}
+        pending=self.client.get('/fitment/questions').json();self.assertEqual(next(q for q in pending if q['id']=='fit-q')['oe_number'],'1651082703')
+        response=self.client.post('/fitment/questions/fit-q/evidence',json=body);self.assertEqual(response.status_code,200,response.text);self.assertEqual(self.answer()['status'],'ALTERNATIVE')
 
 if __name__=='__main__':unittest.main()

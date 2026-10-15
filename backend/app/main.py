@@ -35,7 +35,7 @@ from .maintenance import backup, portable_backup, portable_restore, portable_ver
 from . import voice
 from .activity_history import activity_page, rule_details
 from .generation_monitor import generation_metrics
-from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vin_key
+from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vin_key, oem_numbers
 
 
 @asynccontextmanager
@@ -2195,13 +2195,13 @@ def fitment_catalog_enabled(catalog_id: str, body: CatalogEnabled, auth: OWNER, 
 
 @app.get('/fitment/template')
 def fitment_template(auth: AUTH):
-    return Response('\ufeffbrand;part_number;wb_nm_id;oe_number;category;make;model;year_from;year_to;body;engine_code;vin;fit;stock;cross_brand;cross_number\r\n',media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="cross-catalog-template.csv"'})
+    return Response('\ufeffbrand;part_number;wb_nm_id;oe_number;oe_brand;category;make;model;year_from;year_to;body;engine_code;vin;fit;stock;cross_brand;cross_number\r\n',media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="cross-catalog-template.csv"'})
 
 
 @app.get('/fitment/questions')
 def fitment_pending_questions(auth: AUTH, db: DB):
     questions=list(db.scalars(select(Review).where(Review.wb_account_id==active_store(db,auth),Review.marketplace.like('%_question'),Review.is_answered==False).order_by(Review.created_at.desc()).limit(200)))
-    return [{'id':q.id,'text':q.text,'product_id':q.product_id,'vin':next(iter(FITMENT_VIN.findall(q.text)),''),'name':db.get(Product,q.product_id).name} for q in questions if question_intent(q.text)=='совместимость'][:50]
+    return [{'id':q.id,'text':q.text,'product_id':q.product_id,'vin':next(iter(FITMENT_VIN.findall(q.text)),''),'oe_number':next(iter(oem_numbers(q.text)),'') if len(oem_numbers(q.text))==1 else '', 'name':db.get(Product,q.product_id).name} for q in questions if question_intent(q.text)=='совместимость'][:50]
 
 
 class FitmentEvidenceInput(Payload):
@@ -2217,7 +2217,8 @@ def fitment_question_evidence(question_id: str, body: FitmentEvidenceInput, auth
     store=active_store(db,auth);q=db.get(Review,question_id)
     if not q or q.wb_account_id!=store or not q.marketplace.endswith('_question'):raise HTTPException(404,'Вопрос не найден')
     vins=set(v.upper() for v in FITMENT_VIN.findall(q.text))
-    if len(vins)!=1:raise ValueError('Для подтверждения нужен один полный VIN в вопросе покупателя')
+    oems=oem_numbers(q.text)
+    if len(vins)>1 or len(oems)>1 or (not vins and not oems):raise ValueError('Для подтверждения нужен один полный VIN или оригинальный OEM-номер в вопросе покупателя')
     p=db.get(Product,q.product_id)
     host=(urlsplit(body.source).hostname or '').lower();official=str(setting(db,'official_domain:'+p.id,'')).lower()
     if not body.source.startswith('https://') or not (host=='uniqom.ru' or host.endswith('.uniqom.ru') or (official and (host==official or host.endswith('.'+official)))):raise ValueError('Используйте ссылку UNIQOM или официальный домен производителя из карточки товара')
@@ -2229,7 +2230,9 @@ def fitment_question_evidence(question_id: str, body: FitmentEvidenceInput, auth
         if not linked or linked.marketplace!='wb' or not listed:raise ValueError('Нужен артикул WB из ассортимента этого магазина')
         if linked.brand and norm(linked.brand)!=norm(body.brand):raise ValueError('Бренд не совпадает с карточкой WB')
         if linked.part_number and norm(linked.part_number)!=norm(body.part_number):raise ValueError('Артикул производителя не совпадает с карточкой WB')
-    row={'brand':body.brand,'part_number':body.part_number,'wb_nm_id':body.wb_nm_id,'category':p.category,'fit':body.fit,'vin_hash':vin_key(db,store,next(iter(vins)))}
+    row={'brand':body.brand,'part_number':body.part_number,'wb_nm_id':body.wb_nm_id,'category':p.category,'fit':body.fit}
+    if vins:row['vin_hash']=vin_key(db,store,next(iter(vins)))
+    if oems:row['oe_number']=next(iter(oems))
     db.add(FitmentImport(id=str(uuid4()),store_id=store,source=body.source,digest=secrets.token_hex(32),verified=True,complete=False,rows=[row]));db.commit()
     return {'ok':True,'message':'Результат подбора сохранён. Подготовьте новый вариант ответа на вопрос.'}
 

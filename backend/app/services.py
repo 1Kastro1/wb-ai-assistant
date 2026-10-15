@@ -1,4 +1,4 @@
-from .fitment_catalog import fitment_answer
+from .fitment_catalog import fitment_answer, oem_numbers
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
 import difflib
@@ -530,6 +530,7 @@ def analytics(db, days=0, product_id='', account_id=''):
 
 
 def question_intent(text):
+    if oem_numbers(text):return 'совместимость'
     value = (text or '').lower().replace('ё', 'е')
     patterns = (
         ('применение', r'как (?:использ|примен)|инструкц|сколько нанос|разводит|дозиров'),
@@ -650,7 +651,7 @@ async def generate_question_draft(db, question, instruction=''):
         {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
-    fitment = fitment_answer(db, question, product) if intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк', product.name, re.I) or re.search(r'\b[A-HJ-NPR-Z0-9]{17}\b',question.text,re.I)) else None
+    fitment = fitment_answer(db, question, product) if intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк', product.name, re.I) or re.search(r'\b[A-HJ-NPR-Z0-9]{17}\b',question.text,re.I) or oem_numbers(question.text)) else None
     voltage = battery_voltage_answer(question, product)
     if voltage:
         sources.append(voltage['source'])

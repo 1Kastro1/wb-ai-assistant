@@ -11,9 +11,35 @@ from sqlalchemy import select
 from .db import FitmentImport, StoreListing, Product, Review, setting, set_setting, now
 
 FIELDS = ('brand','part_number','wb_nm_id','oe_number','category','make','model','year_from','year_to','body','engine_code','vin','fit','stock','cross_brand','cross_number','engine','drive','axle','position','pr_code','market','generation','production_date_from','production_date_to','notes','vin_range')
+FIELDS += ('oe_brand',)
 ALIASES = {'бренд':'brand','артикул производителя':'part_number','артикул детали':'part_number','артикул wb':'wb_nm_id','артикул wildberries':'wb_nm_id','код wb':'wb_nm_id','oem':'oe_number','oe':'oe_number','категория':'category','марка':'make','модель':'model','год с':'year_from','год по':'year_to','кузов':'body','двигатель':'engine_code','подходит':'fit','остаток':'stock','бренд аналога':'cross_brand','артикул аналога':'cross_number'}
 VIN = re.compile(r'(?<![A-Z0-9])[A-HJ-NPR-Z0-9]{17}(?![A-Z0-9])',re.I)
 ALIASES.update({'артикул':'part_number','производитель':'brand','марка автомобиля':'make','модель автомобиля':'model','ограничения':'notes','примечание':'notes','ось':'axle','сторона':'position','привод':'drive','код двигателя':'engine_code','pr код':'pr_code','part number':'part_number','article':'part_number','wb id':'wb_nm_id'})
+ALIASES.update({'оригинальный номер':'oe_number','номер oem':'oe_number','номер оем':'oe_number','бренд oem':'oe_brand','марка oem':'oe_brand'})
+
+
+def oem_numbers(text):
+    # Require an explicit OEM/replacement request, never interpret a VIN, year or WB ID as OEM.
+    value=re.sub(r'(?<=[A-Z0-9])\s*-\s*(?=[A-Z0-9])','-',text or '',flags=re.I)
+    marker=r'(?<![a-zа-яё])(?:oem|oe|оем|оригинальн(?:ый|ого)\s+(?:номер|артикул)|вместо|аналог(?:\s+для)?|замена(?:\s+для)?)\s*(?:№|номер|код|:|#)?\s*'
+    numbers=[]
+    for match in re.finditer(marker+r'((?=[a-z0-9./-]*[0-9])[a-z0-9]+(?:[-./][a-z0-9]+)*)',value,re.I):
+        number=norm(match.group(1))
+        if 5<=len(number)<=24 and any(c.isdigit() for c in number) and not VIN.fullmatch(number):
+            numbers.append(number)
+    bare=re.fullmatch(r'\s*(?:здравствуйте[!,. ]*)?([a-z0-9]+(?:[-./][a-z0-9]+)*)[?.! ]*',value,re.I)
+    if bare:
+        code=bare.group(1);number=norm(code)
+        if 5<=len(number)<=24 and any(c.isdigit() for c in code) and (any(c.isalpha() for c in code) or '-' in code) and not VIN.fullmatch(number):numbers.append(number)
+    return set(numbers)
+
+
+def oe_numbers(row):
+    return {norm(value) for value in re.split(r'[;,|\n]+',row.get('oe_number','')) if norm(value)}
+
+
+def unrestricted(row):
+    return not any(row.get(k) for k in ('vin_hash','make','model','body','year_from','year_to','engine_code','engine','drive','axle','position','pr_code','market','generation','production_date_from','production_date_to','notes','vin_range'))
 
 def norm(value):
     return re.sub(r'[^a-zа-яё0-9]','',str(value or '').casefold())
@@ -119,14 +145,28 @@ def fitment_answer(db,question,product):
     matches=[(row,c) for row,c in rows if vehicle_match(question.text,row,hashed) and (direct(row) or (category and norm(row.get('category'))==category))]
     anchors=[r for r,_ in matches if r['fit']]
     for row,c in rows:
-        if row.get('vin_hash') or row.get('make') or not row.get('cross_brand') or not row.get('cross_number'):continue
+        if not unrestricted(row):continue
         if not category or norm(row.get('category'))!=category:continue
-        if any(norm(row['cross_brand'])==norm(a['brand']) and norm(row['cross_number'])==norm(a['part_number']) for a in anchors):
+        if any((row.get('cross_brand') and norm(row['cross_brand'])==norm(a['brand']) and norm(row.get('cross_number'))==norm(a['part_number'])) or (norm(a['part_number']) in oe_numbers(row) and row.get('oe_brand') and norm(row['oe_brand'])==norm(a['brand'])) for a in anchors):
             matches.append((row,c))
+    requested_oem=oem_numbers(question.text)
+    oem_ambiguous=False
+    if requested_oem:
+        candidates=[(r,c) for r,c in rows if requested_oem & oe_numbers(r) and (direct(r) or (category and norm(r.get('category'))==category))]
+        brands={r.get('oe_brand','') for r,_ in candidates if r.get('oe_brand')}
+        named={brand for brand in brands if contains(question.text,brand)}
+        if named:candidates=[(r,c) for r,c in candidates if r.get('oe_brand') in named]
+        oem_ambiguous=len(requested_oem)>1 or len(named or brands)>1
+        # A supplied VIN or catalog restrictions cannot be overridden by an unscoped cross.
+        if hashed:
+            matches=[(r,c) for r,c in matches if requested_oem & oe_numbers(r) or (r['fit'] and norm(r['part_number']) in requested_oem)]
+        else:
+            matches=[(r,c) for r,c in candidates if unrestricted(r) or vehicle_match(question.text,r,'')]
     current=[(r,c) for r,c in matches if direct(r)]
     sources=[{'text':r['brand']+' '+r['part_number'],'source':c.source,'verification_status':'VERIFIED'} for r,c in matches]
     def result(status,text,**extra):return {'status':status,'text':text,'sources':sources,'checked_at':now(),**extra}
     if len(set(v.upper() for v in vins))>1:return result('NEEDS_VIN','Уточните, пожалуйста, VIN автомобиля, для которого нужен подбор.')
+    if oem_ambiguous:return result('CONFLICT','Уточните, пожалуйста, оригинальный OEM-номер и марку автомобиля или пришлите VIN.')
     if current and {r['fit'] for r,_ in current}=={True}:
         return result('FIT','Вам подойдет данный товар.')
     if current and len({r['fit'] for r,_ in current})>1:
@@ -146,5 +186,6 @@ def fitment_answer(db,question,product):
     # Only an explicitly complete catalog can establish absence. Missing evidence is never no stock.
     if current and {r['fit'] for r,_ in current}=={False} and any(c.complete for _,c in current):
         return result('UNAVAILABLE','Для данного автомобиля нет товара в наличии.')
+    if requested_oem:return result('NEEDS_CATALOG','Уточняем аналог по указанному оригинальному OEM-номеру. Для точного подбора пришлите, пожалуйста, VIN автомобиля.')
     if not vins:return result('NEEDS_VIN','Пришлите, пожалуйста, VIN автомобиля для точного подбора детали.')
     return result('NEEDS_CATALOG','Уточняем подходящую деталь по Вашему VIN в каталоге UNIQOM.')
