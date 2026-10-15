@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 from urllib.parse import parse_qs, unquote, urlsplit
 from sqlalchemy import select
 from .config import MODEL
-from .db import Account, Draft, Product, Review, StoreProfile, Session, now, setting
+from .db import StoreListing, Account, Draft, Product, Review, StoreProfile, Session, now, setting
 from .safety import classify, mask_vin
 from .verified_instructions import attach_verified_instructions
 from .product_images import card_image_url
@@ -215,6 +215,7 @@ class WildberriesProvider:
             result = await guard.request('wb', 'products', token=token, body={'settings': {'sort': {'ascending': True}, 'filter': {'withPhoto': -1}, 'cursor': cursor}})
             for item in result.get('cards', []):
                 pid = str(item['nmID'])
+                db.merge(StoreListing(store_id=account_id or 'owner',product_id=pid,seen_at=now()))
                 product = db.get(Product, pid) or Product(id=pid)
                 product.name, product.brand, product.category = item.get('title', ''), item.get('brand', ''), item.get('subjectName', '')
                 product.image_url = card_image_url(item)

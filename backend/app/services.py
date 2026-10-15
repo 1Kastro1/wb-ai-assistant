@@ -1,3 +1,4 @@
+from .fitment_catalog import fitment_answer
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
 import difflib
@@ -649,13 +650,14 @@ async def generate_question_draft(db, question, instruction=''):
         {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
+    fitment = fitment_answer(db, question, product) if intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк', product.name, re.I) or re.search(r'\b[A-HJ-NPR-Z0-9]{17}\b',question.text,re.I)) else None
     voltage = battery_voltage_answer(question, product)
     if voltage:
         sources.append(voltage['source'])
-    uses_model = not analysis['buyer_asks_about_money'] and not voltage
+    uses_model = not analysis['buyer_asks_about_money'] and not voltage and not fitment
     model_started = time.monotonic()
     try:
-        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [voltage['answer']] if voltage else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
+        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
     except Exception as error:
         fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
         candidates = []
@@ -665,11 +667,15 @@ async def generate_question_draft(db, question, instruction=''):
         try:
             value = validate_reply(mask_vin(candidate))
             if not existing or value.strip() != existing.text.strip():
-                checked.append((value, assess_question_answer(question, product, value, sources)))
+                checked.append((value, {'score':100 if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else 0,'passed':fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN'),'issues':[] if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else ['Нужно подтверждение применяемости по каталогу'],'sources':fitment['sources'],'intent_label':intent,'fitment':fitment} if fitment else assess_question_answer(question, product, value, sources)))
         except ValueError:
             continue
     passed_candidates = [item for item in checked if item[1]['passed']]
-    if passed_candidates:
+    if fitment and not analysis['buyer_asks_about_money']:
+        reply = validate_reply(fitment['text'])
+        quality = {'score':100 if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else 0,'passed':fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN'),'issues':[] if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else ['Нужна проверка по каталогу'],'sources':fitment['sources'],'intent_label':intent,'fitment':fitment}
+        model = 'catalog-fitment-1.0'
+    elif passed_candidates:
         reply, quality = max(passed_candidates, key=lambda item: item[1]['score'])
         model = MODEL
         quality['selection_note'] = f'Выбран лучший из {len(passed_candidates)} проверенных вариантов'
@@ -694,7 +700,7 @@ async def generate_question_draft(db, question, instruction=''):
     else:
         draft = Draft(id=str(uuid4()), review_id=question.id, text=reply, original=reply, model=model, quality=quality)
         db.add(draft)
-    question.status = 'draft_ready'
+    question.status = 'draft_ready' if quality['passed'] else 'manual_review'
     db.commit()
     return public(draft)
 
@@ -932,6 +938,8 @@ def propose_publish(db, review_ids):
         if not review or not draft or review.is_answered or review.status == 'publishing':
             raise ValueError('Для каждого выбранного отзыва нужен доступный черновик')
         is_question = review.marketplace.endswith('_question')
+        if is_question and (draft.quality or {}).get('fitment',{}).get('status') in ('NEEDS_CATALOG','CONFLICT'):
+            raise ValueError('Сначала подтвердите подбор по каталогу в разделе Товары')
         if len(ids) > 1 and not is_question and (review.rating <= 3 or review.manual):
             excluded.append(rid)
             continue

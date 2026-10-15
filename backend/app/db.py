@@ -250,6 +250,26 @@ class CatalogSource(Base):
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class FitmentImport(Base):
+    __tablename__ = 'fitment_imports'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    store_id: Mapped[str] = mapped_column(String, index=True)
+    source: Mapped[str] = mapped_column(String)
+    digest: Mapped[str] = mapped_column(String)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    rows: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[str] = mapped_column(String, default=now)
+
+
+class StoreListing(Base):
+    __tablename__ = 'store_listings'
+    store_id: Mapped[str] = mapped_column(String, primary_key=True)
+    product_id: Mapped[str] = mapped_column(String, primary_key=True)
+    seen_at: Mapped[str] = mapped_column(String, default=now)
+
+
 class CatalogPart(Base):
     __tablename__ = 'catalog_parts'
     id: Mapped[str] = mapped_column(String, primary_key=True)
