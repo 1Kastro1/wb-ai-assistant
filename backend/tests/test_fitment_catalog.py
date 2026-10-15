@@ -126,4 +126,19 @@ class FitmentTests(unittest.TestCase):
         self.seed();item=self.upload([self.row()]);r=self.client.post('/fitment/catalogs/'+item['id']+'/enabled',json={'active':False});self.assertEqual(r.status_code,200);self.assertEqual(self.answer()['status'],'NEEDS_CATALOG')
         self.client.post('/fitment/catalogs/'+item['id']+'/enabled',json={'active':True});self.assertEqual(self.answer()['status'],'FIT')
 
+    def test_upgrade_adds_catalog_tables_without_changing_existing_products(self):
+        import importlib.util
+        from pathlib import Path
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        from sqlalchemy import inspect
+        path=Path(__file__).parents[1]/'migrations/versions/0011_fitment_catalogs.py'
+        spec=importlib.util.spec_from_file_location('fitment_upgrade_test',path);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        FitmentImport.__table__.drop(self.engine);StoreListing.__table__.drop(self.engine)
+        with self.engine.begin() as connection:
+            with Operations.context(MigrationContext.configure(connection)):
+                module.upgrade();module.upgrade()
+            self.assertIn('fitment_imports',inspect(connection).get_table_names());self.assertIn('store_listings',inspect(connection).get_table_names())
+        with self.factory() as db:self.assertIsNotNone(db.get(Product,'p'))
+
 if __name__=='__main__':unittest.main()
