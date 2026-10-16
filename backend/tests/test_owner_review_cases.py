@@ -12,7 +12,7 @@ from app.verified_instructions import matching_instructions
 from urllib.parse import urlsplit
 
 
-CASES = [
+CASES = [{"name":"Лампа H1 галогенная 12В 55Вт 3200K","brand":"KOITO","rating":3,"text":"Поставил светят как мои обычные -варта. Где там галоген ..на вид прозрачное стекло","contains":["прозрачная","газовое наполнение","3200","Извините"],"excludes":["Перед заказом","только синее"]},{"name":"Свеча зажигания K16RU11 Toyota","brand":"DENSO","rating":1,"text":"123466890\nБыушные","contains":["только новый","бывшие в употреблении","ПВЗ"],"excludes":["Вы ошибаетесь","неправильно"]},{"name":"Эко средство для мытья полов 1л, энергия океана","brand":"KANGAROO","rating":1,"text":"Чудесный препарат с ароматом чистоты.","contains":["аромат","положительный отзыв","измените","случайно"],"excludes":["Извините","не оправдал","пять звёзд","нанесите"]},{"name":"Лампа H7 галогенная 12В 55Вт 5000K","brand":"AVANTECH","rating":1,"text":"","contains":["почему","оценку","не устроило"],"excludes":["высокую оценку","инструкц"]},{"name":"5W-30 DL-1 Масло моторное синтетическое 1 л Soft99 4 штуки","brand":"GIGAS","rating":1,"text":"3 из 4 бутылок помяты, масло вытекло","contains":["извинения","протечку масла","ПВЗ","отказаться"],"excludes":["оформить возврат"]},{"name":"Колодки тормозные передние ADVICS SN314","brand":"ADVICS","rating":2,"text":"Очень сильно скрипят.","risk":"HIGH","contains":["притирка","дисков","суппорта","сервисе"],"excludes":["это нормально","притрутся","продолжайте ездить","300 км"]},{"name":"Наконечник рулевой тяги 555 SE-3641L Toyota левый","brand":"555","rating":3,"text":"Установил правый наконечник и получилось так что гайка стала ниже шплинта такое впечатление что палец тоньше в диаметре.","contains":["гайки","шплинта","конуса","сервисе","применяемость"],"excludes":["точно","подложите","левая и правая одинаковые"]},
  {'name':'Пенный очиститель Profoam 4000','brand':'KANGAROO','rating':5,'text':'','contains':['Спасибо'],'excludes':['Распылите','инструкц','извин']},
  {'name':'Очиститель универсальный Profoam 2000, сменный блок','brand':'KANGAROO','rating':1,'text':'Плохое качество','facts':[{'text':'Способ применения: Нанесите средство на загрязнение. Через 30 секунд протрите влажной тканью.','source':'Карточка товара','verification_status':'VERIFIED'}],'contains':['30 секунд','тканью'],'excludes':['по отзыву нельзя']},
  {'name':'Очиститель интерьера Profoam 4000+, 600мл','brand':'KANGAROO','article':'321499','rating':2,'text':'Деньги на ветер','contains':['10-15 минут'],'excludes':['30 секунд','вернём деньги']},
@@ -42,14 +42,17 @@ class OwnerReviewCases(unittest.TestCase):
         for index,case in enumerate(CASES):
             with self.subTest(product=case['name'],review=case['text']):
                 with self.factory() as db:
-                    if index==0:db.add(StoreProfile(id='owner',name='Магазин',provider='wb'))
+                    if index==0:
+                        db.add(StoreProfile(id='owner',name='Магазин',provider='wb'))
+                        db.add(Product(id='58434122',name='Держатель на дефлектор CANTULE',brand='EIKOSHA'));db.flush()
+                        db.add(StoreListing(store_id='owner',product_id='58434122'))
                     facts=case.get('facts',[])
                     product=Product(id='p'+str(index),name=case['name'],brand=case['brand'],part_number=case.get('article',''),facts=facts,category='Бытовая химия' if 'очиститель' in case['name'].lower() else '')
                     for instruction in matching_instructions(product):
                         product.facts=product.facts+[{'text':instruction['text'],'source':instruction['url'],'verification_status':'VERIFIED','source_type':'manufacturer','kind':'instruction'}]
                         set_setting(db,'official_domain:'+product.id,urlsplit(instruction['url']).hostname)
                     db.add(product);db.flush()
-                    review=Review(id='r'+str(index),wb_review_id=str(index),product_id=product.id,rating=case['rating'],text=case['text'],risk='NORMAL',wb_account_id='owner')
+                    review=Review(id='r'+str(index),wb_review_id=str(index),product_id=product.id,rating=case['rating'],text=case['text'],risk=case.get('risk','NORMAL'),wb_account_id='owner')
                     db.add(review);db.commit()
                     with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('Модель недоступна'))),patch('app.services.ollama.chat',new=AsyncMock(side_effect=ValueError('Модель недоступна'))),patch('app.services.web_research.search_instructions',new=AsyncMock(return_value=[])):
                         result=asyncio.run(generate_draft(db,review.id))
@@ -78,6 +81,29 @@ class OwnerReviewCases(unittest.TestCase):
                     self.assertIn('100002',draft['text']);self.assertNotIn('100003',draft['text']);self.assertNotIn('100000',draft['text'])
                     self.assertIn('Меловая основа',draft['text']);self.assertNotIn('Уточните',draft['text'])
                 model.assert_not_called()
+
+    def test_specific_cases_regenerate_without_model_and_keep_boundaries(self):
+        from types import SimpleNamespace
+        from app.review_cases import specific_review_case
+        with self.factory() as db:
+            db.add(StoreProfile(id='owner',name='Магазин',provider='wb'));db.flush()
+            for index,case in enumerate(CASES[:7]):
+                product=Product(id='specific-p'+str(index),name=case['name'],brand=case['brand'])
+                db.add(product);db.flush()
+                review=Review(id='specific-r'+str(index),wb_review_id='specific-'+str(index),product_id=product.id,wb_account_id='owner',rating=case['rating'],text=case['text'],risk=case.get('risk','NORMAL'))
+                db.add(review);db.commit()
+                with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('offline'))) as model:
+                    for _ in range(2):
+                        answer=asyncio.run(generate_draft(db,review.id,'Улучши ответ'))['text']
+                        for word in case['contains']:self.assertIn(word.lower(),answer.lower())
+                    model.assert_not_called()
+        product=SimpleNamespace(name='Колодки тормозные',category='')
+        review=SimpleNamespace(text='Скрипят, плохо тормозят и перегреваются',rating=1,risk='HIGH')
+        self.assertIsNone(specific_review_case(review,product))
+        product=SimpleNamespace(name='Средство для пола',category='')
+        for text in ('Отличный аромат, но протекла упаковка','Не понравился аромат','Чудесный запах, но не моет'):
+            review=SimpleNamespace(text=text,rating=1,risk='NORMAL')
+            self.assertNotEqual((specific_review_case(review,product) or {}).get('key'),'positive_low_rating')
 
     def test_new_edit_during_model_wait_is_never_overwritten(self):
         with self.factory() as db:
