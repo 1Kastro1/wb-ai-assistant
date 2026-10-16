@@ -202,15 +202,15 @@ def rule_reply(review, product, revision=0, facts=None):
 
 
 def safe_fallback_reply(review, product, revision=0, facts=None):
-    if review.risk in ('HIGH', 'CAUTION'):
+    if getattr(review,'risk','NORMAL') in ('HIGH', 'CAUTION'):
         return rule_reply(review, product, revision, facts)
     guidance = product_usage_reply(review, product, facts if facts is not None else (getattr(product, 'facts', None) or []), revision)
     if guidance:
         return guidance
     analysis = analyze_customer_message(review.text, review.rating)
-    if review.risk == 'NORMAL' and (analysis['buyer_asks_about_money'] or len(analysis['complaints']) > 1):
+    if getattr(review,'risk','NORMAL') == 'NORMAL' and (analysis['buyer_asks_about_money'] or len(analysis['complaints']) > 1):
         return contextual_complaint_reply(analysis, revision) or official_support_reply()
-    if review_intent(review.text) == 'DESCRIPTION_MISMATCH' and review.risk == 'NORMAL':
+    if review_intent(review.text) == 'DESCRIPTION_MISMATCH' and getattr(review,'risk','NORMAL') == 'NORMAL':
         return description_mismatch_reply(revision, review.text)
     text = review.text.lower()
     product_text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()

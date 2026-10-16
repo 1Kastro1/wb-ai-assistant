@@ -2,6 +2,11 @@ import os
 import tempfile
 os.environ['WB_DATA_DIR'] = tempfile.mkdtemp(prefix='wb-assistant-tests-')
 os.environ.pop('WB_ENABLE_REAL_PUBLISH', None)
+from pathlib import Path
+from cryptography.fernet import Fernet
+_test_key=Path(os.environ['WB_DATA_DIR'])/'test-encryption.key'
+_test_key.write_bytes(Fernet.generate_key())
+os.environ['WB_SECRET_KEY_FILE']=str(_test_key)
 import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
@@ -15,6 +20,8 @@ def fresh():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     login_attempts.clear()
+    from app.main import registration_attempts
+    registration_attempts.clear()
     with Session() as db:
         set_setting(db, 'password_hash', PasswordHasher().hash('test-password-only-123'))
         db.commit()

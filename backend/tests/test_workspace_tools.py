@@ -74,7 +74,9 @@ class WorkspaceToolsTests(unittest.TestCase):
         with patch('app.main.ollama.chat',new=AsyncMock(side_effect=TimeoutError)):
             response=self.client.post('/memory/preview',json={'text':'Пиши кратко','example':'Отличный товар','rating':5})
         self.assertEqual(response.status_code,200,response.text);self.assertIn('не удалось',response.json()['note'])
-        response=self.client.post('/memory/preview',json={'text':'Пиши кратко','example':'Товар','product_id':'p'})
+        with self.factory() as db:
+            db.add_all([Product(id='foreign-preview',name='Чужой товар'),StoreListing(store_id='other',product_id='foreign-preview')]);db.commit()
+        response=self.client.post('/memory/preview',json={'text':'Пиши кратко','example':'Товар','product_id':'foreign-preview'})
         self.assertEqual(response.status_code,404)
 
     def test_dashboard_counts_are_store_scoped_and_low_ratings_require_review(self):

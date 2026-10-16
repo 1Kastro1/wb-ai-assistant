@@ -33,7 +33,7 @@ test('review header keeps scheduling details collapsed and controls permission-a
 test('product knowledge card renders its own thumbnail',()=>{
  const file=path.join(__dirname,'../app/page.tsx'),page=fs.readFileSync(file,'utf8');
  const start=page.indexOf('function ProductKnowledgeCard('),end=page.indexOf('\nfunction reviewIntent',start);
- const fragment="import {useState,useEffect} from 'react'; import ProductThumbnail from './ProductThumbnail'; import {ProductFacts,trustedProductFact} from './ProductLibrary'; type Row=Record<string,any>;"+page.slice(start,end)+';export default ProductKnowledgeCard;';
+ const fragment="import {useState,useEffect} from 'react'; import ProductThumbnail from './ProductThumbnail'; import {ProductFacts,productArticle,trustedProductFact} from './ProductLibrary'; type Row=Record<string,any>;"+page.slice(start,end)+';export default ProductKnowledgeCard;';
  const KnowledgeCard=loadComponent(file,fragment).default;
  const html=renderToStaticMarkup(React.createElement(KnowledgeCard,{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp',facts:[]},busy:false,owner:false,canManage:true,onDiscuss(){},onRefresh(){},onRun(){}}));
  assert(html.includes('src="https://example.com/card.webp"'));
@@ -49,3 +49,5 @@ test('question cards defer editors until opened and keep vehicle data out of pre
 test('question generation retains saved text with a disabled editor',()=>{const html=renderQuestion({generating:true});assert(html.includes('Вам подойдет данный товар'));assert(/textarea[^>]+disabled/.test(html));assert(html.includes('VIN'));assert(html.includes('Подготовить публикацию'))});
 test('question publication is permission-aware',()=>{const html=renderQuestion({generating:true,canManage:false});assert(/button[^>]+disabled[^>]*>Подготовить публикацию/.test(html))});
 test('instruction indicator rejects untrusted verified URLs',()=>{const {instructionState}=loadComponent(path.join(__dirname,'../app/ProductLibrary.tsx'));assert.equal(instructionState({facts:[{kind:'instruction',verification_status:'VERIFIED',source:'https://untrusted.test'}]}).tone,'neutral');assert.equal(instructionState({facts:[{kind:'instruction',verification_status:'VERIFIED',source:'Карточка товара'}]}).tone,'green')});
+
+test('manufacturer article comes from verified WB characteristics, never seller SKU',()=>{const {productArticle}=loadComponent(path.join(__dirname,'../app/ProductLibrary.tsx'));assert.equal(productArticle({vendor_code:'seller',facts:[{source:'Карточка WB: характеристики',verification_status:'VERIFIED',text:'Артикул производителя: DFF12'}]}),'DFF12');assert.equal(productArticle({vendor_code:'seller',facts:[{source:'other',verification_status:'VERIFIED',text:'Артикул производителя: WRONG'}]}),'')});
