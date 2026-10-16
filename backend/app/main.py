@@ -996,18 +996,22 @@ async def run_sync_job(job_id):
         await execute_job(job_id)
 
 
-async def run_waiting_sync():
+async def run_waiting_sync(kinds=('products', 'reviews', 'questions')):
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
     with Session() as db:
         pending = db.scalar(select(Job).where(
-            Job.kind.in_(['products', 'reviews', 'questions']),
+            Job.kind.in_(kinds),
             Job.status == 'queued', Job.cancel_requested == False,
         ).order_by(Job.priority.asc(), Job.created_at.asc()))
         pending_id = pending.id if pending else None
     if pending_id:
         await execute_job(pending_id)
+
+
+async def run_waiting_questions():
+    await run_waiting_sync(('questions',))
 
 
 async def execute_job(job_id):
@@ -1137,7 +1141,10 @@ async def execute_job(job_id):
                 else:
                     operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
                 try:
-                    if operation: count = await operation(db, account_id, update_progress, cancelled, resume=start_checkpoint, checkpoint=save_checkpoint)
+                    options = {'resume': start_checkpoint, 'checkpoint': save_checkpoint}
+                    if kind == 'reviews' and store.provider == 'yandex':
+                        options['between_pages'] = run_waiting_questions
+                    if operation: count = await operation(db, account_id, update_progress, cancelled, **options)
                 except TypeError as exc:
                     if 'unexpected keyword argument' not in str(exc):
                         raise
@@ -1471,7 +1478,8 @@ def sync_status(auth: AUTH, db: DB):
         kinds = {}
         for kind in ('products', 'reviews', 'questions'):
             matching = [job for job in jobs if job.kind == kind and (job.result or {}).get('account_id') == store.id]
-            latest = matching[0] if matching else None
+            # An older running import takes precedence over a queued duplicate.
+            latest = next((job for job in matching if job.status == 'running'), None) or (matching[0] if matching else None)
             success = next((job for job in matching if job.status == 'completed'), None)
             kinds[kind] = {
                 'state': latest.status if latest else 'never',
