@@ -52,7 +52,7 @@ def vin_key(db,store,value):
         salt=secrets.token_hex(32);set_setting(db,key,salt)
     return hashlib.sha256((salt+identifier_key(value)).encode()).hexdigest()
 
-def parse_rows(raw,filename):
+def read_catalog_table(raw,filename):
     if len(raw)>10*1024*1024:raise ValueError('Максимальный размер файла — 10 МБ')
     extension=filename.rsplit('.',1)[-1].lower()
     if extension=='xlsx':
@@ -61,22 +61,39 @@ def parse_rows(raw,filename):
         from openpyxl import load_workbook
         workbook=load_workbook(io.BytesIO(raw),read_only=True,data_only=False,keep_links=False)
         try:
-            sheet=iter(workbook.active.values);headers=next(sheet)
+            sheet=iter(workbook.active.values);headers=next(sheet,())
+            if len(headers)!=len(set(headers)):raise ValueError('Названия столбцов не должны повторяться')
             rows=[]
             for row in sheet:
                 if len(rows)>=10000:raise ValueError('Не более 10000 строк в одном файле')
                 if any(v not in (None,'') for v in row):rows.append(dict(zip(headers,row)))
         finally:workbook.close()
     elif extension=='csv':
-        value=raw.decode('utf-8-sig');delimiter=';' if value.splitlines()[0].count(';')>value.splitlines()[0].count(',') else ','
-        rows=list(csv.DictReader(io.StringIO(value),delimiter=delimiter))
+        value=raw.decode('utf-8-sig')
+        if not value.strip():raise ValueError('Файл пуст')
+        delimiter=';' if value.splitlines()[0].count(';')>value.splitlines()[0].count(',') else ','
+        reader=csv.DictReader(io.StringIO(value),delimiter=delimiter)
+        if reader.fieldnames and len(reader.fieldnames)!=len(set(reader.fieldnames)):raise ValueError('Названия столбцов не должны повторяться')
+        rows=[]
+        for row in reader:
+            if len(rows)>=10000:raise ValueError('Не более 10000 строк в одном файле')
+            if None in row:raise ValueError('В строке больше ячеек, чем заголовков столбцов')
+            rows.append(row)
     else:raise ValueError('Загрузите XLSX или CSV. Старый XLS сохраните как XLSX')
     if not rows or len(rows)>10000:raise ValueError('Нужно от 1 до 10000 строк')
+    return rows
+
+
+def parse_rows(raw,filename,mapping=None):
+    return clean_catalog_rows(read_catalog_table(raw,filename),mapping)
+
+
+def clean_catalog_rows(rows,mapping=None):
     cleaned=[]
     for i,row in enumerate(rows,2):
         item={}
         for header,value in row.items():
-            key=ALIASES.get(str(header or '').strip().casefold(),str(header or '').strip().casefold())
+            key=(mapping or {}).get(str(header),ALIASES.get(str(header or '').strip().casefold(),str(header or '').strip().casefold()))
             if key not in FIELDS or value in (None,''):continue
             if isinstance(value,str) and value.startswith('='):raise ValueError(f'Строка {i}: замените формулы значениями')
             if key in ('part_number','oe_number','cross_number','vin') and not isinstance(value,str):raise ValueError(f'Строка {i}: артикулы и VIN должны быть текстом, чтобы сохранить ведущие нули')
@@ -96,9 +113,11 @@ def parse_rows(raw,filename):
         cleaned.append(item)
     return cleaned
 
-def import_cross_catalog(db,raw,filename,store,source,verified=False,complete=False):
-    rows=parse_rows(raw,filename)
-    digest=hashlib.sha256(raw+store.encode()+source.encode()+str((verified,complete)).encode()).hexdigest()
+def import_cross_catalog(db,raw,filename,store,source,verified=False,complete=False,mapping=None):
+    rows=parse_rows(raw,filename,mapping)
+    from .workspace_tools import unique_catalog_rows
+    rows,duplicates=unique_catalog_rows(rows)
+    digest=hashlib.sha256(raw+store.encode()+source.encode()+str((verified,complete)).encode()+(json.dumps(mapping,sort_keys=True).encode() if mapping else b'')).hexdigest()
     old=db.scalar(select(FitmentImport).where(FitmentImport.store_id==store,FitmentImport.digest==digest,FitmentImport.active==True))
     if old:return {'id':old.id,'rows':len(old.rows),'duplicate':True}
     for i,row in enumerate(rows,2):
@@ -110,7 +129,7 @@ def import_cross_catalog(db,raw,filename,store,source,verified=False,complete=Fa
         if row.get('vin'):row['vin_hash']=vin_key(db,store,row.pop('vin'))
     item=FitmentImport(id=str(uuid4()),store_id=store,source=source,verified=verified,complete=complete,rows=rows,digest=digest)
     db.add(item);db.commit()
-    return {'id':item.id,'rows':len(rows),'duplicate':False,'unmapped':sum(not row.get('wb_nm_id') for row in rows)}
+    return {'id':item.id,'rows':len(rows),'duplicate':False,'duplicates':duplicates,'unmapped':sum(not row.get('wb_nm_id') for row in rows)}
 
 def catalog_summary(db,store):
     return [{'id':x.id,'source':x.source,'verified':x.verified,'complete':x.complete,'active':x.active,'rows':len(x.rows),'created_at':x.created_at} for x in db.scalars(select(FitmentImport).where(FitmentImport.store_id==store).order_by(FitmentImport.created_at.desc()))]

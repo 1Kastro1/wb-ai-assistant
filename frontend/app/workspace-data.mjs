@@ -7,7 +7,7 @@ export function workspaceResources({page='shell',settingsTab='connections',owner
   'Отзывы':[['jobs','/jobs'],['auto','/auto-replies/status']],
   'Вопросы':[['jobs','/jobs'],['questionStats','/questions/stats']],
   'Товары':[['products','/products/page?limit=60&q='+encodeURIComponent(productQuery)]],
-  'Память':[['memory','/memory']],
+  'Память':[['memory','/memory'],['products','/products/page?limit=60&q=']],
   'Уведомления':[],
   'Настройки':({connections:[['sync','/sync/status'],['jobs','/jobs'],['performance','/settings/performance']],answers:[['search','/settings/search'],['brands','/brands'],['memory','/memory'],['metrics','/generation/metrics']],voice:[['voice','/voice/status']],security:[],automation:[['schedule','/settings/schedule'],['auto','/auto-replies/status']],data:[['portable','/settings/portable-sync']],team:owner?[['users','/users'],['teamDashboard','/team/dashboard'],['telegram','/settings/telegram']]:[]})[settingsTab]||[]
  };

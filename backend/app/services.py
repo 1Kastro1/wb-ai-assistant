@@ -488,7 +488,7 @@ def analytics(db, days=0, product_id='', account_id=''):
         func.count(),
         func.sum(case((Review.is_answered == False, 1), else_=0)),
         func.sum(case((Review.rating <= 3, 1), else_=0)),
-        func.sum(case(((Review.manual == True) & (Review.is_answered == False), 1), else_=0)),
+        func.sum(case((((Review.manual == True) | (Review.rating <= 3) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review')) & (Review.is_answered == False), 1), else_=0)),
         func.sum(case((Review.is_answered == True, 1), else_=0)),
         func.avg(Review.rating),
     ).select_from(Review).where(*filters)
@@ -524,6 +524,8 @@ def analytics(db, days=0, product_id='', account_id=''):
         'negative': negative or 0,
         'manual': manual or 0,
         'published': published or 0,
+        'ready': db.scalar(select(func.count()).select_from(Review).join(Draft).where(*filters,Review.is_answered==False,Review.rating>=4,Review.manual==False,Review.risk=='NORMAL',Review.status=='draft_ready',Draft.quality['passed'].as_boolean()==True)) or 0,
+        'failed_jobs': db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['failed','interrupted']),*([Job.result['account_id'].as_string()==account_id] if account_id else []))) or 0,
         'average': round(float(average), 2) if average is not None else 0,
         'drafts': db.scalar(select(func.count()).select_from(Draft).join(Review).where(*filters)),
         'topics': topics,
@@ -1005,7 +1007,10 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
     if datetime.now(timezone.utc) - datetime.fromisoformat(action.created_at) > timedelta(minutes=30):
         raise ValueError('Подтверждение устарело. Создайте новое действие')
     if action.kind == 'memory':
-        db.add(Memory(id=str(uuid4()), **action.payload))
+        memory=Memory(id=str(uuid4()), **action.payload)
+        db.add(memory)
+        actor=db.get(User,actor_id) if actor_id else None
+        set_setting(db,'memory-meta:'+memory.id,{'created_at':now(),'created_by_name':actor.display_name if actor else 'Автоматизация'})
         action.status, action.result = 'completed', {'saved': True, 'confirmed_by': actor_id, 'confirmed_at': now()}
         db.commit()
         return public(action)

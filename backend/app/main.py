@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import zipfile
@@ -2047,7 +2048,65 @@ def memory_scope(aid: str, body: MemoryInput, request: Request, auth: OWNER, db:
 
 @app.get('/memory')
 def memories(auth: AUTH, db: DB):
-    return [public(m) for m in db.scalars(select(Memory))]
+    return [{**public(m),**setting(db,'memory-meta:'+m.id,{})} for m in db.scalars(select(Memory))]
+
+
+class MemoryEnabled(Payload):
+    enabled: bool
+
+
+@app.patch('/memory/{mid}/enabled')
+def memory_enabled(mid: str, body: MemoryEnabled, request: Request, auth: OWNER, db: DB):
+    item=db.get(Memory,mid)
+    if not item:raise HTTPException(404,'Правило не найдено')
+    item.enabled=body.enabled
+    meta=setting(db,'memory-meta:'+mid,{})
+    actor=db.get(User,auth['user_id'])
+    set_setting(db,'memory-meta:'+mid,{**meta,'updated_at':now(),'updated_by_name':actor.display_name if actor else auth.get('username','')})
+    db.commit()
+    request.state.activity_details={**rule_details(public(item),'rule_updated'),'event':'rule_enabled' if item.enabled else 'rule_disabled'}
+    return {**public(item),**setting(db,'memory-meta:'+mid,{})}
+
+
+class RulePreviewInput(Payload):
+    text: str = Field(min_length=2,max_length=2000)
+    example: str = Field(min_length=1,max_length=5000)
+    rating: int = Field(ge=1,le=5,default=3)
+    product_id: str = ''
+
+
+@app.post('/memory/preview')
+async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
+    from .safety import rule_reply,safe_fallback_reply,validate_reply,classify
+    from .reply_policy import customer_reply_policy
+    from .services import trusted_product_facts,assess_reply
+    product=db.get(Product,body.product_id) if body.product_id else Product(id='preview',name='Товар',brand='',category='',facts=[])
+    if not product:raise HTTPException(404,'Товар не найден')
+    if body.product_id and not db.scalar(select(StoreListing).where(StoreListing.product_id==product.id,StoreListing.store_id==active_store(db,auth))):raise HTTPException(404,'Товар не найден в выбранном магазине')
+    facts=trusted_product_facts(db,product) if body.product_id else []
+    review=Review(id='preview',product_id=product.id,rating=body.rating,text=body.example,risk=classify(body.example,product.name+' '+product.category)['risk'])
+    reply=rule_reply(review,product,facts=facts)
+    note='Предварительный ответ. Правило и ответ не сохраняются.'
+    rules=[m.text for m in db.scalars(select(Memory).where(Memory.enabled==True)) if m.scope in ('global','product:'+product.id,'brand:'+product.brand,'category:'+product.category)]+[body.text]
+    if review.risk=='NORMAL':
+        try:
+            reply=await asyncio.wait_for(ollama.chat([{'role':'system','content':customer_reply_policy()+'\nПравила владельца: '+json.dumps(rules,ensure_ascii=False)},{'role':'user','content':json.dumps({'review_data':body.example,'rating':body.rating,'product':product.name,'verified_facts':facts},ensure_ascii=False)}]),timeout=12)
+        except Exception:
+            reply=reply or safe_fallback_reply(review,product,facts=facts)
+            note='Показан ответ по проверенным сценариям. Свободную формулировку правила сейчас не удалось проверить; ограничения на слова применены.'
+    for rule in rules:
+        if any(x in rule.lower() for x in ('не использ','не пиши')):
+            for word in re.findall('[«“\"]([^»”\"]+)[»”\"]',rule):reply=re.sub(re.escape(word),'',reply,flags=re.I)
+    try:reply=validate_reply(mask_vin(reply))
+    except ValueError:
+        reply=safe_fallback_reply(review,product,facts=facts)
+        for rule in rules:
+            if any(x in rule.lower() for x in ('не использ','не пиши')):
+                for word in re.findall('[«“\"]([^»”\"]+)[»”\"]',rule):reply=re.sub(re.escape(word),'',reply,flags=re.I)
+        try:reply=validate_reply(mask_vin(reply))
+        except ValueError:raise HTTPException(422,'Правило не позволяет составить корректный пример. Уточните ограничения.') from None
+        note='Показан безопасный сценарий. Пример с новым правилом требует дополнительной проверки.'
+    return {'text':reply,'quality':assess_reply(review,product,reply,facts),'note':note}
 
 
 @app.delete('/memory/{mid}')
@@ -2173,12 +2232,27 @@ def fitment_catalogs(auth: AUTH, db: DB):
 
 
 @app.post('/fitment/catalogs/import')
-async def fitment_catalog_upload(auth: OWNER, db: DB, file: UploadFile=File(...), source: str=Form(...), verified: bool=Form(False), complete: bool=Form(False)):
+async def fitment_catalog_upload(auth: OWNER, db: DB, file: UploadFile=File(...), source: str=Form(...), verified: bool=Form(False), complete: bool=Form(False), mapping: str=Form('{}')):
     source=source.strip()
     if not 2<=len(source)<=1000:raise ValueError('Укажите название или ссылку на источник каталога')
     raw=await file.read(10*1024*1024+1)
-    try:return await asyncio.to_thread(import_cross_catalog,db,raw,file.filename or '',active_store(db,auth),source,verified,complete)
+    from .workspace_tools import parse_mapping,preview_cross_catalog
+    from .fitment_catalog import FIELDS
+    columns=parse_mapping(mapping,FIELDS)
+    try:
+        preview=await asyncio.to_thread(preview_cross_catalog,db,raw,file.filename or '',active_store(db,auth),columns)
+        if not preview['can_import']:raise ValueError('Исправьте ошибки в предварительном просмотре перед импортом')
+        return await asyncio.to_thread(import_cross_catalog,db,raw,file.filename or '',active_store(db,auth),source,verified,complete,columns)
     except (KeyError,TypeError,UnicodeError,StopIteration,zipfile.BadZipFile,csv.Error):raise ValueError('Не удалось прочитать каталог. Проверьте формат XLSX или CSV') from None
+
+
+@app.post('/fitment/catalogs/preview')
+async def fitment_catalog_preview(auth: OWNER, db: DB, file: UploadFile=File(...), mapping: str=Form('{}')):
+    from .workspace_tools import parse_mapping,preview_cross_catalog
+    from .fitment_catalog import FIELDS
+    raw=await file.read(10*1024*1024+1)
+    try:return await asyncio.to_thread(preview_cross_catalog,db,raw,file.filename or '',active_store(db,auth),parse_mapping(mapping,FIELDS))
+    except (KeyError,TypeError,UnicodeError,StopIteration,zipfile.BadZipFile,csv.Error):raise ValueError('Не удалось прочитать файл. Используйте XLSX или CSV UTF-8') from None
 
 
 class CatalogEnabled(Payload):

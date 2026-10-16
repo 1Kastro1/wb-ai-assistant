@@ -13,7 +13,7 @@ export async function api(path:string,method='GET',body?:unknown,timeoutMs=18000
     try{result=raw?JSON.parse(raw):{}}catch{throw new Error(response.ok?'Сервер вернул некорректный ответ':'Сервер временно не ответил. Повторите попытку.')}
     if(!response.ok){const error:any=new Error(result.detail||'Не удалось выполнить запрос');error.status=response.status;throw error;}return result;
   }catch(error){
-    if(controller.signal.aborted)throw new Error('Сервер не ответил вовремя. Проверьте соединение. Если задание уже запущено, его состояние доступно в разделе «Задачи».');
+    if(controller.signal.aborted)throw new Error('Сервер не ответил вовремя. Проверьте соединение. Если задание уже запущено, его состояние сохранено; вернитесь к карточке и продолжите ожидание.');
     throw error;
   }finally{
     clearTimeout(timer);
