@@ -196,13 +196,15 @@ def cached_web_instruction_sources(product):
 
 
 def remember_web_instruction_sources(product, sources):
-    preserved = [f for f in (product.facts or []) if f.get('verification_status') != 'WEB_UNVERIFIED']
+    incoming = {source.get('url') for source in sources}
+    preserved = [f for f in (product.facts or []) if f.get('verification_status') != 'WEB_UNVERIFIED' or f.get('source') not in incoming]
     product.facts = preserved + [{
         'text': source.get('snippet', ''),
         'title': source.get('title', ''),
         'source': source.get('url', ''),
         'host': source.get('host', ''),
         'match_score': source.get('match_score', 0),
+        'kind': source.get('kind', 'instruction'),
         'researched_at': now(),
         'verification_status': 'WEB_UNVERIFIED',
     } for source in sources]
