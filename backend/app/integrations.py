@@ -499,7 +499,7 @@ class YandexProvider:
         await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
         return True
 
-    async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
+    async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)
         total, page = int((resume or {}).get('processed', 0)), str((resume or {}).get('page', ''))
         for _ in range(1000):
@@ -521,6 +521,11 @@ class YandexProvider:
             page = str((payload.get('paging') or {}).get('nextPageToken') or '')
             if not page: break
             if checkpoint: checkpoint({'page': page, 'processed': total})
+            # The page and its resume token are committed before another job
+            # uses its own session. Keep question imports responsive while a
+            # large review history is loading, without bypassing worker locks.
+            if between_pages:
+                await between_pages()
         return total
 
     async def publish(self, db, review, text):
