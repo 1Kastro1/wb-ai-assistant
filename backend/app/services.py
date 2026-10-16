@@ -1,7 +1,7 @@
 from .fitment_catalog import VIN, vehicle_identifiers, fitment_answer, oem_numbers
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
-from .assortment_questions import assortment_question_answer
+from .assortment_questions import assortment_question_answer, review_vent_holder
 import difflib
 import asyncio
 import time
@@ -752,6 +752,9 @@ async def generate_draft(db, review_id, instruction=''):
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
     verified_facts = trusted_product_facts(db, product)
+    if review_intent(review.text)=='WEAK_SCENT':
+        holder=review_vent_holder(db,review,product)
+        if holder:verified_facts=verified_facts+[holder]
     memories = [m.text for m in db.scalars(select(Memory).where(Memory.enabled == True)) if m.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
     generation_revision = initial_draft.revision if initial_draft else 0
     rule_candidates = []
@@ -764,7 +767,7 @@ async def generate_draft(db, review_id, instruction=''):
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
-    structured_intents = ('WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
+    structured_intents = ('WEAK_SCENT', 'ODOR_COMPLAINT', 'WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
     forced_model = None
     comparison_texts = []
     candidates_evaluated = max(1, len(rule_candidates))
@@ -901,7 +904,7 @@ async def generate_draft(db, review_id, instruction=''):
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
     quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы.'
-    quality['sources'] = [{'text': f.get('text', ''), 'source': f.get('source', ''), 'verification_status': 'VERIFIED'} for f in trusted_product_facts(db, product)]
+    quality['sources'] = [{'text': f.get('text', ''), 'source': f.get('source', ''), 'verification_status': 'VERIFIED'} for f in verified_facts]
     quality['unverified_sources_count'] = len(web_sources)
     route = 'fallback' if model.startswith('safety-fallback') else 'model' if model.split(' · ')[0] == MODEL else 'rules'
     quality['timing'] = {'total_seconds': round(time.monotonic() - generation_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}

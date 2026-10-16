@@ -33,7 +33,7 @@ def positive_detail(text):
 
 
 def positive_review_reply(review, product, revision=0):
-    from .reply_policy import analyze_customer_message
+    from .reply_policy import analyze_customer_message, faded_scent
     analysis = analyze_customer_message(review.text, review.rating)
     if review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed'):
         return None
@@ -138,9 +138,17 @@ def product_usage_reply(review, product, facts, revision=0):
     if fragrance and complaints & {'WEAK_SCENT', 'ODOR_COMPLAINT'}:
         parts = [intro]
         if 'WEAK_SCENT' in complaints:
-            parts.append('Сожалеем, что аромат ощущается слабее, чем Вы ожидали.')
-            # Never tell the owner to attach a loose can or refill to a vent.
-            parts.append('Попробуйте расположить ароматизатор ближе к потоку воздуха: на дефлекторе его можно закрепить только предусмотренным для Вашей модели держателем, соблюдая инструкцию на упаковке; баночку или сменный картридж нельзя крепить к решётке без подходящего держателя.')
+            faded = faded_scent(review.text)
+            parts.append('Извините, что аромат перестал ощущаться уже через неделю.' if faded and re.search(r'через\s+(?:одну\s+)?неделю\b', text) else 'Извините, что аромат быстро перестал ощущаться.' if faded else 'Сожалеем, что аромат ощущается слабее, чем Вы ожидали.')
+            can = getattr(product,'brand','').upper()=='EIKOSHA' and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+',name,re.I)) and not re.search(r'giga|стерж|\bv-?\d+',name,re.I)
+            if can:
+                parts.append('Меловая основа отдаёт аромат постепенно, а его интенсивность зависит от температуры и движения воздуха.')
+                holder = next((f for f in facts or [] if f.get('kind')=='vent_holder' and f.get('verification_status')=='VERIFIED'),None)
+                recommendation = 'Попробуйте разместить баночку на дефлекторе с помощью совместимого держателя'
+                if holder:recommendation += ' — артикул Wildberries '+holder['wb_nm_id']
+                parts.append(recommendation+': поток воздуха поможет аромату распространяться по салону. Перед выбором держателя сверьте форму ламелей дефлектора с его инструкцией.')
+            else:
+                parts.append('Попробуйте расположить ароматизатор ближе к потоку воздуха, используя только держатель, предусмотренный для его формата; сменные стержни GIGA устанавливаются в предназначенный для них корпус.')
         if 'ODOR_COMPLAINT' in complaints:
             parts.append('Нам жаль, что запах Вам не подошёл; восприятие ароматов индивидуально, поэтому можно выбрать другую композицию по Вашим предпочтениям.')
         return ' '.join(parts)

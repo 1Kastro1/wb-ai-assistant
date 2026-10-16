@@ -1,7 +1,7 @@
 from .vehicle_identifiers import mask_frames
 import re
 from .product_guidance import product_usage_reply, is_cleaner, positive_review_reply
-from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons
+from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons, faded_scent
 
 VIN = re.compile(r'\b[A-HJ-NPR-Z0-9]{17}\b', re.I)
 HIGH = ('хуже тормоз', 'плохо тормоз', 'ухудшен', 'провалива', 'дым', 'перегрев', 'заклини', 'утеч', 'скрежет', 'сильн', 'не тормоз', 'отказ тормоз')
@@ -31,7 +31,7 @@ def review_intent(text):
         return 'NO_RESULT'
     if 'воняет' in value or (any(x in value for x in ('запах', 'аромат')) and _contains_any(value, ('неприят', 'резк', 'ужасн', 'не понрав'))):
         return 'ODOR_COMPLAINT'
-    if _contains_any(value, ('запаха почти нет', 'слабый запах', 'слабый аромат', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха')):
+    if faded_scent(text) or _contains_any(value, ('запаха почти нет', 'слабый запах', 'слабый аромат', 'слабо пахнет', 'пахнет слабо', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха')):
         return 'WEAK_SCENT'
     if _contains_any(value, ('не соответствует описанию', 'не как на фото', 'отличается от описания', 'характеристики не совпадают')):
         return 'DESCRIPTION_MISMATCH'

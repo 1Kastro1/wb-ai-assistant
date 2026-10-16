@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from app.db import Base, Product, Review, Draft, StoreProfile, set_setting
+from app.db import Base, Product, Review, Draft, StoreProfile, StoreListing, set_setting
 from app.services import generate_draft
 from app.safety import validate_reply
 from app.verified_instructions import matching_instructions
@@ -17,6 +17,9 @@ CASES = [
  {'name':'Очиститель универсальный Profoam 2000, сменный блок','brand':'KANGAROO','rating':1,'text':'Плохое качество','facts':[{'text':'Способ применения: Нанесите средство на загрязнение. Через 30 секунд протрите влажной тканью.','source':'Карточка товара','verification_status':'VERIFIED'}],'contains':['30 секунд','тканью'],'excludes':['по отзыву нельзя']},
  {'name':'Очиститель интерьера Profoam 4000+, 600мл','brand':'KANGAROO','article':'321499','rating':2,'text':'Деньги на ветер','contains':['10-15 минут'],'excludes':['30 секунд','вернём деньги']},
  {'name':'Ароматизатор Air Spencer A9','brand':'EIKOSHA','rating':2,'text':'Очень слабый запах','contains':['дефлектор','держател'],'excludes':['возврат']},
+ {'name':'Меловой ароматизатор SAMURAI MAN A-37','brand':'EIKOSHA','rating':1,'text':'Перестала пахнуть через неделю','contains':['через неделю','Меловая основа','температуры','движения воздуха','дефлектор','держател'],'excludes':['Уточните','возврат']},
+ {'name':'Меловой ароматизатор A-37','brand':'EIKOSHA','rating':2,'text':'Аромат пропал через пять дней','contains':['перестал ощущаться','Меловая основа','дефлектор'],'excludes':['через неделю','Уточните']},
+ {'name':'Сменный картридж GIGA V-90','brand':'EIKOSHA','rating':2,'text':'Запах исчез через неделю','contains':['GIGA','корпус'],'excludes':['Меловая основа','разместить баночку']},
  {'name':'Ароматизатор Air Spencer A9','brand':'EIKOSHA','rating':2,'text':'Запах не понравился','contains':['индивидуально','другую композицию'],'excludes':['возврат']},
  {'name':'Свеча зажигания BP6HS для Citroen','brand':'NGK','rating':3,'text':'Заказал свечи зажигания производитель нжк япония, пришли х/з','contains':['ПВЗ','отказаться'],'excludes':['Ваши сомнения','производитель полученного товара был понятен']},
  {'name':'Эко средство для мытья полов 1л, аромат кедра','brand':'KANGAROO','rating':2,'text':'Крышка без заводской защиты. Одета криво, часть протекла, запах кислый, липкая (возможно подменили)','contains':['протечку','запах','крышки','ПВЗ'],'excludes':['поддержк','подмен','провер','фотограф']},
@@ -57,6 +60,24 @@ class OwnerReviewCases(unittest.TestCase):
                         self.assertNotIn(word,answer.lower())
                     timing=result['quality']['timing'];self.assertGreaterEqual(timing['total_seconds'],0)
                     self.assertIn(timing['route'],['rules','model','fallback'])
+
+    def test_faded_scent_intent_and_confirmed_store_holder_survive_regeneration(self):
+        from app.reply_policy import analyze_customer_message
+        from app.safety import review_intent
+        for text in ('Перестала пахнуть через неделю','Запах исчез через неделю','Через два дня выветрился аромат','Пахнет слабо'):
+            self.assertIn('WEAK_SCENT',analyze_customer_message(text,1)['complaints'])
+            self.assertEqual(review_intent(text),'WEAK_SCENT')
+        for text in ('Аромат не пропал, пахнет отлично','Не перестала пахнуть','Неприятный запах исчез после уборки'):
+            self.assertNotIn('WEAK_SCENT',analyze_customer_message(text,5)['complaints'])
+        with self.factory() as db:
+            db.add_all([StoreProfile(id='owner',name='Наш магазин',provider='wb'),StoreProfile(id='other',name='Другой',provider='wb'),Product(id='100001',name='Меловой ароматизатор SAMURAI MAN A-37',brand='EIKOSHA'),Product(id='100002',name='Держатель на дефлектор CANTULE',brand='EIKOSHA'),Product(id='100003',name='Держатель на дефлектор чужой',brand='EIKOSHA')]);db.flush()
+            db.add_all([StoreListing(store_id='owner',product_id='100002'),StoreListing(store_id='other',product_id='100003'),Review(id='fade-r',wb_review_id='fade-r',product_id='100001',wb_account_id='owner',rating=1,text='Перестала пахнуть через неделю',risk='NORMAL')]);db.commit()
+            with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('offline'))) as model:
+                for _ in range(2):
+                    draft=asyncio.run(generate_draft(db,'fade-r'))
+                    self.assertIn('100002',draft['text']);self.assertNotIn('100003',draft['text'])
+                    self.assertIn('Меловая основа',draft['text']);self.assertNotIn('Уточните',draft['text'])
+                model.assert_not_called()
 
     def test_new_edit_during_model_wait_is_never_overwritten(self):
         with self.factory() as db:
