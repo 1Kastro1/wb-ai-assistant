@@ -70,12 +70,12 @@ class OwnerReviewCases(unittest.TestCase):
         for text in ('Аромат не пропал, пахнет отлично','Не перестала пахнуть','Неприятный запах исчез после уборки'):
             self.assertNotIn('WEAK_SCENT',analyze_customer_message(text,5)['complaints'])
         with self.factory() as db:
-            db.add_all([StoreProfile(id='owner',name='Наш магазин',provider='wb'),StoreProfile(id='other',name='Другой',provider='wb'),Product(id='100001',name='Меловой ароматизатор SAMURAI MAN A-37',brand='EIKOSHA'),Product(id='100002',name='Держатель на дефлектор CANTULE',brand='EIKOSHA'),Product(id='100003',name='Держатель на дефлектор чужой',brand='EIKOSHA')]);db.flush()
-            db.add_all([StoreListing(store_id='owner',product_id='100002'),StoreListing(store_id='other',product_id='100003'),Review(id='fade-r',wb_review_id='fade-r',product_id='100001',wb_account_id='owner',rating=1,text='Перестала пахнуть через неделю',risk='NORMAL')]);db.commit()
+            db.add_all([StoreProfile(id='owner',name='Наш магазин',provider='wb'),StoreProfile(id='other',name='Другой',provider='wb'),Product(id='100001',name='Меловой ароматизатор SAMURAI MAN A-37',brand='EIKOSHA'),Product(id='100002',name='Держатель на дефлектор CANTULE',brand='EIKOSHA'),Product(id='100003',name='Держатель на дефлектор чужой',brand='EIKOSHA'),Product(id='100000',name='Ароматизатор на дефлектор MINI AFTER SHOWER',brand='EIKOSHA')]);db.flush()
+            db.add_all([StoreListing(store_id='owner',product_id='100000'),StoreListing(store_id='owner',product_id='100002'),StoreListing(store_id='other',product_id='100003'),Review(id='fade-r',wb_review_id='fade-r',product_id='100001',wb_account_id='owner',rating=1,text='Перестала пахнуть через неделю',risk='NORMAL')]);db.commit()
             with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('offline'))) as model:
                 for _ in range(2):
                     draft=asyncio.run(generate_draft(db,'fade-r'))
-                    self.assertIn('100002',draft['text']);self.assertNotIn('100003',draft['text'])
+                    self.assertIn('100002',draft['text']);self.assertNotIn('100003',draft['text']);self.assertNotIn('100000',draft['text'])
                     self.assertIn('Меловая основа',draft['text']);self.assertNotIn('Уточните',draft['text'])
                 model.assert_not_called()
 

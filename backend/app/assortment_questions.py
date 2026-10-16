@@ -106,6 +106,6 @@ def review_vent_holder(db,review,product):
     if product.brand.strip().casefold()!='eikosha' or fragrance_format(product)!='can':return None
     holders=db.scalars(select(Product).join(StoreListing,StoreListing.product_id==Product.id).where(StoreListing.store_id==review.wb_account_id,Product.marketplace=='wb',Product.brand.ilike('EIKOSHA'),Product.name.ilike('%дефлектор%')).order_by(Product.id))
     for holder in holders:
-        if re.search(r'набор|giga|стерж|\+',holder.name,re.I) or not re.fullmatch(r'[1-9][0-9]{0,11}',holder.id):continue
+        if not re.search(r'держател|креплен',holder.name,re.I) or re.search(r'набор|giga|стерж|\+',holder.name,re.I) or not re.fullmatch(r'[1-9][0-9]{0,11}',holder.id):continue
         return {'text':holder.name+' · WB '+holder.id,'kind':'vent_holder','wb_nm_id':holder.id,'verification_status':'VERIFIED','source':'https://www.wildberries.ru/catalog/'+holder.id+'/detail.aspx'}
     return None
