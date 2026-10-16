@@ -756,6 +756,8 @@ async def generate_draft(db, review_id, instruction=''):
     verified_facts = trusted_product_facts(db, product)
     specific_case = specific_review_case(review, product)
     if specific_case:verified_facts = verified_facts + specific_case['sources']
+    if review_intent(review.text)=='DIM_LIGHT' and 'галоген' in product.name.lower():
+        verified_facts = verified_facts + [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]
     if review_intent(review.text)=='WEAK_SCENT':
         holder=review_vent_holder(db,review,product)
         if holder:verified_facts=verified_facts+[holder]
@@ -771,7 +773,7 @@ async def generate_draft(db, review_id, instruction=''):
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
-    structured_intents = ('WEAK_SCENT', 'ODOR_COMPLAINT', 'WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
+    structured_intents = ('DIM_LIGHT', 'WEAK_SCENT', 'ODOR_COMPLAINT', 'WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
     forced_model = None
     comparison_texts = []
     candidates_evaluated = max(1, len(rule_candidates))

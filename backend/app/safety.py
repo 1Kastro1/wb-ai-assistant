@@ -2,7 +2,7 @@ from .vehicle_identifiers import mask_frames
 import re
 from .review_cases import specific_review_case
 from .product_guidance import product_usage_reply, is_cleaner, positive_review_reply
-from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons, faded_scent
+from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons, faded_scent, subtle_scent_complaint, yellow_light_complaint
 
 VIN = re.compile(r'\b[A-HJ-NPR-Z0-9]{17}\b', re.I)
 HIGH = ('хуже тормоз', 'плохо тормоз', 'ухудшен', 'провалива', 'дым', 'перегрев', 'заклини', 'утеч', 'скрежет', 'сильн', 'не тормоз', 'отказ тормоз')
@@ -24,7 +24,7 @@ def review_intent(text):
         return 'MISSING_PARTS'
     if any(x in value for x in ('упаковка поврежд', 'упаковка помят', 'коробка помят', 'плохо упакован', 'упаковка вскрыт')):
         return 'PACKAGING_ISSUE'
-    if any(x in value for x in ('сломан', 'разбит', 'поврежден', 'помят')):
+    if ('сломал' in value and not re.search(r'\bне\s+сломал',value)) or any(x in value for x in ('сломан', 'разбит', 'поврежден', 'помят')):
         return 'DAMAGED_ITEM'
     if _contains_any(value, ('не подошел', 'не подходит', 'несовместим')):
         return 'FITMENT_PROBLEM'
@@ -32,10 +32,12 @@ def review_intent(text):
         return 'NO_RESULT'
     if 'воняет' in value or (any(x in value for x in ('запах', 'аромат')) and _contains_any(value, ('неприят', 'резк', 'ужасн', 'не понрав'))):
         return 'ODOR_COMPLAINT'
-    if faded_scent(text) or _contains_any(value, ('запаха почти нет', 'слабый запах', 'слабый аромат', 'слабо пахнет', 'пахнет слабо', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха')):
+    if faded_scent(text) or subtle_scent_complaint(text) or _contains_any(value, ('запаха почти нет', 'слабый запах', 'слабый аромат', 'слабо пахнет', 'пахнет слабо', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха')):
         return 'WEAK_SCENT'
     if _contains_any(value, ('не соответствует описанию', 'не как на фото', 'отличается от описания', 'характеристики не совпадают')):
         return 'DESCRIPTION_MISMATCH'
+    if yellow_light_complaint(text):
+        return 'DIM_LIGHT'
     if origin_unclear_complaint(text):
         return 'DESCRIPTION_MISMATCH'
     if any(x in value for x in ('долго достав', 'задержали достав', 'проблема с достав', 'курьер', 'пункт выдачи')):

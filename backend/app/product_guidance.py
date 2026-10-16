@@ -81,7 +81,7 @@ def usage_excerpt(facts):
 
 
 def product_usage_reply(review, product, facts, revision=0):
-    from .reply_policy import analyze_customer_message, faded_scent
+    from .reply_policy import analyze_customer_message, faded_scent, yellow_light_complaint
     analysis = analyze_customer_message(review.text, review.rating)
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
@@ -104,6 +104,17 @@ def product_usage_reply(review, product, facts, revision=0):
         parts.append('Если при получении заказа в ПВЗ Вы обнаружите повреждение упаковки или несоответствие товара описанию, Вы можете отказаться от его получения.')
         return ' '.join(parts)
     halogen = 'ламп' in name and 'галоген' in name
+    if halogen and yellow_light_complaint(text) and not complaints - {'DESCRIPTION_MISMATCH','NO_RESULT','DIM_LIGHT'}:
+        temperatures = set(re.findall(r'\b([2-9][0-9]{3})\s*[кk]\b', name, re.I))
+        for fact in facts or []:
+            if fact.get('verification_status')=='VERIFIED':
+                temperatures.update(re.findall(r'цветов\w*\s+температур\w*[^0-9]{0,20}([2-9][0-9]{3})',fact.get('text',''),re.I))
+        intro = 'Добрый день! Спасибо за отзыв. Извините, что оттенок света не оправдал Ваших ожиданий. '
+        if len(temperatures)==1:
+            kelvin = int(next(iter(temperatures)))
+            explanation = 'это тёплый оттенок света, поэтому желтоватое свечение ожидаемо для такой характеристики.' if kelvin<3800 else 'такой свет теплее, чем у ламп 5000–6000 K, поэтому лёгкий желтоватый оттенок возможен.' if kelvin<=4500 else 'это характеристика более холодного белого оттенка; выраженную желтизну не следует автоматически считать особенностью модели.'
+            return intro+'В карточке этой галогенной лампы указана цветовая температура '+str(kelvin)+' K: '+explanation+' Кельвины характеризуют цвет света, а не яркость. Если оттенок заметно отличается от заявленного, сверьте маркировку ламп и упаковки с карточкой товара.'
+        return intro+'Для объяснения оттенка нужно сопоставить цветовую температуру на упаковке и в характеристиках этой лампы. В имеющихся данных нет единственного согласованного значения, поэтому желтизну нельзя уверенно объяснить свойством модели; сверьте маркировку с карточкой товара.'
     dim = any(marker in text for marker in ('тускл', 'слабо свет', 'свет слаб')) and not re.search(r'(?<!\w)не\s+тускл', text)
     if halogen and dim and not complaints - {'DESCRIPTION_MISMATCH', 'NO_RESULT', 'DIM_LIGHT'}:
         # General lighting principle, not a diagnosis of this buyer's car:
@@ -137,15 +148,17 @@ def product_usage_reply(review, product, facts, revision=0):
     intro = ['Здравствуйте! Спасибо за отзыв.', 'Здравствуйте! Благодарим за обратную связь.', 'Здравствуйте! Спасибо, что поделились впечатлением.'][int(revision) % 3]
     if fragrance and complaints & {'WEAK_SCENT', 'ODOR_COMPLAINT'}:
         parts = [intro]
+        if analysis['sentiment']=='mixed' and 'ODOR_COMPLAINT' not in complaints:
+            parts.append('Рады, что сам аромат Вам понравился.')
         if 'WEAK_SCENT' in complaints:
             faded = faded_scent(review.text)
             parts.append('Извините, что аромат перестал ощущаться уже через неделю.' if faded and re.search(r'через\s+(?:одну\s+)?неделю\b', text) else 'Извините, что аромат быстро перестал ощущаться.' if faded else 'Сожалеем, что аромат ощущается слабее, чем Вы ожидали.')
             can = getattr(product,'brand','').upper()=='EIKOSHA' and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+',name,re.I)) and not re.search(r'giga|стерж|\bv-?\d+',name,re.I)
             if can:
-                parts.append('Меловая основа отдаёт аромат постепенно, а его интенсивность зависит от температуры и движения воздуха.')
+                parts.append('Меловая основа отдаёт аромат постепенно: такой ароматизатор рассчитан на тонкий, ненавязчивый аромат, а его интенсивность зависит от температуры и движения воздуха.')
                 holder = next((f for f in facts or [] if f.get('kind')=='vent_holder' and f.get('verification_status')=='VERIFIED'),None)
                 if holder:
-                    parts.append('Попробуйте разместить баночку на дефлекторе с помощью совместимого держателя — артикул Wildberries '+holder['wb_nm_id']+': поток воздуха поможет аромату распространяться по салону. Перед выбором держателя сверьте форму ламелей дефлектора с его инструкцией.')
+                    parts.append('Попробуйте разместить баночку на дефлекторе с помощью совместимого держателя — артикул Wildberries '+holder['wb_nm_id']+': поток воздуха поможет аромату равномернее распространяться по салону. Перед выбором держателя сверьте форму ламелей дефлектора с его инструкцией.')
                 else:
                     parts.append('Разместите баночку в подходящем подстаканнике или кармане двери согласно её инструкции, оставив доступ воздуха; не ставьте её свободно на торпеду или под сиденье водителя.')
             else:
