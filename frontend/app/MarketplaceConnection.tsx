@@ -15,11 +15,12 @@ export default function MarketplaceConnection({store,stores,name,connected,owner
     <div className="button-row"><button disabled={busy||!canManage||!connected} onClick={onTest}>{status.state==='working'&&status.kind==='test'?'Проверяю…':'Проверить соединение'}</button></div>
     <hr/>
     <div className="button-row">
-      <button disabled={busy||!canManage||!connected||store.provider!=='wb'} onClick={()=>onSync('products')}>{status.state==='working'&&status.kind==='products'?'Синхронизация '+(status.progress||0)+'%':'Синхронизировать товары'}</button>
+      <button disabled={busy||!canManage||!connected||!['wb','yandex'].includes(store.provider)} onClick={()=>onSync('products')}>{status.state==='working'&&status.kind==='products'?'Синхронизация '+(status.progress||0)+'%':'Синхронизировать товары'}</button>
       <button disabled={busy||!canManage||!connected} onClick={()=>onSync('reviews')}>{status.state==='working'&&status.kind==='reviews'?'Синхронизация '+(status.progress||0)+'%':'Синхронизировать отзывы'}</button>
       <button disabled={busy||!canManage||!connected} onClick={()=>onSync('questions')}>{status.state==='working'&&status.kind==='questions'?'Синхронизация '+(status.progress||0)+'%':'Синхронизировать вопросы'}</button>
     </div>
-    {store.provider!=='wb'&&<p className="muted">Товары Ozon и Яндекс Маркета добавляются из полученных отзывов и вопросов. Отдельная загрузка каталога пока недоступна.</p>}
+    {store.provider==='yandex'&&<p className="muted">Загрузка каталога обновляет названия, фотографии, описания и артикулы товаров. Для API-ключа нужен доступ «Просмотр товаров и карточек».</p>}
+    {store.provider==='ozon'&&<p className="muted">Товары Ozon добавляются из полученных отзывов и вопросов. Отдельная загрузка каталога пока недоступна.</p>}
     {store.provider==='ozon'&&<p className="muted">Доступ к вопросам Ozon зависит от прав и возможностей кабинета. При отказе API проверьте доступ в Ozon Seller.</p>}
     {status.message&&<div className={'wb-feedback '+status.state} role={status.state==='error'?'alert':'status'}><span>{status.state==='success'?'✓':status.state==='error'?'!':'↻'}</span><div><b>{status.message}</b>{status.state==='working'&&<div className="job-progress"><i style={{width:(status.progress||5)+'%'}}/></div>}</div></div>}
     <div className="sync-overview"><div className={'sync-result '+productSync.tone}><small>Товары</small><b>{productSync.title}</b><span>{productSync.detail}</span></div><div className={'sync-result '+reviewSync.tone}><small>Отзывы</small><b>{reviewSync.title}</b><span>{reviewSync.detail}</span></div><div className={'sync-result '+questionSync.tone}><small>Вопросы</small><b>{questionSync.title}</b><span>{questionSync.detail}</span></div></div>
