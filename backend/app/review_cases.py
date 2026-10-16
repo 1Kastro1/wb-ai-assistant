@@ -29,6 +29,14 @@ def specific_review_case(review, product):
 
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
+    can_fragrance = getattr(product,'brand','').upper()=='EIKOSHA' and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+',name)) and not re.search(r'держател|giga|стерж|\bv-?\d+',name)
+    if can_fragrance and re.search(r'(?:прислал\w*|пришел|пришла|получил\w*)[^.!?]{0,45}держател',text):
+        gift = ' Особенно жаль, что ароматизатор предназначался в подарок и эта ситуация испортила впечатление от покупки.' if 'подар' in text and not re.search(r'не\s+(?:в\s+)?подар',text) else ''
+        return result('wrong_fragrance_holder','Приносим извинения за то, что вместо ароматизатора Вам пришёл держатель.'+gift+' Если при получении заказа в ПВЗ Вы обнаружите, что пришёл не тот товар, Вы можете отказаться от его получения.')
+    if re.search(r'сломал\w*|отлом\w*|лопнул\w*|треснул\w*',text) and not re.search(r'не\s+(?:слом|отлом|лопнул|треснул)',text) and not set(analysis['complaints'])-{'DAMAGED_ITEM','QUALITY_ISSUE'}:
+        detail = 'крепёж держателя сломался' if re.search(r'держател|креплен',name) and re.search(r'крепеж|креплен|защелк|клипс',text) else 'товар сломался'
+        return result('broken_item','Извините, что '+detail+' и товар не оправдал Ваших ожиданий. Сожалеем, что Вам пришлось столкнуться с такой поломкой.')
+
     if re.search(r'\b(?:быушн\w*|бэушн\w*|б\s*/\s*у|бу)\b|использованн|бывш\w*\s+в\s+употреблении|следы\s+(?:использования|установки)', text) and not re.search(r'не\s+(?:использованн|быушн|бэушн|б\s*/\s*у)|без\s+следов', text):
         return result('used_goods', 'Приносим извинения за состояние полученного товара. Мы продаём только новый товар, бывшие в употреблении товары не реализуем. Если при получении в ПВЗ Вы обнаружите следы использования или несоответствие заказу, Вы можете отказаться от получения товара.')
 

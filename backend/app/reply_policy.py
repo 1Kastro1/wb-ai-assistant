@@ -22,10 +22,20 @@ def faded_scent(text):
     return False
 
 
+
+def yellow_light_complaint(text):
+    value = ' '.join((text or '').lower().replace('ё','е').split())
+    return bool(re.search(r'свет[^.!?]{0,35}(?:желт|с\s*желта)|(?:желт\w*|с\s*желта)[^.!?]{0,20}свет|\bжелтит\b',value))
+
+
+def subtle_scent_complaint(text):
+    value = ' '.join((text or '').lower().replace('ё','е').split())
+    return bool(re.search(r'(?:пахн\w*|(?:запах|аромат)\w*)\s*(?:совсем\s+|очень\s+|лишь\s+|только\s+)*(?:чуть[\s-]*чуть|еле|едва|слабоват\w*)|слабоват\w*\s+(?:запах|аромат)', value))
+
 COMPLAINT_PATTERNS = {
     'WRONG_ITEM': ('не тот товар', 'другой товар', 'пришел не тот', 'прислали не тот'),
     'MISSING_PARTS': ('не хватает', 'нет детал', 'неполная комплектац', 'не доложили', 'недостает'),
-    'DAMAGED_ITEM': ('сломан', 'разбит', 'товар поврежд', 'товар помят', 'трещин'),
+    'DAMAGED_ITEM': ('сломал', 'сломан', 'разбит', 'товар поврежд', 'товар помят', 'трещин'),
     'QUALITY_ISSUE': ('плохое качество', 'не работает', 'неисправ', 'дефект', 'слабая искра', 'криво бьет', 'быстро выш'),
     'PACKAGING_ISSUE': ('упаковка поврежд', 'упаковка помят', 'коробка помят', 'плохо упакован', 'упаковали плохо', 'упаковка вскрыт', 'крышка без заводской защиты', 'одета криво'),
     'LEAKAGE': ('протек', 'потек', 'протеч'),
@@ -60,15 +70,16 @@ def analyze_customer_message(text, rating=None):
     """Conservative internal hints; the complete buyer text remains model input."""
     value = ' '.join(strip_other_product_comparisons(text or '').lower().replace('ё', 'е').split())
     def matches(marker):
-        if marker in ('протек', 'потек', 'протеч'):
+        if marker in ('сломал','сломан','протек','потек','протеч'):
             return any(not re.search(r'(?<!\w)(?:не|без)\s*$', value[:match.start()]) for match in re.finditer(r'(?<!\w)' + re.escape(marker), value))
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
-    if faded_scent(text) and 'WEAK_SCENT' not in complaints:complaints.append('WEAK_SCENT')
+    if yellow_light_complaint(text) and 'DIM_LIGHT' not in complaints:complaints.append('DIM_LIGHT')
+    if (faded_scent(text) or subtle_scent_complaint(text)) and 'WEAK_SCENT' not in complaints:complaints.append('WEAK_SCENT')
     if any(x in value for x in ('производител', 'япони', 'китай', 'страна', 'оригинал')) and any(x in value for x in ('х/з', 'хз', 'непонят', 'неизвест', 'без маркиров')) and any(x in value for x in ('приш', 'получ', 'присла')):
         if 'DESCRIPTION_MISMATCH' not in complaints:
             complaints.append('DESCRIPTION_MISMATCH')
-    positive = any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'\b(?:понравил\w*|отличн\w*|рекомендую|хорош\w*)', value))
+    positive = any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'\b(?:понравил\w*|отличн\w*|рекомендую|хорош\w*|вкусн\w*|приятн\w*|ненавязчив\w*)', value))
     negative = bool(complaints) or (rating is not None and rating <= 3) or any(x in value for x in ('разочар', 'недовол')) or bool(re.search(r'(?<!\w)не\s+понрав', value))
     question = '?' in value or bool(re.search(r'\b(?:как|сколько|какой|какая|подойдет|можно ли|где|когда|подскажите)\b', value))
     financial = bool(re.search(r'(?:верн|возврат)\w*[^.!?]{0,35}(?:деньг|оплат|стоим|средств)|компенсац|возмещ\w*\s+(?:расход|стоим)', value)) or ('деньг' in value and any(x in value for x in ('возврат', 'выплат', 'верн')))

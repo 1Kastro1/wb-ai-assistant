@@ -30,6 +30,79 @@ CASES = [{"name":"Лампа H1 галогенная 12В 55Вт 3200K","brand":
 ]
 
 
+FOLLOWUP_CASES = [
+ {
+  "name": "Держатель ароматизатора на дефлектор CANTULE",
+  "brand": "EIKOSHA",
+  "rating": 3,
+  "text": "Сломался крепеж",
+  "contains": [
+   "крепёж держателя сломался",
+   "не оправдал Ваших ожиданий"
+  ],
+  "excludes": [
+   "Уточните",
+   "ПВЗ",
+   "поток воздуха"
+  ]
+ },
+ {
+  "name": "Меловой ароматизатор WHITY MUSK A-43",
+  "brand": "EIKOSHA",
+  "rating": 3,
+  "text": "Запах вкусный,но пахнет совсем чуть-чуть хот открыли уже вторую сторону,покупала где-то неделю назад,запах ненавязчивый приятный",
+  "contains": [
+   "сам аромат Вам понравился",
+   "тонкий",
+   "ненавязчивый",
+   "дефлекторе",
+   "58434122"
+  ],
+  "excludes": [
+   "Уточните",
+   "Снимите",
+   "откройте вторую"
+  ]
+ },
+ {
+  "name": "Меловой ароматизатор MARINE BLUE SQUASH A-106",
+  "brand": "EIKOSHA",
+  "rating": 1,
+  "text": "Прислали держатель для ароматизатора за 962 руб.... Ужас... На минуточку это был подарок...",
+  "contains": [
+   "вместо ароматизатора",
+   "держатель",
+   "в подарок",
+   "ПВЗ",
+   "отказаться"
+  ],
+  "excludes": [
+   "Уточните",
+   "выберите держатель"
+  ]
+ },
+ {
+  "name": "Лампа автомобильная H27/2 галогенная 12В 27Вт 4000K 2 шт",
+  "brand": "KOITO",
+  "rating": 3,
+  "text": "Свет с желта как простые дешо вые",
+  "contains": [
+   "4000 K",
+   "5000–6000 K",
+   "желтоватый",
+   "а не яркость",
+   "Извините"
+  ],
+  "excludes": [
+   "не касайтесь",
+   "это нормально",
+   "точно исправна"
+  ]
+ }
+]
+CASES += FOLLOWUP_CASES
+
+
 class OwnerReviewCases(unittest.TestCase):
     def setUp(self):
         self.engine=create_engine('sqlite://',poolclass=StaticPool)
@@ -104,6 +177,32 @@ class OwnerReviewCases(unittest.TestCase):
         for text in ('Отличный аромат, но протекла упаковка','Не понравился аромат','Чудесный запах, но не моет'):
             review=SimpleNamespace(text=text,rating=1,risk='NORMAL')
             self.assertNotEqual((specific_review_case(review,product) or {}).get('key'),'positive_low_rating')
+
+    def test_followup_cases_keep_context_on_regeneration(self):
+        from types import SimpleNamespace
+        from app.reply_policy import analyze_customer_message
+        from app.review_cases import specific_review_case
+        from app.safety import review_intent
+        self.assertEqual(review_intent(FOLLOWUP_CASES[1]['text']),'WEAK_SCENT')
+        self.assertEqual(analyze_customer_message(FOLLOWUP_CASES[1]['text'],3)['sentiment'],'mixed')
+        self.assertNotIn('WEAK_SCENT',analyze_customer_message('Приятный ненавязчивый аромат',5)['complaints'])
+        self.assertNotIn('DAMAGED_ITEM',analyze_customer_message('Крепёж не сломался',5)['complaints'])
+        with self.factory() as db:
+            db.add(StoreProfile(id='owner',name='Магазин',provider='wb'))
+            db.add(Product(id='58434122',name='Держатель на дефлектор CANTULE',brand='EIKOSHA'));db.flush()
+            db.add(StoreListing(store_id='owner',product_id='58434122'));db.commit()
+            for index,case in enumerate(FOLLOWUP_CASES):
+                product=Product(id='follow-p'+str(index),name=case['name'],brand=case['brand'])
+                db.add(product);db.flush()
+                review=Review(id='follow-r'+str(index),wb_review_id='follow-'+str(index),product_id=product.id,wb_account_id='owner',rating=case['rating'],text=case['text'],risk='NORMAL')
+                db.add(review);db.commit()
+                with patch('app.services.ollama.reply_variants',new=AsyncMock(side_effect=ValueError('offline'))) as model:
+                    for _ in range(2):
+                        result=asyncio.run(generate_draft(db,review.id,'Улучши ответ'))
+                        for word in case['contains']:self.assertIn(word.lower(),result['text'].lower())
+                        for word in case['excludes']:self.assertNotIn(word.lower(),result['text'].lower())
+                        self.assertTrue(result['quality']['passed'],result['quality']['issues'])
+                    model.assert_not_called()
 
     def test_new_edit_during_model_wait_is_never_overwritten(self):
         with self.factory() as db:
