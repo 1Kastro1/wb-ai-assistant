@@ -32,7 +32,7 @@ class FitmentTests(unittest.TestCase):
         with self.factory() as db:return fitment_answer(db,db.get(Review,'fit-q'),db.get(Product,'100001'))
 
     def test_confirmed_fit_is_short_and_has_no_public_vin(self):
-        self.seed();self.upload([self.row()]);r=self.answer();self.assertEqual(r['text'],'Вам подойдет данный товар.');self.assertNotIn(VIN,str(r))
+        self.seed();self.upload([self.row()]);r=self.answer();self.assertEqual(r['text'],'Добрый день! По данному VIN Вам подойдет данный товар.');self.assertNotIn(VIN,str(r))
         with self.factory() as db:
             with patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
                 result=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')))
@@ -52,7 +52,7 @@ class FitmentTests(unittest.TestCase):
         self.seed(VIN);self.upload([self.row()])
         with self.factory() as db, patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
             draft=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')))
-            self.assertEqual(draft['text'],'Вам подойдет данный товар.')
+            self.assertEqual(draft['text'],'Добрый день! По данному VIN Вам подойдет данный товар.')
             self.assertEqual(draft['quality']['intent_label'],'совместимость');model.assert_not_called()
 
     def test_bare_vin_without_catalog_stays_manual_without_general_model_reply(self):
@@ -178,7 +178,7 @@ class FitmentTests(unittest.TestCase):
         with self.factory() as db:
             with patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
                 draft=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')))
-                self.assertEqual(draft['text'],'Вам подойдет данный товар.');model.assert_not_called()
+                self.assertEqual(draft['text'],'Добрый день! По указанному OEM Вам подойдет данный товар.');model.assert_not_called()
 
     def test_oem_alternative_uses_our_wb_code_and_skips_zero_stock_and_foreign_store(self):
         self.seed('Есть аналог OEM 16510-82703?')
@@ -286,7 +286,7 @@ class FitmentTests(unittest.TestCase):
         body={'brand':'NITTO','part_number':'00123','wb_nm_id':'100001','source':'https://uniqom.ru/original-catalogs?identString=AGH30-0000123','fit':True,'oe_brand':'TOYOTA','oe_number':'04465-28520','remember_cross':True}
         response=self.client.post('/fitment/questions/fit-q/evidence',json=body)
         self.assertEqual(response.status_code,200,response.text)
-        self.assertEqual(self.answer()['text'],'Вам подойдет данный товар.')
+        self.assertEqual(self.answer()['text'],'Добрый день! По данному Frame Вам подойдет данный товар.')
         with self.factory() as db:
             imports=list(db.scalars(select(FitmentImport)))
             self.assertNotIn('0000123',str([x.rows for x in imports])+str([x.source for x in imports]))

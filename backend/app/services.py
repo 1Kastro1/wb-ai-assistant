@@ -1,6 +1,7 @@
 from .fitment_catalog import VIN, vehicle_identifiers, fitment_answer, oem_numbers
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
+from .assortment_questions import assortment_question_answer
 import difflib
 import asyncio
 import time
@@ -534,6 +535,7 @@ def question_intent(text):
     if vehicle_identifiers(text) or oem_numbers(text):return 'совместимость'
     value = (text or '').lower().replace('ё', 'е')
     patterns = (
+        ('крепление', r'держател|закрепител|креплен|как.*(?:закреп|крепить)|где.*(?:размест|постав|располож)'),
         ('применение', r'как (?:использ|примен)|инструкц|сколько нанос|разводит|дозиров'),
         ('совместимость', r'подойд|совмест|можно ли.*(?:авто|машин|модел|материал|поверхност)'),
         ('комплектность', r'комплект|входит|сколько штук|насадк|упаковк'),
@@ -629,7 +631,10 @@ async def generate_question_draft(db, question, instruction=''):
     sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
     analysis = analyze_customer_message(question.text)
     intent = question_intent(question.text)
-    if intent == 'применение' and not has_usage_instruction(verified_facts):
+    assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not analysis['buyer_asks_about_money'] else None
+    if assortment:
+        sources.extend(assortment['sources']);intent=assortment['intent']
+    if not assortment and intent == 'применение' and not has_usage_instruction(verified_facts):
         web_started = time.monotonic()
         try:
             found = cached_web_instruction_sources(product) or await asyncio.wait_for(web_research.search_instructions(product, db), timeout=8)
@@ -652,7 +657,7 @@ async def generate_question_draft(db, question, instruction=''):
         {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': verified_facts, 'similar_previous_answers': examples, 'store_rules': memories, 'previous_answer': existing.text if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
-    fitment = fitment_answer(db, question, product) if intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
+    fitment = fitment_answer(db, question, product) if not assortment and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
     if fitment and fitment['status']=='NEEDS_CATALOG' and setting(db,'internet-fitment-enabled:'+question.wb_account_id,False):
         from .internet_fitment import research_question
         web_started=time.monotonic()
@@ -666,10 +671,10 @@ async def generate_question_draft(db, question, instruction=''):
     voltage = battery_voltage_answer(question, product)
     if voltage:
         sources.append(voltage['source'])
-    uses_model = not analysis['buyer_asks_about_money'] and not voltage and not fitment
+    uses_model = not analysis['buyer_asks_about_money'] and not voltage and not fitment and not assortment
     model_started = time.monotonic()
     try:
-        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
+        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
     except Exception as error:
         fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
         candidates = []
@@ -686,7 +691,13 @@ async def generate_question_draft(db, question, instruction=''):
     if fitment and not analysis['buyer_asks_about_money']:
         reply = validate_reply(fitment['text'])
         quality = {'score':100 if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else 0,'passed':fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN'),'issues':[] if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else ['Нужна проверка по каталогу'],'sources':fitment['sources'],'intent_label':intent,'fitment':fitment}
-        model = 'catalog-fitment-1.0'
+        model = 'catalog-fitment-1.1'
+    elif assortment and not analysis['buyer_asks_about_money']:
+        reply = validate_reply(mask_vin(assortment['answer']))
+        quality = assess_question_answer(question, product, reply, sources)
+        quality['intent_label'] = assortment['intent']
+        quality['related_product_ids'] = assortment['product_ids']
+        model = 'catalog-assortment-1.0'
     elif passed_candidates:
         reply, quality = max(passed_candidates, key=lambda item: item[1]['score'])
         model = MODEL
