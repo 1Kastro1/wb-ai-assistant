@@ -204,8 +204,9 @@ def fitment_answer(db,question,product):
     def result(status,text,**extra):return {'status':status,'text':text,'sources':sources,'checked_at':now(),**extra}
     if len(set(v.upper() for v in vins))>1:return result('NEEDS_VIN','Уточните, пожалуйста, один VIN или Frame автомобиля, для которого нужен подбор.')
     if oem_ambiguous:return result('CONFLICT','Уточните, пожалуйста, оригинальный OEM-номер и марку автомобиля или пришлите VIN либо Frame.')
+    context='По данному Frame' if vins and '-' in vins[0] else 'По данному VIN' if vins else 'По указанному OEM' if requested_oem else 'Для указанного автомобиля'
     if current and {r['fit'] for r,_ in current}=={True}:
-        return result('FIT','Вам подойдет данный товар.')
+        return result('FIT','Добрый день! '+context+' Вам подойдет данный товар.')
     if current and len({r['fit'] for r,_ in current})>1:
         return result('CONFLICT','Уточняем совместимость детали по каталогу.')
     # A cross-number without the manufacturer's brand or exact vehicle application is not proof.
@@ -219,7 +220,7 @@ def fitment_answer(db,question,product):
             alternatives.append(row)
     if alternatives:
         candidate=sorted(alternatives,key=lambda r:r['wb_nm_id'])[0]
-        return result('ALTERNATIVE','Этот товар не подходит. Вам подойдет '+candidate['brand']+' '+candidate['part_number']+', артикул Wildberries '+candidate['wb_nm_id']+'.',product_id=candidate['wb_nm_id']) if current else result('ALTERNATIVE','Вам подойдет '+candidate['brand']+' '+candidate['part_number']+', артикул Wildberries '+candidate['wb_nm_id']+'.',product_id=candidate['wb_nm_id'])
+        return result('ALTERNATIVE','Добрый день! '+('Этот товар не подходит. ' if current else '')+context+' Вам подойдет деталь '+candidate['brand']+' '+candidate['part_number']+', артикул Wildberries '+candidate['wb_nm_id']+'.',product_id=candidate['wb_nm_id'])
     # Only an explicitly complete catalog can establish absence. Missing evidence is never no stock.
     if current and {r['fit'] for r,_ in current}=={False} and any(c.complete for _,c in current):
         return result('UNAVAILABLE','Для данного автомобиля нет товара в наличии.')
