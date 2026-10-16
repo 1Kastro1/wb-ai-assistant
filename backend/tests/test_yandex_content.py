@@ -22,6 +22,20 @@ def test_values_resolve_names_enums_units_and_false_without_guessing():
     ], SCHEMA) == ['Мощность: 55 Вт', 'Цоколь: H7', 'Галогенная: Нет']
 
 
+def test_reviewed_internet_series_data_does_not_apply_to_other_models_or_brands():
+    from app.reviewed_knowledge import matching_knowledge
+    product = Product(id='snow', brand='Avantech', name='Щетка стеклоочистителя Snowguard 600 мм', part_number='', facts=[])
+    entries = matching_knowledge(product)
+    assert len(entries) == 1
+    assert entries[0]['scope'] == 'brand_category'
+    assert entries[0]['url'] == 'https://avantechparts.co.kr/ru/catalog/wipers'
+    product.name = 'Щетка стеклоочистителя Hybrid 600 мм'
+    assert matching_knowledge(product) == []
+    product.name = 'Щетка стеклоочистителя Snowguard 600 мм'
+    product.brand = 'OTHER'
+    assert matching_knowledge(product) == []
+
+
 def test_full_sync_enriches_each_page_caches_category_and_preserves_manual_facts(client, monkeypatch):
     store = connected_store(client, monkeypatch)
     calls = []
