@@ -34,7 +34,7 @@ class WorkspaceToolsTests(unittest.TestCase):
             for store,raw in [('other',self.file()),('owner',self.file('BAD;00123;100001;AGH30-0430241'))]:
                 result=preview_cross_catalog(db,raw,'test.csv',store);self.assertFalse(result['can_import']);self.assertEqual(result['errors'][0]['row'],2)
         response=self.client.post('/fitment/catalogs/import',files={'file':('test.csv',self.file('BAD;00123;100001;AGH30-0430241'),'text/csv')},data={'source':'Каталог'})
-        self.assertEqual(response.status_code,422,response.text)
+        self.assertEqual(response.status_code,400,response.text)
         with self.factory() as db:self.assertEqual(db.scalar(select(func.count()).select_from(FitmentImport)),0)
 
     def test_mapping_respects_ignored_columns_and_preserves_article(self):
