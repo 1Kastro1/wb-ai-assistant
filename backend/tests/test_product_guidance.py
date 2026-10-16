@@ -55,6 +55,21 @@ class ProductGuidanceTests(unittest.TestCase):
             self.assertNotIn('мягким', answer)
             validate_reply(answer)
 
+    def test_lamp_color_uses_current_card_not_one_fixed_temperature(self):
+        self.product.name,self.product.brand,self.product.category='Лампа галогенная 5000K','KOITO',''
+        self.review.text='Свет желтый'
+        answer=rule_reply(self.review,self.product,facts=[])
+        self.assertIn('5000 K',answer)
+        self.assertIn('не следует автоматически',answer)
+        self.assertNotIn('лёгкий желтоватый оттенок возможен',answer)
+        self.product.name='Лампа галогенная H27/2'
+        facts=[{'text':'Цветовая температура лампочки: 4000','verification_status':'VERIFIED'}]
+        self.assertIn('4000 K',rule_reply(self.review,self.product,facts=facts))
+        self.product.name='Лампа галогенная 5000K'
+        answer=rule_reply(self.review,self.product,facts=facts)
+        self.assertIn('нет единственного согласованного значения',answer)
+        self.assertNotIn('4000 K:',answer)
+
     def test_missing_holder_id_does_not_invent_accessory(self):
         self.product.name, self.product.brand = 'Air Spencer банка A9', 'EIKOSHA'
         self.review.text = 'Слабый запах'
