@@ -1,5 +1,6 @@
 from .vehicle_identifiers import mask_frames
 import re
+from .review_cases import specific_review_case
 from .product_guidance import product_usage_reply, is_cleaner, positive_review_reply
 from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons, faded_scent
 
@@ -133,6 +134,9 @@ def cleaner_effectiveness_complaint(review, product):
 
 def rule_reply(review, product, revision=0, facts=None):
     analysis = analyze_customer_message(review.text, review.rating)
+    specific = specific_review_case(review, product)
+    if specific:
+        return specific['answer']
     if not review.text.strip():
         if review.rating >= 4:
             from .product_guidance import usage_excerpt

@@ -1,3 +1,4 @@
+from .review_cases import specific_review_case
 from .fitment_catalog import VIN, vehicle_identifiers, fitment_answer, oem_numbers
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
 from .verified_instructions import prefer_manufacturer_instructions
@@ -314,6 +315,7 @@ def review_filter_counts(db, q='', account_id=''):
 
 def assess_reply(review, product, reply, verified_facts=None):
     """Deterministic quality gate; it explains weaknesses without trusting the model to grade itself."""
+    specific_case = specific_review_case(review, product)
     lowered = reply.lower().replace('ё', 'е')
     review_words = set(WORDS.findall(review.text.lower()))
     reply_words = set(WORDS.findall(lowered))
@@ -336,7 +338,7 @@ def assess_reply(review, product, reply, verified_facts=None):
         breakdown['courtesy']['score'] = 10
     else:
         issues.append('добавить благодарность')
-    if review.rating <= 3 and any(x in lowered for x in ('жаль', 'извин', 'сожале')):
+    if review.rating <= 3 and (any(x in lowered for x in ('жаль', 'извин', 'сожале')) or (specific_case or {}).get('key') == 'positive_low_rating'):
         score += 10
         breakdown['empathy']['score'] = 10
     elif review.rating <= 3:
@@ -345,7 +347,7 @@ def assess_reply(review, product, reply, verified_facts=None):
         score += 10
         breakdown['empathy']['score'] = 10
     overlap = review_words & reply_words
-    if overlap or len(review_words) <= 1 or _addresses_review_topic(review.text, reply):
+    if overlap or len(review_words) <= 1 or _addresses_review_topic(review.text, reply) or (specific_review_case(review, product) or {}).get('answer') == reply:
         score += 12
         breakdown['relevance']['score'] = 12
     else:
@@ -752,6 +754,8 @@ async def generate_draft(db, review_id, instruction=''):
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
     verified_facts = trusted_product_facts(db, product)
+    specific_case = specific_review_case(review, product)
+    if specific_case:verified_facts = verified_facts + specific_case['sources']
     if review_intent(review.text)=='WEAK_SCENT':
         holder=review_vent_holder(db,review,product)
         if holder:verified_facts=verified_facts+[holder]
@@ -772,14 +776,14 @@ async def generate_draft(db, review_id, instruction=''):
     comparison_texts = []
     candidates_evaluated = max(1, len(rule_candidates))
     selection_note = f'Выбран лучший из {len(rule_candidates)} проверенных вариантов' if len(rule_candidates) > 1 else 'Использован проверенный сценарий ответа'
-    if instruction.strip() and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents:
+    if instruction.strip() and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents and not specific_case:
         # Directed improvements should reach the model even when a local rule exists.
         reply = None
     elif initial_draft and reply and reply.strip() != initial_draft.text.strip():
         # Deterministic safety replies rotate too, so regeneration remains useful
         # even while the local model is unavailable.
         forced_model = 'safety-rules-1.1'
-    elif initial_draft and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents:
+    elif initial_draft and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents and not specific_case:
         issues = (previous_quality or {}).get('issues') or ['сделать ответ заметно лучше и содержательнее']
         instruction = (instruction + ' ' if instruction else '') + 'Это повторная генерация. Не повторяй прежний черновик. Исправь замечания: ' + '; '.join(issues) + '.'
         if not review.text.strip() and review.rating >= 4:
