@@ -1134,7 +1134,7 @@ async def execute_job(job_id):
                 provider = provider_for(store) if store else None
                 if not provider:
                     raise ValueError('Провайдер магазина не поддерживается')
-                if kind == 'products' and store.provider != 'wb':
+                if kind == 'products' and store.provider not in ('wb', 'yandex'):
                     count = 0  # Ozon and Yandex products are learned from their review payloads.
                     job.result = {'message':'Товары этого маркетплейса обновляются вместе с отзывами'}
                     operation = None
@@ -1142,7 +1142,7 @@ async def execute_job(job_id):
                     operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
                 try:
                     options = {'resume': start_checkpoint, 'checkpoint': save_checkpoint}
-                    if kind == 'reviews' and store.provider == 'yandex':
+                    if kind in ('reviews', 'products') and store.provider == 'yandex':
                         options['between_pages'] = run_waiting_questions
                     if operation: count = await operation(db, account_id, update_progress, cancelled, **options)
                 except TypeError as exc:
@@ -1239,7 +1239,7 @@ async def scheduler_loop():
                     if db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
                         continue
                     for store in connected_stores:
-                        if kind == 'products' and store.provider != 'wb':
+                        if kind == 'products' and store.provider not in ('wb', 'yandex'):
                             continue
                         last_key = f'last_{kind}:{store.id}'
                         last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
@@ -1499,7 +1499,7 @@ async def sync(kind: str, auth: MARKET_OPERATOR, db: DB):
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
-    if kind == 'products' and store.provider != 'wb':
+    if kind == 'products' and store.provider not in ('wb', 'yandex'):
         raise ValueError('Отдельная загрузка каталога для этого маркетплейса пока недоступна')
     provider = provider_for(store)
     if sync_lock.locked():

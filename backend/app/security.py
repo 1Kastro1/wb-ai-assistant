@@ -86,6 +86,7 @@ class EgressGuard:
         ('ozon', 'questions'): ('POST', 'https://api-seller.ozon.ru/v1/question/list'),
         ('ozon', 'question_info'): ('POST', 'https://api-seller.ozon.ru/v1/question/info'),
         ('ozon', 'question_publish'): ('POST', 'https://api-seller.ozon.ru/v1/question/answer/create'),
+        ('yandex', 'products'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/offer-mappings'),
         ('yandex', 'reviews'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback'),
         ('yandex', 'publish'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback/comments/update'),
         ('yandex', 'questions'): ('POST', 'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions'),
@@ -126,7 +127,7 @@ class EgressGuard:
             url = url or template
             if '{' not in template and url != template:
                 raise ValueError('Соединение заблокировано: адрес не разрешён')
-            if provider == 'yandex' and not re.fullmatch(r'https://api\.partner\.market\.yandex\.ru/(?:v2/businesses/[0-9]+/goods-feedback(?:/comments/update)?|v1/businesses/[0-9]+/goods-questions(?:/update)?)', url):
+            if provider == 'yandex' and not re.fullmatch(r'https://api\.partner\.market\.yandex\.ru/(?:v2/businesses/[0-9]+/(?:offer-mappings|goods-feedback(?:/comments/update)?)|v1/businesses/[0-9]+/goods-questions(?:/update)?)', url):
                 raise ValueError('Соединение заблокировано: неверный адрес Яндекс Маркета')
             if provider == 'telegram' and not re.fullmatch(r'https://api\.telegram\.org/bot[^/]+/sendMessage', url):
                 raise ValueError('Соединение заблокировано: неверный адрес Telegram')

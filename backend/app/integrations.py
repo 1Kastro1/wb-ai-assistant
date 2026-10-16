@@ -488,6 +488,8 @@ class YandexProvider:
     def target(self, store, operation):
         business_id = str((store.config or {}).get('business_id', '')).strip()
         if not business_id.isdigit(): raise ValueError('Для Яндекс Маркета укажите числовой Business ID')
+        if operation == 'products':
+            return f'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/offer-mappings'
         if operation in ('questions', 'question_publish'):
             suffix = '/update' if operation == 'question_publish' else ''
             return f'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions{suffix}'
@@ -498,6 +500,70 @@ class YandexProvider:
         store, token = store_credentials(db, store_id)
         await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
         return True
+
+    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
+        store, token = store_credentials(db, store_id)
+        total, page = int((resume or {}).get('processed', 0)), str((resume or {}).get('page', ''))
+        seen = {page} if page else set()
+        for _ in range(1000):
+            if cancelled and cancelled():
+                raise asyncio.CancelledError()
+            params = {'limit': 100}
+            if page: params['pageToken'] = page
+            try:
+                result = await guard.request('yandex', 'products', headers={'Api-Key': token}, url=self.target(store, 'products'), params=params)
+            except ValueError as error:
+                if 'HTTP 403' in str(error):
+                    raise ValueError('Яндекс Маркет запретил загрузку каталога. Проверьте Business ID и доступ API-ключа «Просмотр товаров и карточек».') from None
+                raise
+            payload = result.get('result')
+            if result.get('status') == 'ERROR' or not isinstance(payload, dict) or not isinstance(payload.get('offerMappings'), list):
+                raise ValueError('Яндекс Маркет не вернул каталог товаров. Повторите синхронизацию позже.')
+            for item in payload['offerMappings']:
+                offer, mapping = item.get('offer') or {}, item.get('mapping') or {}
+                sku = str(offer.get('offerId') or '').strip()
+                if not sku:
+                    raise ValueError('В каталоге Яндекс Маркета получен товар без SKU')
+                pid = f'yandex:{store.id}:{sku}'
+                product = db.get(Product, pid) or Product(id=pid, marketplace='yandex')
+                product.name = str(offer.get('name') or mapping.get('marketSkuName') or sku)
+                product.brand = str(offer.get('vendor') or product.brand or '')
+                product.category = str(mapping.get('marketCategoryName') or product.category or '')
+                product.part_number = str(offer.get('vendorCode') or product.part_number or '')
+                pictures = [url for url in offer.get('pictures') or [] if isinstance(url, str) and url.startswith('https://')]
+                product.image_url = pictures[0] if pictures else product.image_url or ''
+                facts = [fact for fact in product.facts or [] if fact.get('imported_from') != 'yandex-catalog']
+                description = html.unescape(str(offer.get('description') or '')).strip()
+                features = []
+                if product.part_number: features.append('Артикул производителя: ' + product.part_number)
+                countries = offer.get('manufacturerCountries') or []
+                if countries: features.append('Страна производства: ' + ', '.join(str(value) for value in countries))
+                barcodes = offer.get('barcodes') or []
+                if barcodes: features.append('Штрихкоды: ' + ', '.join(str(value) for value in barcodes))
+                dimensions = offer.get('weightDimensions') or {}
+                if dimensions.get('weight') is not None: features.append('Масса с упаковкой, кг: ' + str(dimensions['weight']))
+                if all(dimensions.get(key) is not None for key in ('length', 'width', 'height')):
+                    features.append('Габариты упаковки, см: ' + ' × '.join(str(dimensions[key]) for key in ('length', 'width', 'height')))
+                for field, content in (('description', description), ('features', '\n'.join(features))):
+                    if content:
+                        facts.append({'text': content[:8000], 'source': 'Карточка товара', 'source_label': 'Карточка Яндекс Маркета',
+                                      'kind': 'feature', 'verification_status': 'VERIFIED', 'source_type': 'marketplace',
+                                      'imported_from': 'yandex-catalog', 'catalog_field': field, 'verified_at': now()})
+                product.facts = facts
+                attach_verified_instructions(db, product)
+                db.add(product)
+                total += 1
+            db.commit()
+            if progress: progress(min(95, 5 + total // 100))
+            page = str((payload.get('paging') or {}).get('nextPageToken') or '')
+            if not page: return total
+            if page in seen:
+                raise ValueError('Яндекс Маркет вернул повторную страницу каталога; прогресс сохранён')
+            seen.add(page)
+            if checkpoint: checkpoint({'page': page, 'processed': total})
+            if between_pages: await between_pages()
+            await asyncio.sleep(0.65)  # Keep below the catalog API's 100 requests/minute.
+        raise ValueError('Каталог слишком большой для одного запуска; продолжите синхронизацию с сохранённого прогресса')
 
     async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)
