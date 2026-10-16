@@ -33,7 +33,7 @@ def positive_detail(text):
 
 
 def positive_review_reply(review, product, revision=0):
-    from .reply_policy import analyze_customer_message, faded_scent
+    from .reply_policy import analyze_customer_message
     analysis = analyze_customer_message(review.text, review.rating)
     if review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed'):
         return None
