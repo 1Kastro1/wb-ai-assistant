@@ -54,7 +54,7 @@ def attach_verified_instructions(db, product, known_domains=None):
             set_setting(db, key, host)
             if known_domains is not None:known_domains[product.id]=host
         facts = list(product.facts or [])
-        if any(f.get('source') == item['url'] and f.get('text') == item['text'] and f.get('verification_status') == 'VERIFIED' for f in facts):
+        if any(f.get('source') == item['url'] and f.get('text') == item['text'] and f.get('verification_status') == 'VERIFIED' and f.get('source_checked_at') == item['checked_at'] for f in facts):
             continue
         # Preserve user facts and descriptions; update only this reviewed instruction.
         facts = [f for f in facts if not (f.get('source') == item['url'] and f.get('catalog_instruction'))]
