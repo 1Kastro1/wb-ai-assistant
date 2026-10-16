@@ -71,12 +71,13 @@ async def lifespan(app):
             review.status = 'manual_review'
         db.commit()
     scheduler_task = asyncio.create_task(scheduler_loop())
-    yield
-    scheduler_task.cancel()
+    queue_task = asyncio.create_task(run_job_queue())
     try:
-        await scheduler_task
-    except asyncio.CancelledError:
-        pass
+        yield
+    finally:
+        scheduler_task.cancel()
+        queue_task.cancel()
+        await asyncio.gather(scheduler_task, queue_task, return_exceptions=True)
 
 
 app = FastAPI(title='Ассистент маркетплейсов', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -987,175 +988,204 @@ async def ollama_status(auth: AUTH):
 sync_lock = asyncio.Lock()
 job_dispatch_lock = asyncio.Lock()
 maintenance_lock = asyncio.Lock()
+sync_schedule_lock = asyncio.Lock()
 
 
 async def run_sync_job(job_id):
     async with sync_lock, maintenance_lock:
-        with Session() as db:
-            job = db.get(Job, job_id)
-            if not job or job.cancel_requested:
-                if job:
-                    job.status, job.result = 'cancelled', {'message': 'Задание отменено'}
-                    db.commit()
-                return
-            started_clock = time.monotonic()
-            queue_seconds = max(0, time.time() - datetime.fromisoformat(job.created_at).timestamp())
-            manual_batch = bool((job.result or {}).get('manual_batch'))
-            requested_by = (job.result or {}).get('requested_by', '')
-            job_metadata = {key: job.result[key] for key in ('operation_key', 'operation_requested_ids', 'skipped') if key in (job.result or {})}
-            job.result = {**(job.result or {}), 'started_at': now()}
-            job.status, job.progress, job.attempts = 'running', 1, job.attempts + 1
-            kind = job.kind
-            account_id = (job.result or {}).get('account_id') or setting(db, 'active_store', 'owner')
-            start_checkpoint = (job.result or {}).get('checkpoint') or {}
+        await execute_job(job_id)
+
+
+async def run_waiting_sync():
+    # Called only by the worker while it holds both execution locks. Use a
+    # separate session after committing a draft, so imports cannot be rolled
+    # back with a later generation failure or overlap restore/maintenance.
+    with Session() as db:
+        pending = db.scalar(select(Job).where(
+            Job.kind.in_(['products', 'reviews', 'questions']),
+            Job.status == 'queued', Job.cancel_requested == False,
+        ).order_by(Job.priority.asc(), Job.created_at.asc()))
+        pending_id = pending.id if pending else None
+    if pending_id:
+        await execute_job(pending_id)
+
+
+async def execute_job(job_id):
+    with Session() as db:
+        job = db.get(Job, job_id)
+        if not job or job.cancel_requested:
+            if job:
+                job.status, job.result = 'cancelled', {'message': 'Задание отменено'}
+                db.commit()
+            return
+        started_clock = time.monotonic()
+        queue_seconds = max(0, time.time() - datetime.fromisoformat(job.created_at).timestamp())
+        manual_batch = bool((job.result or {}).get('manual_batch'))
+        requested_by = (job.result or {}).get('requested_by', '')
+        job_metadata = {key: job.result[key] for key in ('operation_key', 'operation_requested_ids', 'skipped') if key in (job.result or {})}
+        job.result = {**(job.result or {}), 'started_at': now()}
+        job.status, job.progress, job.attempts = 'running', 1, job.attempts + 1
+        kind = job.kind
+        account_id = (job.result or {}).get('account_id') or setting(db, 'active_store', 'owner')
+        start_checkpoint = (job.result or {}).get('checkpoint') or {}
+        db.commit()
+        def update_progress(value):
+            db.refresh(job)
+            job.progress = value
             db.commit()
-            def update_progress(value):
-                db.refresh(job)
-                job.progress = value
+        def cancelled():
+            db.refresh(job)
+            return job.cancel_requested
+        def save_checkpoint(value):
+            db.refresh(job)
+            job.result = {**(job.result or {}), 'checkpoint': value, 'account_id': account_id,
+                          'message': f'Сохранён прогресс: {value.get("processed", 0)} записей'}
+            db.commit()
+        try:
+            if kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft'):
+                since = (job.result or {}).get('since', '')
+                is_questions = kind in ('question_drafts', 'single_question_draft')
+                is_single = kind in ('single_draft', 'single_question_draft')
+                conditions = [
+                    Review.wb_account_id == account_id,
+                    Review.is_answered == False,
+                    Review.status != 'publishing',
+                    Review.marketplace.like('%_question') if is_questions else ~Review.marketplace.like('%_question'),
+                ]
+                if not is_single:
+                    conditions.append(Draft.id.is_(None))
+                selected_ids = list((job.result or {}).get('selected_ids') or [])
+                if selected_ids:
+                    conditions.append(Review.id.in_(selected_ids))
+                if since:
+                    conditions.append(Review.created_at >= since)
+                ids = list(db.scalars(
+                    select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(
+                        *conditions,
+                    ).order_by(Review.created_at.desc(), Review.id)
+                ))
+                total, processed, failed, failures = len(ids), 0, 0, []
+                single_draft = None
+                job.result = {**job.result, 'total': total, 'processed': 0, 'failed': 0}
                 db.commit()
-            def cancelled():
-                db.refresh(job)
-                return job.cancel_requested
-            def save_checkpoint(value):
-                db.refresh(job)
-                job.result = {**(job.result or {}), 'checkpoint': value, 'account_id': account_id,
-                              'message': f'Сохранён прогресс: {value.get("processed", 0)} записей'}
-                db.commit()
-            try:
-                if kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft'):
-                    since = (job.result or {}).get('since', '')
-                    is_questions = kind in ('question_drafts', 'single_question_draft')
-                    is_single = kind in ('single_draft', 'single_question_draft')
-                    conditions = [
-                        Review.wb_account_id == account_id,
-                        Review.is_answered == False,
-                        Review.status != 'publishing',
-                        Review.marketplace.like('%_question') if is_questions else ~Review.marketplace.like('%_question'),
-                    ]
-                    if not is_single:
-                        conditions.append(Draft.id.is_(None))
-                    selected_ids = list((job.result or {}).get('selected_ids') or [])
-                    if selected_ids:
-                        conditions.append(Review.id.in_(selected_ids))
-                    if since:
-                        conditions.append(Review.created_at >= since)
-                    ids = list(db.scalars(
-                        select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(
-                            *conditions,
-                        ).order_by(Review.created_at.desc(), Review.id)
-                    ))
-                    total, processed, failed, failures = len(ids), 0, 0, []
-                    single_draft = None
-                    job.result = {**job.result, 'total': total, 'processed': 0, 'failed': 0}
-                    db.commit()
-                    for index, review_id in enumerate(ids, 1):
-                        if cancelled():
-                            raise asyncio.CancelledError
-                        try:
-                            single_draft = await generate_draft(db, review_id, (job.result or {}).get('instruction', '') if is_single else '')
-                            if requested_by:
-                                stored_draft = db.get(Draft, single_draft['id'])
-                                if not stored_draft.created_by:
-                                    stored_draft.created_by = requested_by
-                                stored_draft.updated_by = requested_by
-                                db.commit()
-                                single_draft = draft_public(db, stored_draft)
-                            processed += 1
-                        except Exception as error:
-                            db.rollback()
-                            if is_single:
-                                raise
-                            failed += 1
-                            if len(failures) < 20:
-                                failures.append({'review_id': review_id, 'reason': (str(error) or type(error).__name__)[:300]})
-                        job.result = {**(job.result or {}), 'processed': processed, 'failed': failed, 'total': total, 'failures': failures}
-                        db.flush()
-                        update_progress(round(index / max(1, total) * 100))
-                    schedule = setting(db, 'automation_schedule', {})
-                    proposal_id = None
-                    if schedule.get('auto_propose') and not is_questions and not is_single and not manual_batch:
-                        minimum = max(70, min(100, int(schedule.get('min_quality', 96))))
-                        limit = max(1, min(100, int(schedule.get('max_proposals', 100))))
-                        candidate_rows = db.execute(
-                            select(Review.id, Draft.quality).join(Draft, Draft.review_id == Review.id).where(
-                                Review.wb_account_id == account_id,
-                                Review.is_answered == False,
-                                Review.status == 'draft_ready',
-                                Review.rating >= 4,
-                                Review.manual == False,
-                            ).order_by(Review.created_at.desc()).limit(limit * 5)
-                        ).all()
-                        candidates = [rid for rid, quality in candidate_rows if (quality or {}).get('passed') and int((quality or {}).get('score', 0)) >= minimum][:limit]
-                        if candidates:
-                            proposal_id = propose_publish(db, candidates)['id']
-                    job = db.get(Job, job_id)
-                    if is_single and (total != 1 or single_draft is None):
-                        raise ValueError('Отзыв или вопрос изменился. Обновите страницу')
-                    job.status, job.progress = 'completed', 100
-                    job.result = {
-                        'processed': processed,
-                        'failed': failed,
-                        'total': total,
-                        'account_id': account_id,
-                        'since': since,
-                        'failures': failures,
-                        'message': f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
-                        'proposal_id': proposal_id, 'selected_ids': selected_ids, 'manual_batch': manual_batch, 'requested_by': requested_by,
-                        **({'draft': single_draft} if is_single else {}),
-                    }
-                else:
-                    store = db.get(StoreProfile, account_id)
-                    provider = provider_for(store) if store else None
-                    if not provider:
-                        raise ValueError('Провайдер магазина не поддерживается')
-                    if kind == 'products' and store.provider != 'wb':
-                        count = 0  # Ozon and Yandex products are learned from their review payloads.
-                        job.result = {'message':'Товары этого маркетплейса обновляются вместе с отзывами'}
-                        operation = None
-                    else:
-                        operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
+                for index, review_id in enumerate(ids, 1):
+                    if cancelled():
+                        raise asyncio.CancelledError
                     try:
-                        if operation: count = await operation(db, account_id, update_progress, cancelled, resume=start_checkpoint, checkpoint=save_checkpoint)
-                    except TypeError as exc:
-                        if 'unexpected keyword argument' not in str(exc):
+                        single_draft = await generate_draft(db, review_id, (job.result or {}).get('instruction', '') if is_single else '')
+                        if requested_by:
+                            stored_draft = db.get(Draft, single_draft['id'])
+                            if not stored_draft.created_by:
+                                stored_draft.created_by = requested_by
+                            stored_draft.updated_by = requested_by
+                            db.commit()
+                            single_draft = draft_public(db, stored_draft)
+                        processed += 1
+                    except Exception as error:
+                        db.rollback()
+                        if is_single:
                             raise
-                        try:
-                            count = await operation(db, account_id, update_progress, cancelled)
-                        except TypeError as legacy_exc:
-                            if 'positional' not in str(legacy_exc):
-                                raise
-                            count = await operation(db)
-                    job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id, 'finished_at': now()}
-                    if kind == 'reviews':
-                        negative = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == False, Review.rating <= 2)) or 0
-                        if negative:
-                            add_notification(db, 'negative_reviews', 'Негативные отзывы требуют внимания', f'Без ответа осталось отзывов с оценкой 1–2★: {negative}.', 'warning', account_id)
-                    schedule = setting(db, 'automation_schedule', {})
-                    if kind == 'reviews' and schedule.get('enabled') and schedule.get('drafts_enabled') and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
-                        schedule['last_drafts'] = time.time()
-                        set_setting(db, 'automation_schedule', schedule)
-                    if kind == 'questions' and schedule.get('enabled') and schedule.get('question_drafts_enabled') and setting(db, 'assistant_enabled', True) and not db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued', 'running']))):
-                        db.add(Job(id=str(uuid4()), kind='question_drafts', priority=250, result={'account_id': account_id, 'scheduled': True, 'message': 'Подготовка ответов после получения новых вопросов'}))
-                        schedule['last_question_drafts'] = time.time()
-                        set_setting(db, 'automation_schedule', schedule)
-            except asyncio.CancelledError:
-                db.rollback()
+                        failed += 1
+                        if len(failures) < 20:
+                            failures.append({'review_id': review_id, 'reason': (str(error) or type(error).__name__)[:300]})
+                    job.result = {**(job.result or {}), 'processed': processed, 'failed': failed, 'total': total, 'failures': failures}
+                    db.flush()
+                    update_progress(round(index / max(1, total) * 100))
+                    if not is_single:
+                        await run_waiting_sync()
+                schedule = setting(db, 'automation_schedule', {})
+                proposal_id = None
+                if schedule.get('auto_propose') and not is_questions and not is_single and not manual_batch:
+                    minimum = max(70, min(100, int(schedule.get('min_quality', 96))))
+                    limit = max(1, min(100, int(schedule.get('max_proposals', 100))))
+                    candidate_rows = db.execute(
+                        select(Review.id, Draft.quality).join(Draft, Draft.review_id == Review.id).where(
+                            Review.wb_account_id == account_id,
+                            Review.is_answered == False,
+                            Review.status == 'draft_ready',
+                            Review.rating >= 4,
+                            Review.manual == False,
+                        ).order_by(Review.created_at.desc()).limit(limit * 5)
+                    ).all()
+                    candidates = [rid for rid, quality in candidate_rows if (quality or {}).get('passed') and int((quality or {}).get('score', 0)) >= minimum][:limit]
+                    if candidates:
+                        proposal_id = propose_publish(db, candidates)['id']
                 job = db.get(Job, job_id)
-                job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'account_id': account_id}
-            except Exception as error:
-                db.rollback()
-                job = db.get(Job, job_id)
-                if job.attempts < job.max_attempts and not job.cancel_requested:
-                    job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
+                if is_single and (total != 1 or single_draft is None):
+                    raise ValueError('Отзыв или вопрос изменился. Обновите страницу')
+                job.status, job.progress = 'completed', 100
+                job.result = {
+                    'processed': processed,
+                    'failed': failed,
+                    'total': total,
+                    'account_id': account_id,
+                    'since': since,
+                    'failures': failures,
+                    'message': f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
+                    'proposal_id': proposal_id, 'selected_ids': selected_ids, 'manual_batch': manual_batch, 'requested_by': requested_by,
+                    **({'draft': single_draft} if is_single else {}),
+                }
+            else:
+                store = db.get(StoreProfile, account_id)
+                provider = provider_for(store) if store else None
+                if not provider:
+                    raise ValueError('Провайдер магазина не поддерживается')
+                if kind == 'products' and store.provider != 'wb':
+                    count = 0  # Ozon and Yandex products are learned from their review payloads.
+                    job.result = {'message':'Товары этого маркетплейса обновляются вместе с отзывами'}
+                    operation = None
                 else:
-                    default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'
-                    detail = (str(error) or type(error).__name__)[:500]
-                    message = f'{default_message} {detail}'
-                    job.status, job.result = 'failed', {**(job.result or {}), 'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail, 'finished_at': now()}
-                    add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
-            job.result = {**job_metadata, **(job.result or {}), 'timing': {'queue_seconds': round(queue_seconds, 2), 'processing_seconds': round(time.monotonic() - started_clock, 2)}, 'finished_at': now()}
-            db.commit()
+                    operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
+                try:
+                    if operation: count = await operation(db, account_id, update_progress, cancelled, resume=start_checkpoint, checkpoint=save_checkpoint)
+                except TypeError as exc:
+                    if 'unexpected keyword argument' not in str(exc):
+                        raise
+                    try:
+                        count = await operation(db, account_id, update_progress, cancelled)
+                    except TypeError as legacy_exc:
+                        if 'positional' not in str(legacy_exc):
+                            raise
+                        count = await operation(db)
+                job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id, 'finished_at': now()}
+                if kind == 'reviews':
+                    negative = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == False, Review.rating <= 2)) or 0
+                    if negative:
+                        add_notification(db, 'negative_reviews', 'Негативные отзывы требуют внимания', f'Без ответа осталось отзывов с оценкой 1–2★: {negative}.', 'warning', account_id)
+                schedule = setting(db, 'automation_schedule', {})
+                if kind == 'reviews' and schedule.get('enabled') and schedule.get('drafts_enabled') and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
+                    db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
+                    schedule['last_drafts'] = time.time()
+                    set_setting(db, 'automation_schedule', schedule)
+                if kind == 'questions' and schedule.get('enabled') and schedule.get('question_drafts_enabled') and setting(db, 'assistant_enabled', True) and not db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued', 'running']))):
+                    db.add(Job(id=str(uuid4()), kind='question_drafts', priority=250, result={'account_id': account_id, 'scheduled': True, 'message': 'Подготовка ответов после получения новых вопросов'}))
+                    schedule['last_question_drafts'] = time.time()
+                    set_setting(db, 'automation_schedule', schedule)
+        except asyncio.CancelledError:
+            db.rollback()
+            job = db.get(Job, job_id)
+            if asyncio.current_task().cancelling():
+                # Preserve resumable imports when the worker shuts down. Manual
+                # cancellation is raised by cancelled(), without task.cancel().
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions') else 'interrupted'
+                job.result = {**(job.result or {}), 'account_id': account_id,
+                              'message': 'Работа прервана перезапуском приложения'}
+                db.commit()
+                raise
+            job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'account_id': account_id}
+        except Exception as error:
+            db.rollback()
+            job = db.get(Job, job_id)
+            if job.attempts < job.max_attempts and not job.cancel_requested:
+                job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
+            else:
+                default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'
+                detail = (str(error) or type(error).__name__)[:500]
+                message = f'{default_message} {detail}'
+                job.status, job.result = 'failed', {**(job.result or {}), 'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail, 'finished_at': now()}
+                add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
+        job.result = {**job_metadata, **(job.result or {}), 'timing': {'queue_seconds': round(queue_seconds, 2), 'processing_seconds': round(time.monotonic() - started_clock, 2)}, 'finished_at': now()}
+        db.commit()
 
 
 async def run_job_queue():
@@ -1277,9 +1307,18 @@ async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: 
     can_operate_store(auth, store)
     if store.provider == 'wb': wb_token(db, active)
     elif not db.get(Account, active): raise ValueError('Сначала подключите API выбранного магазина')
-    job = Job(id=str(uuid4()), kind=kind, result={'account_id': active})
-    db.add(job)
-    db.commit()
+    async with sync_schedule_lock:
+        existing = db.scalar(select(Job).where(
+            Job.kind == kind, Job.status.in_(['queued', 'running']),
+            Job.cancel_requested == False,
+            func.coalesce(Job.result['account_id'].as_string(), 'owner') == active,
+        ).order_by(Job.created_at.asc()))
+        if existing:
+            background.add_task(run_job_queue)
+            return public(existing)
+        job = Job(id=str(uuid4()), kind=kind, result={'account_id': active})
+        db.add(job)
+        db.commit()
     background.add_task(run_job_queue)
     return public(job)
 
