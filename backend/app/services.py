@@ -534,6 +534,7 @@ def question_intent(text):
     # Buyers often send only the vehicle and VIN, without asking "will it fit".
     if vehicle_identifiers(text) or oem_numbers(text):return 'совместимость'
     value = (text or '').lower().replace('ё', 'е')
+    if re.search(r'входит|в комплекте|комплектуется', value):return 'комплектность'
     patterns = (
         ('крепление', r'держател|закрепител|креплен|как.*(?:закреп|крепить)|где.*(?:размест|постав|располож)'),
         ('применение', r'как (?:использ|примен)|инструкц|сколько нанос|разводит|дозиров'),

@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from test_review_workbench import WorkbenchTests
 from app.db import Product, Review, StoreListing
-from app.services import generate_question_draft, trusted_product_facts
+from app.services import generate_question_draft, trusted_product_facts, question_intent
 from app.assortment_questions import assortment_question_answer
 
 
@@ -58,6 +58,7 @@ class AssortmentTests(unittest.TestCase):
         self.seed('Не люблю яблочный, есть другой?'); self.assertIsNone(self.answer())
         with self.factory() as db: db.get(Review,'assort-q').text='Держатель входит в комплект?'; db.commit()
         self.assertIsNone(self.answer())
+        self.assertEqual(question_intent('Держатель входит в комплект?'),'комплектность')
 
     def test_generation_and_repeated_generation_do_not_call_model_or_fall_back(self):
         self.seed('А яблочного запаха нет?')
