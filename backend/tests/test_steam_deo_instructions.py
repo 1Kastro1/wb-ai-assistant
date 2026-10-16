@@ -37,7 +37,7 @@ class SteamDeoInstructionTests(unittest.TestCase):
 
     def test_positive_review_does_not_get_failed_use_advice(self):
         self.review.text,self.review.rating='Запах исчез, всё понравилось',5
-        self.assertNotIn('PUSH',rule_reply(self.review,self.product))
+        self.assertNotIn('PUSH',rule_reply(self.review,self.product) or '')
 
 
 if __name__=='__main__':

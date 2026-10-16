@@ -33,6 +33,8 @@ class ReviewedKnowledgeTests(unittest.TestCase):
         with self.factory() as db:
             db.get(Product,'ngk').facts=[{'text':'invalid','source':'https://[broken','verification_status':'VERIFIED'}];db.commit()
             self.assertEqual(knowledge_report(db,db.get(StoreProfile,'owner'))['with_instructions'],0)
+            from app.services import trusted_product_facts
+            self.assertEqual(trusted_product_facts(db,db.get(Product,'ngk')),[])
 
     def test_exact_feature_cannot_match_a_similar_article_or_another_brand(self):
         product=Product(id='wiper',brand='DOUBLE FORCE',name='Щетка стеклоочистителя',part_number='DFF12',facts=[])

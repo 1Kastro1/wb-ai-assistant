@@ -30,7 +30,7 @@ def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requ
         assert db.get(RegistrationRequest,'pending-local').username=='pending.local'
         assert db.get(TeamInvite,'private-invite').created_by=='owner'
     with sqlite3.connect(decrypted) as check:
-        check.execute("INSERT INTO registration_requests(id,username,password_hash,receipt_hash) VALUES('leak','leak','secret','receipt')")
+        check.execute("INSERT INTO registration_requests(id,username,password_hash,receipt_hash,status,created_at,reviewed_at,reviewed_by) VALUES('leak','leak','secret','receipt','pending','test','','')")
         check.commit()
     with pytest.raises(ValueError,match='секреты'):_check_backup_database(decrypted)
 

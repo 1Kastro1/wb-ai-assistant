@@ -40,10 +40,10 @@ def specific_review_case(review, product):
     if re.search(r'\b(?:быушн\w*|бэушн\w*|б\s*/\s*у|бу)\b|использованн|бывш\w*\s+в\s+употреблении|следы\s+(?:использования|установки)', text) and not re.search(r'не\s+(?:использованн|быушн|бэушн|б\s*/\s*у)|без\s+следов', text):
         return result('used_goods', 'Приносим извинения за состояние полученного товара. Мы продаём только новый товар, бывшие в употреблении товары не реализуем. Если при получении в ПВЗ Вы обнаружите следы использования или несоответствие заказу, Вы можете отказаться от получения товара.')
 
-    if analysis['sentiment'] != 'mixed' and not set(analysis['complaints']) - {'DAMAGED_ITEM','PACKAGING_ISSUE','LEAKAGE','WRONG_ITEM'} and re.search(r'помят|поврежд|разбит|протек|вытек|утек|пришел не тот|прислали не тот|не тот товар', text):
+    if analysis['sentiment'] != 'mixed' and not set(analysis['complaints']) - {'DAMAGED_ITEM','PACKAGING_ISSUE','LEAKAGE','WRONG_ITEM'} and re.search(r'помят|поврежд|разбит|протек|вытек|утек|пришел не тот|прислали не тот|не тот товар|получил\w* другой товар', text):
         if re.search(r'вытек|протек|утек', text):
             detail = 'повреждение упаковки и протечку масла' if 'масл' in name else 'повреждение упаковки и протечку средства'
-        elif re.search(r'пришел не тот|прислали не тот|не тот товар', text):
+        elif re.search(r'пришел не тот|прислали не тот|не тот товар|получил\w* другой товар', text):
             detail = 'то, что Вы получили не тот товар'
         else:
             detail = 'повреждение полученного товара'

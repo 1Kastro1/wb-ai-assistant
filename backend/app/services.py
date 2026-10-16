@@ -42,8 +42,11 @@ def trusted_product_facts(db, product):
         if source == 'Карточка товара' or source.startswith('Карточка WB:'):
             result.append(fact)
             continue
-        parsed = urlsplit(source)
-        host = (parsed.hostname or '').lower()
+        try:
+            parsed = urlsplit(source)
+            host = (parsed.hostname or '').lower()
+        except ValueError:
+            continue
         if parsed.scheme == 'https' and official and (host == official or host.endswith('.' + official)):
             result.append(fact)
     from .steam_deo_guidance import reviewed_steam_facts

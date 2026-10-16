@@ -99,7 +99,7 @@ def test_unknown_planned_tool_rejected(client,monkeypatch):
 def test_job_sync(client,monkeypatch):
     from app.integrations import wb
     client.post('/settings/wb-token',json={'token':'test-job-token-123'})
-    async def sync(db):return 12
+    async def sync(db,*args,**kwargs):return 12
     monkeypatch.setattr(wb,'sync_products',sync)
     job=client.post('/jobs/sync/products').json()
     result=client.get('/jobs/'+job['id']).json()
