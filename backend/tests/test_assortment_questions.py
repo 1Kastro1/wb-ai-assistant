@@ -15,6 +15,7 @@ class AssortmentTests(unittest.TestCase):
     def seed(self, text='Как закрепить Eikosha на Kia Optima?'):
         with self.factory() as db:
             db.add_all([
+                Product(id='200000', name='Держатель на решетку кондиционера X-17', brand='EIKOSHA', facts=[{'text':'Освобождает торпеду. Не ставьте баночку на торпеду.', 'source':'Карточка товара', 'verification_status':'VERIFIED'}]),
                 Product(id='200001', name='Меловой ароматизатор CLEAR SQUASH A-24', brand='EIKOSHA'),
                 Product(id='200002', name='Держатель на дефлектор CANTULE', brand='EIKOSHA'),
                 Product(id='200003', name='Держатель NONSLIP HOLDER', brand='EIKOSHA', facts=[{'text':'Для горизонтальной поверхности салона', 'source':'Карточка товара', 'verification_status':'VERIFIED'}]),
@@ -22,7 +23,7 @@ class AssortmentTests(unittest.TestCase):
                 Product(id='200005', name='Яблочный ароматизатор APPLE', brand='EIKOSHA'),
                 Product(id='200006', name='Набор APPLE + CITRUS', brand='EIKOSHA'),
             ]); db.flush()
-            db.add_all([StoreListing(store_id='owner', product_id=pid) for pid in ('200001','200002','200003','200004','200006')])
+            db.add_all([StoreListing(store_id='owner', product_id=pid) for pid in ('200000','200001','200002','200003','200004','200006')])
             db.add(StoreListing(store_id='other', product_id='200005'))
             db.add(Review(id='assort-q', wb_review_id='assort-q', product_id='200001', wb_account_id='owner', marketplace='wb_question', text=text, rating=0)); db.commit()
 
@@ -35,6 +36,7 @@ class AssortmentTests(unittest.TestCase):
         for term in ('Добрый день!','200002','200003','подстаканник','кармане двери','ламелей'):
             self.assertIn(term,result['answer'])
         self.assertNotIn('точно подойдет',result['answer'])
+        self.assertNotIn('200000',result['answer'])
 
     def test_scent_search_uses_single_product_from_same_store(self):
         self.seed('А яблочного запаха нет?'); result=self.answer()

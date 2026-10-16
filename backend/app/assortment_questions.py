@@ -67,7 +67,7 @@ def assortment_question_answer(db, question, product, facts_for_product):
             if re.search(r'GIGA|стержн', description, re.I) and not re.search(r'баноч|мелов', description, re.I):continue
             holders.append((p, description))
         vent = next((p for p, desc in sorted(holders, key=lambda item: (not bool(re.search('дефлектор', item[0].name, re.I)), item[0].id)) if re.search(r'дефлектор|решетк|решётк|вентиляционн', desc, re.I)), None)
-        panel = next((p for p, desc in holders if re.search(r'торпед|горизонтальн|nonslip', desc, re.I)), None)
+        panel = next((p for p, desc in holders if re.search(r'nonslip|нескольз', p.name, re.I) or re.search(r'(?:модель|место крепления|назначение)\s*:\s*(?:на\s+)?(?:торпед|панел|горизонтальн)', desc, re.I)), None)
         parts = ['Добрый день!']
         if vent:
             evidence(vent)
