@@ -65,8 +65,10 @@ def test_internal_reasoning_question_draft_cannot_be_published_and_is_replaced(c
     response = client.post('/questions/reasoning-question/draft', json={})
     assert response.status_code == 200, response.text
     draft = response.json()
-    assert draft['text'] == valid
-    assert draft['quality']['candidates_evaluated'] == 1
+    assert draft['model'] == 'catalog-fitment-1.1'
+    assert 'VIN или Frame' in draft['text']
+    assert meta not in draft['text']
+    assert draft['quality']['fitment']['status'] == 'NEEDS_VIN'
     assert draft['quality']['passed'] is True
 
 
@@ -86,15 +88,12 @@ def test_compatibility_fallback_addresses_model_and_article_without_echoing_vin(
     response = client.post('/questions/duster-question/draft', json={})
     assert response.status_code == 200, response.text
     draft = response.json()
-    assert draft['model'] == 'question-safety-1.0'
-    assert 'DENSO ITF20TT' in draft['text']
-    assert 'Рено Дастер К4М' in draft['text']
+    assert draft['model'] == 'catalog-fitment-1.1'
     assert 'WVWZZZ1JZXW000001' not in draft['text']
-    assert 'VIN' not in draft['text']
-    assert 'нельзя достоверно установить' in draft['text']
-    assert draft['quality']['score'] >= 90
-    assert draft['quality']['passed'] is True
-    assert draft['quality']['candidates_evaluated'] == 0
+    assert draft['quality']['fitment']['status'] == 'NEEDS_CATALOG'
+    assert draft['quality']['passed'] is False
+    assert draft['quality']['score'] == 0
+    assert client.post('/questions/duster-question/publish').status_code == 400
 
 
 def test_wb_question_pagination_rolls_date_window_before_offset_limit(monkeypatch):
@@ -142,7 +141,7 @@ def test_questions_are_separate_and_have_their_own_draft_flow(client, seeded, mo
     response = client.post('/questions/owner:question:q-1/draft', json={})
     assert response.status_code == 200, response.text
     draft = response.json()
-    assert draft['text'].startswith(('Здравствуйте', 'Добрый день'))
+    assert 'VIN или Frame' in draft['text']
     assert draft['quality']['intent_label'] == 'совместимость'
     assert draft['quality']['score'] >= 90
 

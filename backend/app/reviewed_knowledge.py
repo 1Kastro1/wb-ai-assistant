@@ -77,7 +77,9 @@ def knowledge_report(db,store):
         domain=domains.get(product.id,'')
         for fact in product.facts or []:
             if fact.get('verification_status')!='VERIFIED':continue
-            source=str(fact.get('source',''));url=urlsplit(source);host=url.hostname or ''
+            source=str(fact.get('source',''))
+            try:url=urlsplit(source);host=url.hostname or ''
+            except ValueError:continue
             trusted=source=='Карточка товара' or source.startswith('Карточка WB:') or url.scheme=='https' and bool(domain) and (host==domain or host.endswith('.'+domain))
             if not trusted:continue
             if fact.get('kind')=='instruction':

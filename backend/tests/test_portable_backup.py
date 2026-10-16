@@ -7,6 +7,34 @@ from app.db import Session, Review, Job
 PASSWORD='portable-backup-password-123'
 
 
+def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requests(client,seeded,tmp_path):
+    from app.db import RegistrationRequest,TeamInvite
+    from app.maintenance import _decrypt_portable,_check_backup_database
+    import pytest
+    with Session() as db:
+        db.add(RegistrationRequest(id='pending-local',username='pending.local',password_hash='private-registration-hash',receipt_hash='private-receipt'))
+        db.add(TeamInvite(token_hash='private-invite',position='operator',store_ids=['owner'],created_by='owner',expires=9999999999))
+        db.commit()
+    exported=client.post('/portable/export',json={'password':PASSWORD})
+    assert exported.status_code==200,exported.text
+    encrypted=tmp_path/'enrollment.wbai';decrypted=tmp_path/'enrollment.db'
+    encrypted.write_bytes(exported.content);_decrypt_portable(encrypted,decrypted,PASSWORD)
+    _check_backup_database(decrypted)
+    with sqlite3.connect(decrypted) as check:
+        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0011'
+        for table in ('users','sessions','registration_requests','team_invites'):
+            assert check.execute('SELECT count(*) FROM '+table).fetchone()[0]==0
+    restored=client.post('/portable/restore',data={'password':PASSWORD},files={'file':('shop.wbai',exported.content,'application/octet-stream')})
+    assert restored.status_code==200,restored.text
+    with Session() as db:
+        assert db.get(RegistrationRequest,'pending-local').username=='pending.local'
+        assert db.get(TeamInvite,'private-invite').created_by=='owner'
+    with sqlite3.connect(decrypted) as check:
+        check.execute("INSERT INTO registration_requests(id,username,password_hash,receipt_hash) VALUES('leak','leak','secret','receipt')")
+        check.commit()
+    with pytest.raises(ValueError,match='секреты'):_check_backup_database(decrypted)
+
+
 def test_encrypted_portable_export_and_restore(client,seeded,tmp_path):
     plain=client.post('/backup').json()['file']
     from app.config import DATA

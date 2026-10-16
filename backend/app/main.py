@@ -906,11 +906,16 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB):
     return value
 
 
-def auto_replies_status(db):
+def automated_draft_scope(account_id):
+    return (Job.kind=='drafts') & Job.result['manual_batch'].as_boolean().is_not(True) & (func.coalesce(Job.result['account_id'].as_string(),'owner')==account_id)
+
+
+def auto_replies_status(db,auth=None):
     schedule = schedule_get(None, db)
     enabled = bool(schedule.get('enabled') and schedule.get('drafts_enabled'))
-    current_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.result['manual_batch'].as_boolean().is_not(True)).order_by(Job.created_at.desc()))
-    last_job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.not_in(['queued', 'running']), Job.result['manual_batch'].as_boolean().is_not(True)).order_by(Job.created_at.desc()))
+    account_id=active_store(db,auth) if auth else setting(db,'active_store','owner')
+    current_job = db.scalar(select(Job).where(automated_draft_scope(account_id), Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
+    last_job = db.scalar(select(Job).where(automated_draft_scope(account_id), Job.status.not_in(['queued', 'running'])).order_by(Job.created_at.desc()))
     next_run_at = None
     if enabled:
         last_run = float(schedule.get('last_drafts', time.time()))
@@ -927,7 +932,7 @@ def auto_replies_status(db):
 
 @app.get('/auto-replies/status')
 def get_auto_replies_status(auth: AUTH, db: DB):
-    return auto_replies_status(db)
+    return auto_replies_status(db,auth)
 
 
 @app.post('/auto-replies/start')
@@ -941,13 +946,13 @@ async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR,
     since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time(), 'drafts_since': since})
     set_setting(db, 'automation_schedule', schedule)
-    job = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
+    job = db.scalar(select(Job).where(automated_draft_scope(active_store(db,auth)), Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
     if not job:
         active = active_store(db, auth)
         job = Job(id=str(uuid4()), kind='drafts', priority=50, result={'account_id': active, 'since': since, 'message': 'Автоответы запущены: подготавливаем новые отзывы'})
         db.add(job)
     db.commit()
-    result = auto_replies_status(db)
+    result = auto_replies_status(db,auth)
     result['job'] = public(job)
     background.add_task(run_job_queue)
     return result
@@ -961,7 +966,7 @@ def pause_auto_replies(auth: MARKET_OPERATOR, db: DB):
     schedule = schedule_get(auth, db)
     schedule['drafts_enabled'] = False
     set_setting(db, 'automation_schedule', schedule)
-    for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.result['manual_batch'].as_boolean().is_not(True), Job.result['account_id'].as_string() == active_store(db, auth))):
+    for job in db.scalars(select(Job).where(automated_draft_scope(active_store(db,auth)), Job.status.in_(['queued', 'running']))):
         job.cancel_requested = True
         if job.status == 'queued':
             job.status = 'cancelled'

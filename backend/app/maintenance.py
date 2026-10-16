@@ -18,6 +18,37 @@ from .db import Session, Setting, setting, set_setting, IS_SQLITE
 PORTABLE_MAGIC = b'WBAIPORT1'
 PORTABLE_HEADER = len(PORTABLE_MAGIC) + 16 + 12
 
+SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,12))
+AUTH_TABLES=('wb_accounts','sessions','users','registration_requests','team_invites')
+
+
+def _table_exists(connection,table):
+    return bool(connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone())
+
+
+def _strip_authentication(connection):
+    for table in AUTH_TABLES:
+        if _table_exists(connection,table):connection.execute('DELETE FROM '+table)
+    connection.execute("DELETE FROM app_settings WHERE key='password_hash'")
+
+
+def _enrollment_snapshot(connection):
+    result={}
+    for table in ('registration_requests','team_invites'):
+        if _table_exists(connection,table):
+            cursor=connection.execute('SELECT * FROM '+table)
+            result[table]=([item[0] for item in cursor.description],cursor.fetchall())
+    return result
+
+
+def _restore_enrollment(connection,snapshot):
+    for table,(columns,rows) in snapshot.items():
+        if _table_exists(connection,table):
+            names=','.join('"'+column.replace('"','""')+'"' for column in columns)
+            placeholders=','.join('?' for _ in columns)
+            connection.executemany('INSERT OR REPLACE INTO '+table+'('+names+') VALUES('+placeholders+')',rows)
+
+
 
 def _portable_key(password, salt):
     if len(password) < 12:
@@ -34,11 +65,7 @@ def portable_backup(password):
     # against a future change to the ordinary local-backup implementation.
     with closing(sqlite3.connect(source)) as sanitized:
         sanitized.execute('PRAGMA journal_mode=DELETE')
-        sanitized.execute('DELETE FROM wb_accounts')
-        sanitized.execute('DELETE FROM sessions')
-        if sanitized.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone():
-            sanitized.execute('DELETE FROM users')
-        sanitized.execute("DELETE FROM app_settings WHERE key='password_hash'")
+        _strip_authentication(sanitized)
         sanitized.commit()
         sanitized.execute('VACUUM')
     _check_backup_database(source)
@@ -91,10 +118,11 @@ def _check_backup_database(path):
         if source.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Резервная копия повреждена')
         version = source.execute("SELECT version_num FROM alembic_version").fetchone() if source.execute("SELECT 1 FROM sqlite_master WHERE name='alembic_version'").fetchone() else None
-        if not version or version[0] not in ('0001','0002','0003','0004','0005','0006','0007'):
+        if not version or version[0] not in SUPPORTED_BACKUP_REVISIONS:
             raise ValueError('Версия резервной копии не поддерживается')
+        enrollment=sum(source.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in ('registration_requests','team_invites') if _table_exists(source,table))
         users = source.execute('SELECT count(*) FROM users').fetchone()[0] if source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone() else 0
-        if source.execute('SELECT count(*) FROM wb_accounts').fetchone()[0] or source.execute('SELECT count(*) FROM sessions').fetchone()[0] or users or source.execute("SELECT count(*) FROM app_settings WHERE key='password_hash'").fetchone()[0]:
+        if source.execute('SELECT count(*) FROM wb_accounts').fetchone()[0] or source.execute('SELECT count(*) FROM sessions').fetchone()[0] or users or enrollment or source.execute("SELECT count(*) FROM app_settings WHERE key='password_hash'").fetchone()[0]:
             raise ValueError('Копия содержит запрещённые секреты')
 
 
@@ -122,12 +150,14 @@ def portable_restore(source_path, password):
             password_row = target.execute("SELECT value FROM app_settings WHERE key='password_hash'").fetchone()
             users = target.execute('SELECT id,username,display_name,password_hash,role,position,permissions,store_ids,enabled,must_change_password,created_at FROM users').fetchall() if target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone() else []
             sessions = target.execute('SELECT id,expires,csrf,user_id FROM sessions').fetchall()
+            enrollment = _enrollment_snapshot(target)
         with closing(sqlite3.connect(temp_path)) as source, closing(sqlite3.connect(DATABASE)) as target:
             source.backup(target)
             if password_row:
                 target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('password_hash',?)", password_row)
             target.executemany('INSERT OR REPLACE INTO users(id,username,display_name,password_hash,role,position,permissions,store_ids,enabled,must_change_password,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)', users)
             target.executemany('INSERT OR REPLACE INTO sessions(id,expires,csrf,user_id) VALUES(?,?,?,?)', sessions)
+            _restore_enrollment(target,enrollment)
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('test_mode','true')")
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('safe_mode','true')")
             target.commit()
@@ -154,11 +184,7 @@ def backup():
         target.execute('PRAGMA journal_mode=DELETE')
         target.execute('PRAGMA secure_delete=ON')
         # Exclude credentials and browser sessions from portable backups.
-        target.execute('DELETE FROM wb_accounts')
-        target.execute('DELETE FROM sessions')
-        if target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone():
-            target.execute('DELETE FROM users')
-        target.execute("DELETE FROM app_settings WHERE key='password_hash'")
+        _strip_authentication(target)
         target.commit()
         target.execute('VACUUM')
         if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
@@ -178,16 +204,12 @@ def restore(name):
             raise ValueError('Резервная копия повреждена')
         if not source.execute("SELECT 1 FROM sqlite_master WHERE name='alembic_version'").fetchone():
             raise ValueError('Неизвестный формат резервной копии')
-        if source.execute('SELECT version_num FROM alembic_version').fetchone()[0] not in ('0001','0002','0003','0004','0005','0006','0007'):
+        if source.execute('SELECT version_num FROM alembic_version').fetchone()[0] not in SUPPORTED_BACKUP_REVISIONS:
             raise ValueError('Версия резервной копии не поддерживается')
         backup()
         with closing(sqlite3.connect(DATABASE)) as target:
             source.backup(target)
-            target.execute('DELETE FROM sessions')
-            target.execute('DELETE FROM wb_accounts')
-            if target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'").fetchone():
-                target.execute('DELETE FROM users')
-            target.execute("DELETE FROM app_settings WHERE key='password_hash'")
+            _strip_authentication(target)
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('test_mode','true')")
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('safe_mode','true')")
             target.commit()

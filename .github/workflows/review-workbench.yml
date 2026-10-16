@@ -58,6 +58,10 @@ jobs:
           python -m unittest discover -s backend/tests -p 'test_activity_history.py'
       - name: Verify question VIN display and resync
         run: python -m unittest discover -s backend/tests -p 'test_question_vin.py'
+      - name: Verify complete backend suite on disposable SQLite
+        env:
+          DATABASE_URL: ''
+        run: python -m pytest backend/tests -q -p no:cacheprovider
       - name: Verify simultaneous PostgreSQL editing
         env:
           DATABASE_URL: postgresql+psycopg://test_runner:disposable-test-password@127.0.0.1:5432/wb_workbench_tests

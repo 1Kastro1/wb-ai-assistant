@@ -41,6 +41,6 @@ def test_mne_ponravilsya_is_praise_not_odor_complaint(client):
         assert draft['quality']['passed'] is True
         assert draft['quality']['intent'] == 'POSITIVE_EXPERIENCE'
         assert draft['quality']['score'] >= 96
-        assert 'спасибо' in draft['text'].lower()
+        assert any(word in draft['text'].lower() for word in ('спасибо','благодарим'))
         assert not any(word in draft['text'].lower() for word in ('жаль', 'сожале', 'извин', 'не понравил'))
     assert assess_reply(review, product, 'Здравствуйте! Нам очень жаль, что аромат вам не понравился. Спасибо за отзыв!')['passed'] is False

@@ -14,6 +14,26 @@ class ReviewedKnowledgeTests(unittest.TestCase):
     setUp=WorkbenchTests.setUp
     tearDown=WorkbenchTests.tearDown
 
+    def test_pause_is_scoped_and_keeps_manual_batches(self):
+        from app.db import Job
+        with self.factory() as db:
+            db.add_all([Job(id='legacy-auto',kind='drafts',status='queued',result={}),
+                Job(id='own-auto',kind='drafts',status='queued',result={'account_id':'owner'}),
+                Job(id='foreign-auto',kind='drafts',status='queued',result={'account_id':'other'}),
+                Job(id='manual-batch',kind='drafts',status='queued',result={'account_id':'owner','manual_batch':True})]);db.commit()
+        response=self.client.post('/auto-replies/pause')
+        self.assertEqual(response.status_code,200,response.text)
+        with self.factory() as db:
+            for key in ('legacy-auto','own-auto'):self.assertEqual(db.get(Job,key).status,'cancelled')
+            for key in ('foreign-auto','manual-batch'):self.assertEqual(db.get(Job,key).status,'queued')
+        self.assertIsNone(self.client.get('/auto-replies/status').json()['current_job'])
+
+    def test_invalid_legacy_source_does_not_break_coverage(self):
+        self.seed_knowledge()
+        with self.factory() as db:
+            db.get(Product,'ngk').facts=[{'text':'invalid','source':'https://[broken','verification_status':'VERIFIED'}];db.commit()
+            self.assertEqual(knowledge_report(db,db.get(StoreProfile,'owner'))['with_instructions'],0)
+
     def test_exact_feature_cannot_match_a_similar_article_or_another_brand(self):
         product=Product(id='wiper',brand='DOUBLE FORCE',name='Щетка стеклоочистителя',part_number='DFF12',facts=[])
         items=matching_knowledge(product);self.assertEqual(len(items),1);self.assertIn('300 мм',items[0]['text'])
