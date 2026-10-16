@@ -105,3 +105,15 @@ def test_feature_search_candidates_do_not_become_cached_instructions():
     remember_web_instruction_sources(p, [{'url': 'https://example.com/guide', 'snippet': 'Применение', 'kind': 'instruction'}])
     assert [x['url'] for x in cached_web_instruction_sources(p)] == ['https://example.com/guide']
     assert len(p.facts) == 2
+
+
+def test_exact_article_search_accepts_foreign_language_sources_and_rejects_neighbor_articles():
+    from app.integrations import web_research
+    p = Product(brand='GIGAS', part_number='G0020-001', name='Масло моторное синтетическое для автомобиля 1 литр')
+    results = web_research._normalized_results(p, [
+        {'url': 'https://gigas.example/G0020-001', 'title': 'GIGAS G0020 001 engine oil', 'snippet': 'Specifications'},
+        {'url': 'https://gigas.example/G0020-0010', 'title': 'GIGAS G0020-0010', 'snippet': 'Масло моторное синтетическое для автомобиля'},
+        {'url': 'https://other.example/G0020-001', 'title': 'OTHER G0020-001', 'snippet': 'Engine oil'},
+    ])
+    assert len(results) == 1
+    assert results[0]['url'] == 'https://gigas.example/G0020-001'

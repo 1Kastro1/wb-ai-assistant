@@ -139,6 +139,9 @@ class WebResearchProvider:
 
     def _normalized_results(self, product, items):
         wanted = {x.lower() for x in re.findall(r'[а-яёa-z0-9]{4,}', product.name + ' ' + product.brand, re.I)}
+        article = re.sub(r'[^a-z0-9]', '', str(getattr(product, 'part_number', '') or '').lower())
+        article_pattern = r'(?<![a-z0-9])' + r'[\s._/-]*'.join(re.escape(c) for c in article) + r'(?![a-z0-9])' if len(article) >= 3 else ''
+        brand = re.sub(r'[^а-яёa-z0-9]', '', str(product.brand or '').lower())
         results = []
         for item in items:
             source = urlsplit(item.get('url', ''))
@@ -147,7 +150,10 @@ class WebResearchProvider:
             title, snippet = self.clean(item.get('title', '')), self.clean(item.get('snippet', ''))
             found = {x.lower() for x in re.findall(r'[а-яёa-z0-9]{4,}', title + ' ' + snippet, re.I)}
             score = len(wanted & found)
-            if score >= min(3, max(1, len(wanted))):
+            evidence = title + ' ' + snippet + ' ' + unquote(item['url'])
+            exact = bool(article_pattern and brand and re.search(article_pattern, evidence, re.I)
+                         and brand in re.sub(r'[^а-яёa-z0-9]', '', evidence.lower()))
+            if exact or (not article_pattern and score >= min(3, max(1, len(wanted)))):
                 results.append({'title': title[:300], 'snippet': snippet[:1200], 'url': item['url'], 'host': source.netloc.lower(), 'match_score': score})
         return results[:5]
 
