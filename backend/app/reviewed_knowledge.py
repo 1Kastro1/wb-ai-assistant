@@ -14,9 +14,10 @@ def knowledge_catalog():
 def product_scope(store):
     if not store:return Product.id=='__no_store__'
     if store.provider!='wb':return Product.id.startswith(f'{store.provider}:{store.id}:')
-    listed=select(StoreListing.product_id).where(StoreListing.store_id==store.id,StoreListing.product_id==Product.id).exists()
-    historical=select(Review.id).where(Review.wb_account_id==store.id,Review.product_id==Product.id).exists()
-    return (Product.marketplace=='wb') & or_(listed,historical)
+    listed=select(StoreListing.product_id).where(StoreListing.store_id==store.id)
+    historical=select(Review.product_id).where(Review.wb_account_id==store.id)
+    # Hash/merge the store's IDs once instead of rescanning review history per product.
+    return (Product.marketplace=='wb') & Product.id.in_(listed.union(historical))
 
 
 def product_owned(db,store,product):
