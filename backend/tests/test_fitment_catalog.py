@@ -19,7 +19,7 @@ class FitmentTests(unittest.TestCase):
     def seed(self,text=None):
         with self.factory() as db:
             db.add_all([Product(id='100001',name='Фильтр масляный',brand='NITTO',category='Масляные фильтры'),Product(id='100002',name='Фильтр масляный другой',brand='NITTO',category='Масляные фильтры'),Product(id='100003',name='Чужой фильтр',brand='NITTO',category='Масляные фильтры')]);db.flush()
-            db.add_all([Review(id='fit-q',wb_review_id='fit-q',product_id='100001',rating=0,text=text or 'Подойдет на Suzuki? '+VIN,marketplace='wb_question',wb_account_id='owner'),StoreListing(store_id='owner',product_id='100002'),StoreListing(store_id='other',product_id='100003')]);db.commit()
+            db.add_all([Review(id='fit-q',wb_review_id='fit-q',product_id='100001',rating=0,text=text or 'Подойдет на Suzuki? '+VIN,marketplace='wb_question',wb_account_id='owner'),StoreListing(store_id='owner',product_id='100001'),StoreListing(store_id='owner',product_id='100002'),StoreListing(store_id='other',product_id='100003')]);db.commit()
 
     def row(self,**extra):
         return dict(brand='NITTO',part_number='00123',wb_nm_id='100001',category='Масляные фильтры',vin=VIN,fit='да',**extra)
