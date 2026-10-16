@@ -181,7 +181,7 @@ def cached_web_instruction_sources(product):
     cutoff = datetime.now(timezone.utc) - timedelta(days=WEB_FACT_MAX_AGE_DAYS)
     results = []
     for fact in product.facts or []:
-        if fact.get('verification_status') != 'WEB_UNVERIFIED' or not fact.get('source'):
+        if fact.get('verification_status') != 'WEB_UNVERIFIED' or not fact.get('source') or fact.get('kind') == 'feature':
             continue
         try:
             researched_at = datetime.fromisoformat(fact.get('researched_at', ''))
@@ -197,7 +197,9 @@ def cached_web_instruction_sources(product):
 
 def remember_web_instruction_sources(product, sources):
     incoming = {source.get('url') for source in sources}
-    preserved = [f for f in (product.facts or []) if f.get('verification_status') != 'WEB_UNVERIFIED' or f.get('source') not in incoming]
+    verified = [f for f in (product.facts or []) if f.get('verification_status') != 'WEB_UNVERIFIED']
+    candidates = [f for f in (product.facts or []) if f.get('verification_status') == 'WEB_UNVERIFIED' and f.get('source') not in incoming]
+    preserved = verified + candidates[-20:]
     product.facts = preserved + [{
         'text': source.get('snippet', ''),
         'title': source.get('title', ''),

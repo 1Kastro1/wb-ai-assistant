@@ -1701,6 +1701,7 @@ async def research_product(pid: str, auth: MARKET_OPERATOR, db: DB):
     for item in sources:
         unique_sources.setdefault(item['url'], item)
     sources = list(unique_sources.values())
+    db.refresh(product)
     if sources:
         remember_web_instruction_sources(product, sources)
         db.commit()

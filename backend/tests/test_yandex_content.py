@@ -95,3 +95,13 @@ def test_research_still_finds_details_when_instruction_already_exists(client, se
     assert result['message']
     assert result['product']['facts'][-1]['kind'] == 'feature'
     assert result['product']['facts'][-1]['verification_status'] == 'WEB_UNVERIFIED'
+
+
+def test_feature_search_candidates_do_not_become_cached_instructions():
+    from app.services import cached_web_instruction_sources, remember_web_instruction_sources
+    p = Product(id='cache', facts=[])
+    remember_web_instruction_sources(p, [{'url': 'https://example.com/spec', 'snippet': 'Размеры', 'kind': 'feature'}])
+    assert cached_web_instruction_sources(p) == []
+    remember_web_instruction_sources(p, [{'url': 'https://example.com/guide', 'snippet': 'Применение', 'kind': 'instruction'}])
+    assert [x['url'] for x in cached_web_instruction_sources(p)] == ['https://example.com/guide']
+    assert len(p.facts) == 2
