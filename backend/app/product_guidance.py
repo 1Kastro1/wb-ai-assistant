@@ -81,7 +81,7 @@ def usage_excerpt(facts):
 
 
 def product_usage_reply(review, product, facts, revision=0):
-    from .reply_policy import analyze_customer_message
+    from .reply_policy import analyze_customer_message, faded_scent
     analysis = analyze_customer_message(review.text, review.rating)
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
