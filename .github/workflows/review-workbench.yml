@@ -48,6 +48,7 @@ jobs:
         run: |
           python -m unittest discover -s backend/tests -p 'test_owner_review_cases.py'
           python -m unittest discover -s backend/tests -p 'test_product_guidance.py'
+          python -m unittest discover -s backend/tests -p 'test_workspace_tools.py'
           python -m unittest discover -s backend/tests -p 'test_review_workbench.py'
           python -m unittest discover -s backend/tests -p 'test_fitment_catalog.py'
           python -m unittest discover -s backend/tests -p 'test_internet_fitment.py'

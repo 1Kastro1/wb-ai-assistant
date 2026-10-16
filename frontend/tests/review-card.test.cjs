@@ -8,7 +8,7 @@ const {renderToStaticMarkup}=require('react-dom/server');
 function loadComponent(file,source=fs.readFileSync(file,'utf8')){
  const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
  const moduleObject={exports:{}};
- const localRequire=name=>{if(!name.startsWith('.'))return require(name);const target=path.resolve(path.dirname(file),name);return loadComponent(fs.existsSync(target)?target:target+'.tsx')};
+ const localRequire=name=>{if(!name.startsWith('.'))return require(name);const target=path.resolve(path.dirname(file),name);return loadComponent([target,target+'.tsx',target+'.ts',target+'.mjs'].find(file=>fs.existsSync(file))||target)};
  new Function('require','module','exports',compiled)(localRequire,moduleObject,moduleObject.exports);
  return moduleObject.exports;
 }
@@ -33,12 +33,19 @@ test('review header keeps scheduling details collapsed and controls permission-a
 test('product knowledge card renders its own thumbnail',()=>{
  const file=path.join(__dirname,'../app/page.tsx'),page=fs.readFileSync(file,'utf8');
  const start=page.indexOf('function ProductKnowledgeCard('),end=page.indexOf('\nfunction reviewIntent',start);
- const fragment="import {useState,useEffect} from 'react'; import ProductThumbnail from './ProductThumbnail'; type Row=Record<string,any>;"+page.slice(start,end)+';export default ProductKnowledgeCard;';
+ const fragment="import {useState,useEffect} from 'react'; import ProductThumbnail from './ProductThumbnail'; import {ProductFacts,trustedProductFact} from './ProductLibrary'; type Row=Record<string,any>;"+page.slice(start,end)+';export default ProductKnowledgeCard;';
  const KnowledgeCard=loadComponent(file,fragment).default;
  const html=renderToStaticMarkup(React.createElement(KnowledgeCard,{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp',facts:[]},busy:false,owner:false,canManage:true,onDiscuss(){},onRefresh(){},onRun(){}}));
  assert(html.includes('src="https://example.com/card.webp"'));
  assert(html.includes('product-identity'));
- const otherStart=page.indexOf('function SyncStatus'),otherEnd=page.indexOf('function QuestionCard',otherStart);
+ const otherStart=page.indexOf('function SyncStatus'),otherEnd=page.indexOf('function ActionCard',otherStart);
  assert(otherStart>=0&&otherEnd>otherStart);
- assert(!page.slice(otherStart,otherEnd).includes('ProductThumbnail'));
+ assert(!page.slice(otherStart,page.indexOf('function ProductKnowledgeCard',otherStart)).includes('ProductThumbnail'));
 });
+
+const Question=loadComponent(path.join(__dirname,'../app/QuestionCard.tsx')).default;
+function renderQuestion(overrides={}){return renderToStaticMarkup(React.createElement(Question,{question:{id:'q',product_id:'42',product:{name:'Фильтр',brand:'NITTO'},text:'Подойдет? TSMJYBA2S00828853',created_at:'2026-10-16',draft:{id:'d',text:'Добрый день! Вам подойдет данный товар.',revision:1,quality:{passed:true,fitment:{status:'FIT'}}}},checked:false,toggle(){},busy:false,assistantEnabled:true,canManage:true,generating:false,generationError:'',generate(){},save:async()=>({}),publish:async()=>{},storageKey:'question-test',...overrides}))}
+test('question cards defer editors until opened and keep vehicle data out of preview answers',()=>{const html=renderQuestion();assert(!html.includes('textarea'));assert(html.includes('Открыть ответ'));assert(html.includes('Готов к отправке'))});
+test('question generation retains saved text with a disabled editor',()=>{const html=renderQuestion({generating:true});assert(html.includes('Вам подойдет данный товар'));assert(/textarea[^>]+disabled/.test(html));assert(html.includes('VIN'));assert(html.includes('Подготовить публикацию'))});
+test('question publication is permission-aware',()=>{const html=renderQuestion({generating:true,canManage:false});assert(/button[^>]+disabled[^>]*>Подготовить публикацию/.test(html))});
+test('instruction indicator rejects untrusted verified URLs',()=>{const {instructionState}=loadComponent(path.join(__dirname,'../app/ProductLibrary.tsx'));assert.equal(instructionState({facts:[{kind:'instruction',verification_status:'VERIFIED',source:'https://untrusted.test'}]}).tone,'neutral');assert.equal(instructionState({facts:[{kind:'instruction',verification_status:'VERIFIED',source:'Карточка товара'}]}).tone,'green')});

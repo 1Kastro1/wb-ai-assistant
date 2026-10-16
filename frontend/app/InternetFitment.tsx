@@ -1,6 +1,7 @@
 'use client';
 import {useEffect,useState} from 'react';
 import {api} from './client';
+import ProductThumbnail from './ProductThumbnail';
 import FitmentConfirmation from './FitmentConfirmation';
 import {vehicleIdentifiers} from './vehicleIdentifiers';
 type Row=Record<string,any>;
@@ -21,8 +22,8 @@ export default function InternetFitment({question,initial,canManage,onChooseOEM,
  {result.vehicle?.make&&<p>Автомобиль: {[result.vehicle.make,result.vehicle.model,result.vehicle.year,result.vehicle.engine_code,result.vehicle.body].filter(Boolean).join(' · ')}. {!result.vehicle.complete&&'Расшифровка неполная — требуется уточнение.'}</p>}
  {result.vehicles?.length>1&&<ul>{result.vehicles.map((v:Row,i:number)=><li key={i}>{v.make} {v.name}</li>)}</ul>}
  {result.oem_candidates?.length>0&&<><h4>Оригинальные номера из каталога</h4>{result.oem_candidates.map((p:Row,i:number)=><p key={i}><b>{p.oe_brand} {p.oe_number}</b> · {p.description} · <a href={p.source} target="_blank" rel="noopener noreferrer">Источник ↗</a>{result.status!=='FOUND'&&' · требуется проверка'}{onChooseOEM&&<button onClick={()=>onChooseOEM(p)}>Перенести OEM в форму проверки</button>}</p>)}</>}
- {result.our_candidates?.length>0&&<><h4>Наши аналоги для проверки</h4>{result.our_candidates.map((p:Row)=><p key={p.wb_nm_id}>{p.brand} {p.part_number} · <a href={'https://www.wildberries.ru/catalog/'+p.wb_nm_id+'/detail.aspx'} target="_blank" rel="noopener noreferrer">WB {p.wb_nm_id} ↗</a></p>)}</>}
- {result.status==='FOUND'&&<p>Результат сохранён. Нажмите «Подобрать лучший ответ», чтобы использовать актуальные сведения в черновике.</p>}
+ {result.our_candidates?.length>0&&<><h4>Наши аналоги для проверки</h4>{result.our_candidates.map((p:Row)=><div className="catalog-candidate" key={p.wb_nm_id}><ProductThumbnail product={{...p,name:p.name||[p.brand,p.part_number].join(" ")}}/><div className="candidate-copy"><b>{p.brand} {p.part_number}</b><small>{p.name||"Товар магазина · совместимость требует подтверждения"}</small><a href={'https://www.wildberries.ru/catalog/'+p.wb_nm_id+'/detail.aspx'} target="_blank" rel="noopener noreferrer">WB {p.wb_nm_id} ↗</a></div></div>)}</>}
+ {result.status==='FOUND'&&<p>Результат сохранён. Нажмите «Новый вариант», чтобы использовать актуальные сведения в черновике.</p>}
  {vins.length===1&&<p><a href={'https://partsouq.com/en/search/all?q='+encodeURIComponent(vins[0])} target="_blank" rel="noopener noreferrer">Открыть VIN / Frame в PartSouq ↗</a> · <a href={'https://uniqom.ru/original-catalogs?identString='+encodeURIComponent(vins[0])} target="_blank" rel="noopener noreferrer">Открыть UNIQOM ↗</a></p>}
  <small>UNIQOM доступен через Ваш вход в браузере. Сервер не использует эту авторизацию. Если каталог требует входа или выбора модификации, сохраните проверенный подбор ниже. Отсутствие результата поиска не означает отсутствие товара.</small>
  {canManage&&result.can_confirm&&result.product&&vins.length===1&&<FitmentConfirmation question={question} product={result.product} onSaved={()=>{refresh().catch(()=>setError('Подбор сохранён, но историю не удалось обновить. Откройте раздел повторно.'));onSaved?.()}}/>}
