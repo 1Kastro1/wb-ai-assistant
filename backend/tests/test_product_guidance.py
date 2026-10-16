@@ -47,12 +47,21 @@ class ProductGuidanceTests(unittest.TestCase):
         self.product.name, self.product.brand = 'Air Spencer банка A9', 'EIKOSHA'
         for complaint in ('Слабый запах', 'Почти не пахнет', 'Запах не чувствуется'):
             self.review.text = complaint
-            answer = rule_reply(self.review, self.product, facts=[])
+            answer = rule_reply(self.review, self.product, facts=[{'kind':'vent_holder','verification_status':'VERIFIED','wb_nm_id':'58434122'}])
+            self.assertIn('58434122', answer)
             self.assertIn('дефлекторе', answer)
             self.assertIn('держател', answer)
             self.assertIn('баночку', answer)
             self.assertNotIn('мягким', answer)
             validate_reply(answer)
+
+    def test_missing_holder_id_does_not_invent_accessory(self):
+        self.product.name, self.product.brand = 'Air Spencer банка A9', 'EIKOSHA'
+        self.review.text = 'Слабый запах'
+        answer = rule_reply(self.review, self.product, facts=[])
+        self.assertIn('подстаканнике', answer)
+        self.assertNotIn('держател', answer)
+        self.assertNotIn('артикул', answer)
 
     def test_disliked_fragrance_offers_individual_choice(self):
         self.product.name, self.product.brand = 'Ароматизатор EIKOSHA', 'EIKOSHA'

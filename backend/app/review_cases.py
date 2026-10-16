@@ -9,7 +9,7 @@ MOOG = 'https://www.moogparts.com/technical/bulletins/tech-tips/using-proper-stu
 
 def specific_review_case(review, product):
     text = ' '.join((review.text or '').lower().replace('ё', 'е').split())
-    name = (product.name + ' ' + product.category).lower()
+    name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     analysis = analyze_customer_message(review.text, review.rating)
     thanks = 'Добрый день! Спасибо за отзыв. '
     def result(key, answer, url='', evidence=''):
@@ -44,7 +44,7 @@ def specific_review_case(review, product):
     if 'галоген' in name and 'ламп' in name and re.search(r'прозрачн\w*\s+стекл|прозрачн\w*\s+колб|где\s+там\s+галоген', text):
         return result('clear_halogen', 'Извините, что свет не оправдал Ваших ожиданий. Прозрачная стеклянная колба для стандартной галогенной лампы — обычное исполнение: «галогенная» означает газовое наполнение внутри колбы, а не цвет стекла. Синее покрытие не является обязательным признаком галогенной лампы; у этой модели в карточке указана цветовая температура 3200 K, то есть тёплый оттенок света.' if '3200' in name else 'Извините, что лампа не оправдала Ваших ожиданий. Прозрачная колба допустима для галогенной лампы: её название относится к газовому наполнению, а не цвету стекла. Синее покрытие не обязательно; оттенок и яркость следует оценивать по характеристикам конкретной модели.', HELLA, 'HELLA: в колбе галогенной лампы находится галогенный газ и вольфрамовая нить; окраска колбы не определяет тип лампы.')
 
-    praise = re.search(r'\b(?:чудесн\w*|прекрасн\w*|отличн\w*|понравил\w*|замечательн\w*|рекомендую|супер)\b', text)
+    praise = re.search(r'\b(?:чудесн\w*|прекрасн\w*|отличн\w*|хорош\w*|великолепн\w*|понравил\w*|замечательн\w*|рекомендую|супер)\b', text)
     negative = re.search(r'\bне\b|\bно\b|плох|разочар|недовол|скрип|свист|слом|дефект|жаль|тускл|исчез|пропал|перестал', text)
     if review.rating <= 2 and praise and not negative and not analysis['complaints']:
         detail = 'Рады, что Вам понравился аромат средства.' if re.search(r'аромат|запах', text) else 'Рады, что Вы остались довольны товаром.'
