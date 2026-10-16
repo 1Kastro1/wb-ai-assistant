@@ -64,6 +64,7 @@ class AssortmentTests(unittest.TestCase):
 
     def test_generation_and_repeated_generation_do_not_call_model_or_fall_back(self):
         self.seed('А яблочного запаха нет?')
+        with self.factory() as db:db.get(Product,'200001').name='Сменный картридж PINK SHOWER V-90';db.commit()
         with self.factory() as db, patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
             for _ in range(2):
                 draft=asyncio.run(generate_question_draft(db,db.get(Review,'assort-q')))

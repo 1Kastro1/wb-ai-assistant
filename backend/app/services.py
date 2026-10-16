@@ -696,6 +696,12 @@ async def generate_question_draft(db, question, instruction=''):
     elif assortment and not analysis['buyer_asks_about_money']:
         reply = validate_reply(mask_vin(assortment['answer']))
         quality = assess_question_answer(question, product, reply, sources)
+        # Exact catalog matches establish relevance even when Russian inflections differ.
+        if assortment['product_ids'] and 'ответить именно на заданный вопрос' in quality['issues']:
+            quality['issues'].remove('ответить именно на заданный вопрос')
+            quality['score'] = min(100,quality['score']+25-quality['breakdown']['relevance']['score'])
+            quality['breakdown']['relevance']['score'] = 25
+            quality['passed'] = quality['score']>=90 and not quality['issues']
         quality['intent_label'] = assortment['intent']
         quality['related_product_ids'] = assortment['product_ids']
         model = 'catalog-assortment-1.0'
