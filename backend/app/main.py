@@ -36,6 +36,7 @@ from .maintenance import backup, portable_backup, portable_restore, portable_ver
 from . import voice
 from .activity_history import activity_page, rule_details
 from .generation_monitor import generation_metrics
+from .reviewed_knowledge import product_scope,product_owned,knowledge_report,refresh_reviewed_knowledge
 from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vehicle_identifiers, vin_key, oem_numbers, fitment_answer, save_question_evidence
 
 
@@ -1535,21 +1536,36 @@ def question_stats(auth: AUTH, db: DB):
 @app.get('/products')
 def products(auth: AUTH, db: DB, q: str = ''):
     store = db.get(StoreProfile, active_store(db, auth))
-    scope = Product.marketplace == 'wb' if not store or store.provider == 'wb' else Product.id.startswith(f'{store.provider}:{store.id}:')
+    scope = product_scope(store)
     return [public(p) for p in db.scalars(select(Product).where(scope, Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True)).limit(200))]
+
+
+@app.get('/products/knowledge')
+def product_knowledge_report(auth: AUTH,db: DB):
+    return knowledge_report(db,db.get(StoreProfile,active_store(db,auth)))
+
+
+@app.post('/products/knowledge/refresh')
+async def product_knowledge_refresh(request: Request,auth: OWNER,db: DB):
+    store=db.get(StoreProfile,active_store(db,auth))
+    if not store:raise HTTPException(404,'Магазин не выбран')
+    result=await asyncio.to_thread(refresh_reviewed_knowledge,db,store)
+    request.state.activity_details={'event':'product_knowledge_refreshed','changed_products':result['changed_products'],'added_facts':result['added_facts']}
+    return result
 
 
 @app.get('/products/page')
 def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset: int = 0):
     limit, offset = min(200, max(1, limit)), max(0, offset)
     store = db.get(StoreProfile, active_store(db, auth))
-    scope = Product.marketplace == 'wb' if not store or store.provider == 'wb' else Product.id.startswith(f'{store.provider}:{store.id}:')
+    scope = product_scope(store)
     query = select(Product).where(scope)
     count_query = select(func.count()).select_from(Product).where(scope)
     if q:
         condition = Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True) | Product.category.contains(q, autoescape=True)
         query, count_query = query.where(condition), count_query.where(condition)
-    items = [{**public(p), 'official_domain': setting(db, f'official_domain:{p.id}', '')}
+    domains={row.key.removeprefix('official_domain:'):row.value for row in db.scalars(select(Setting).where(Setting.key.startswith('official_domain:')))}
+    items = [{**public(p), 'official_domain': domains.get(p.id, '')}
              for p in db.scalars(query.order_by(Product.name, Product.id).offset(offset).limit(limit))]
     total = db.scalar(count_query) or 0
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total}
@@ -1583,7 +1599,7 @@ def official_source(db, product, source):
 def product_official_domain(pid: str, body: OfficialDomain, auth: OWNER, db: DB):
     store = db.get(StoreProfile, active_store(db, auth))
     product = db.get(Product, pid)
-    if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
+    if not product_owned(db,store,product):
         raise HTTPException(404, 'Товар не найден')
     raw = body.domain.strip().lower()
     parsed = urlsplit(raw if '://' in raw else 'https://' + raw)
@@ -1601,7 +1617,7 @@ def product_fact(pid: str, body: Fact, auth: OWNER, db: DB):
     store = db.get(StoreProfile, store_id)
     can_operate_store(auth, store)
     product = db.get(Product, pid)
-    if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
+    if not product_owned(db,store,product):
         raise HTTPException(404)
     if body.source != 'Карточка товара' and not official_source(db, product, body.source):
         raise ValueError('Источник должен быть карточкой товара или страницей на подтверждённом домене производителя')
@@ -1616,12 +1632,13 @@ async def research_product(pid: str, auth: MARKET_OPERATOR, db: DB):
     store = db.get(StoreProfile, store_id)
     can_operate_store(auth, store)
     product = db.get(Product, pid)
-    if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
+    if not product_owned(db,store,product):
         raise HTTPException(404, 'Товар не найден')
     saved = attach_verified_instructions(db, product)
-    if saved or any(f.get('catalog_instruction') for f in product.facts or []):
+    from .services import trusted_product_facts
+    if saved or any(f.get('kind')=='instruction' for f in trusted_product_facts(db,product)):
         db.commit()
-        return {'product': public(product), 'found': saved, 'saved_instructions': saved, 'verified_instructions': True}
+        return {'product': public(product), 'found': saved, 'saved_instructions': saved, 'verified_instructions': any(f.get('kind')=='instruction' and f.get('verification_status')=='VERIFIED' for f in product.facts or [])}
     instruction_sources = await web_research.search_instructions(product, db)
     detail_sources = await web_research.search_instructions(product, db, 'характеристики состав комплектация')
     sources = list({item['url']: item for item in instruction_sources + detail_sources}.values())
@@ -1636,7 +1653,7 @@ def verify_product_fact(pid: str, fact_index: int, auth: OWNER, db: DB):
     store_id = active_store(db, auth)
     store = db.get(StoreProfile, store_id)
     product = db.get(Product, pid)
-    if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
+    if not product_owned(db,store,product):
         raise HTTPException(404, 'Товар не найден')
     facts = list(product.facts or [])
     if fact_index < 0 or fact_index >= len(facts):
@@ -1659,7 +1676,7 @@ def product_fact_delete(pid: str, fact_index: int, auth: MARKET_OPERATOR, db: DB
     store = db.get(StoreProfile, store_id)
     can_operate_store(auth, store)
     product = db.get(Product, pid)
-    if not product or (store.provider != 'wb' and not pid.startswith(f'{store.provider}:{store.id}:')) or (store.provider == 'wb' and product.marketplace != 'wb'):
+    if not product_owned(db,store,product):
         raise HTTPException(404, 'Товар не найден')
     facts = list(product.facts or [])
     if fact_index < 0 or fact_index >= len(facts):
@@ -2082,7 +2099,7 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
     from .services import trusted_product_facts,assess_reply
     product=db.get(Product,body.product_id) if body.product_id else Product(id='preview',name='Товар',brand='',category='',facts=[])
     if not product:raise HTTPException(404,'Товар не найден')
-    if body.product_id and not db.scalar(select(StoreListing).where(StoreListing.product_id==product.id,StoreListing.store_id==active_store(db,auth))):raise HTTPException(404,'Товар не найден в выбранном магазине')
+    if body.product_id and not product_owned(db,db.get(StoreProfile,active_store(db,auth)),product):raise HTTPException(404,'Товар не найден в выбранном магазине')
     facts=trusted_product_facts(db,product) if body.product_id else []
     review=Review(id='preview',product_id=product.id,rating=body.rating,text=body.example,risk=classify(body.example,product.name+' '+product.category)['risk'])
     reply=rule_reply(review,product,facts=facts)

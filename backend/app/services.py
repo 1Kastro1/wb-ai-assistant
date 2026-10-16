@@ -205,6 +205,12 @@ def remember_web_instruction_sources(product, sources):
     } for source in sources]
 
 
+def manual_review_condition():
+    return (Review.is_answered == False) & or_(Review.rating <= 3, Review.manual == True,
+        Review.risk != 'NORMAL', Review.status == 'manual_review',
+        Draft.quality['passed'].as_boolean() == False, Draft.model.startswith('safety-fallback'))
+
+
 def _review_query(filters):
     view = filters.get('view', 'all')
     query = select(Review).join(Product)
@@ -242,9 +248,7 @@ def _review_query(filters):
             raise ValueError('Выберите не более 200 отзывов')
         conditions.append(Review.id.in_(ids))
     elif view == 'manual':
-        conditions.append(or_(Review.manual == True, Review.status == 'manual_review',
-                              Draft.quality['passed'].as_boolean() == False,
-                              Draft.model.startswith('safety-fallback')))
+        conditions.append(manual_review_condition())
     elif view in ('wrong_item', 'no_effect', 'odor'):
         # Match the visible topic labels and review text before pagination.
         topic_text = func.coalesce(Draft.quality['intent_label'].as_string(), '') + ' ' + Review.text
@@ -303,8 +307,7 @@ def reviews_page(db, **filters):
 def review_filter_counts(db, q='', account_id=''):
     query = _review_query({'q':q, 'account_id':account_id}).outerjoin(Draft, Draft.review_id == Review.id)
     empty_text = func.trim(func.replace(func.replace(func.replace(func.coalesce(Review.text, ''), '\n', ''), '\r', ''), '\t', '')) == ''
-    manual = or_(Review.manual == True, Review.status == 'manual_review',
-                 Draft.quality['passed'].as_boolean() == False, Draft.model.startswith('safety-fallback'))
+    manual = manual_review_condition()
     values = db.execute(query.with_only_columns(func.count(),
         func.sum(case((Review.rating.between(4, 5), 1), else_=0)),
         func.sum(case((Review.rating.between(1, 3), 1), else_=0)),
@@ -488,10 +491,10 @@ def analytics(db, days=0, product_id='', account_id=''):
         func.count(),
         func.sum(case((Review.is_answered == False, 1), else_=0)),
         func.sum(case((Review.rating <= 3, 1), else_=0)),
-        func.sum(case((((Review.manual == True) | (Review.rating <= 3) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review')) & (Review.is_answered == False), 1), else_=0)),
+        func.sum(case((manual_review_condition(), 1), else_=0)),
         func.sum(case((Review.is_answered == True, 1), else_=0)),
         func.avg(Review.rating),
-    ).select_from(Review).where(*filters)
+    ).select_from(Review).outerjoin(Draft,Draft.review_id==Review.id).where(*filters)
     total, unanswered, negative, manual, published, average = db.execute(aggregate).one()
     topic_where = ["r.marketplace NOT LIKE '%_question'"]
     topic_params = {}

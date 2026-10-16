@@ -1,0 +1,772 @@
+[
+  {
+    "id": "ngk-spark-install",
+    "brand": "NGK",
+    "name_pattern": "^(?:свеч[аи]|комплект свечей)\\s+зажигания",
+    "url": "https://ngksparkplugs.com/en/resources/spark-plug-installation",
+    "kind": "instruction",
+    "scope": "brand_category",
+    "text": "Общая инструкция NGK для свечей зажигания: заменяйте свечи на остывшем двигателе. Очистите свечные колодцы и посадочные места, не допуская попадания загрязнений в цилиндр. Сначала заверните свечу от руки без перекоса, затем затяните динамометрическим ключом. Момент затяжки выбирают по руководству двигателя с учётом резьбы и типа посадки; единого значения для всех свечей нет.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "denso-spark-install",
+    "brand": "DENSO",
+    "name_pattern": "^(?:свеч[аи]|комплект свечей)\\s+зажигания",
+    "url": "https://am.denso.com/plug-global/precaution/",
+    "kind": "instruction",
+    "scope": "brand_category",
+    "text": "Общая инструкция DENSO для свечей зажигания: очистите посадочное место, не допуская попадания масла и грязи в двигатель. Держите свечу вертикально и сначала заверните её от руки. Применяйте свечной ключ подходящего размера, удерживая его без перекоса. Момент затяжки и особенности монтажа сверяйте с руководством автомобиля. Не наносите смазку на резьбу: это может привести к перетяжке; для специальных предварительно смазанных свечей действуют указания производителя.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kyb-shock-install",
+    "brand": "KYB",
+    "name_pattern": "^(?:амортизатор|стойка амортизац)",
+    "url": "https://www.kyb.com/resources/shocks-struts-101/for-service-pros/pro-installation-tips/",
+    "kind": "instruction",
+    "scope": "brand_category",
+    "text": "Общие рекомендации KYB по установке амортизаторов: если в комплекте есть новая гайка штока, используйте её вместо старой. Не зажимайте полированную поверхность штока пассатижами или тисками: повреждение поверхности может вызвать износ уплотнения и течь. Для гайки штока используйте динамометрический ключ и предусмотренное удержание штока. Конкретный момент затяжки и порядок монтажа определяются руководством автомобиля и инструкцией к артикулу.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "koito-halogen-handling",
+    "brand": "KOITO",
+    "name_pattern": "^ламп[аы].*галоген",
+    "url": "https://www.sp.koito.co.jp/support/caution.html",
+    "kind": "instruction",
+    "scope": "brand_category",
+    "text": "Общие правила KOITO для галогенных ламп: выключите освещение и дождитесь полного остывания лампы. Перед заменой сравните цоколь, напряжение и мощность с требуемыми автомобилю. Не допускайте ударов, царапин, попадания воды, масла и загрязнений на колбу. Установите лампу в правильном положении и надёжно закрепите в патроне; провода не должны касаться стекла.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "advics-disc-bedding",
+    "brand": "ADVICS",
+    "name_pattern": "^(?:колодки тормозные|тормозные колодки|тормозной диск|диск тормозной)",
+    "url": "https://www.advicsaftermarket.com/technical-resources/tech-tips/advics-how-to-bedding-in-brake-rotors-brake-pads/",
+    "kind": "instruction",
+    "scope": "brand_category",
+    "text": "Общие рекомендации ADVICS для дисковых колодок и тормозных дисков: новые фрикционные поверхности требуют правильной притирки после установки. До неё проверьте состояние, толщину, биение и чистоту дисков по нормам автомобиля. Порядок монтажа и притирки сверяйте с документацией производителя для автомобиля и установленного комплекта. Шум и вибрация могут быть связаны с другими неисправностями; при признаках небезопасного торможения нужна проверка системы до дальнейшей эксплуатации.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-320409",
+    "brand": "KANGAROO",
+    "part_number": "320409",
+    "url": "https://kangaru.ru/product/profoam_2000",
+    "text": "Profoam 2000: универсальный очиститель для пластиковых поверхностей и обивки из кожзаменителя. Предназначен для удаления жирных загрязнений, следов наклеек и технической смазки.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-320454",
+    "brand": "KANGAROO",
+    "part_number": "320454",
+    "url": "https://kangaru.ru/product/profoam_3000",
+    "text": "Profoam 3000: очиститель интерьера для ткани, велюра, ковровых покрытий и пластика. Применяется для удаления грязи и жирных пятен, в том числе при бытовой чистке мебели и ковров.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-320492",
+    "brand": "KANGAROO",
+    "part_number": "320492",
+    "url": "https://kangaru.ru/product/profoam_4000",
+    "text": "Profoam 4000: пенный очиститель тканевой обивки, сидений, ковровых покрытий и велюра. Форма выпуска — 780 мл.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-321499",
+    "brand": "KANGAROO",
+    "part_number": "321499",
+    "url": "https://kangaru.ru/product/profoam_4000_600_ml",
+    "text": "Profoam 4000+: пятновыводитель для текстиля, тканевой обивки, мебели и ковров; 600 мл. Предназначен для жировых, органических загрязнений и следов животных.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-320423",
+    "brand": "KANGAROO",
+    "part_number": "320423",
+    "url": "https://kangaru.ru/product/profoam_1000",
+    "text": "Profoam 1000: очиститель сильных загрязнений двигателя, запчастей и технических деталей. На пластиковых и окрашенных поверхностях производитель предупреждает о возможности пятен.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-331207",
+    "brand": "KANGAROO",
+    "part_number": "331207",
+    "url": "https://kangaru.ru/product/tar-pitch_cleaner",
+    "text": "Tar-Pitch Cleaner: очиститель смолы, гудрона и дорожных загрязнений кузова; 400 мл.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-331214",
+    "brand": "KANGAROO",
+    "part_number": "331214",
+    "url": "https://kangaru.ru/product/scotch_remover",
+    "text": "Scotch Remover: средство на основе цитрусовых масел для удаления следов этикеток, клея, чернил и смолы; 420 мл. Перед обработкой требуется проба на небольшом участке.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "kangaroo-feature-250812",
+    "brand": "KANGAROO",
+    "part_number": "250812",
+    "url": "https://kangaru.ru/product/leather_cleaner",
+    "text": "Leather Cleaner: очиститель кожаных поверхностей салона и предметов интерьера; 300 мл. Не предназначен для замши и других ворсистых кожаных поверхностей.",
+    "kind": "feature",
+    "scope": "article",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW11",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW11",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW11: зимняя; длина по размерной таблице производителя — 275 мм (11 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW12",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW12",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW12: зимняя; длина по размерной таблице производителя — 300 мм (12 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW13",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW13",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW13: зимняя; длина по размерной таблице производителя — 325 мм (13 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW14",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW14",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW14: зимняя; длина по размерной таблице производителя — 350 мм (14 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW15",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW15",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW15: зимняя; длина по размерной таблице производителя — 375 мм (15 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW16",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW16",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW16: зимняя; длина по размерной таблице производителя — 400 мм (16 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW17",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW17",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW17: зимняя; длина по размерной таблице производителя — 425 мм (17 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW18",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW18",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW18: зимняя; длина по размерной таблице производителя — 450 мм (18 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW19",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW19",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW19: зимняя; длина по размерной таблице производителя — 475 мм (19 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW20",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW20",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW20: зимняя; длина по размерной таблице производителя — 500 мм (20 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW21",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW21",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW21: зимняя; длина по размерной таблице производителя — 525 мм (21 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW22",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW22",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW22: зимняя; длина по размерной таблице производителя — 550 мм (22 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW24",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW24",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW24: зимняя; длина по размерной таблице производителя — 600 мм (24 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW26",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW26",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW26: зимняя; длина по размерной таблице производителя — 650 мм (26 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFW28",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFW28",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFW28: зимняя; длина по размерной таблице производителя — 700 мм (28 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM11",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM11",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM11: каркасная; длина по размерной таблице производителя — 275 мм (11 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM12",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM12",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM12: каркасная; длина по размерной таблице производителя — 300 мм (12 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM13",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM13",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM13: каркасная; длина по размерной таблице производителя — 325 мм (13 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM14",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM14",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM14: каркасная; длина по размерной таблице производителя — 350 мм (14 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM15",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM15",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM15: каркасная; длина по размерной таблице производителя — 375 мм (15 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM16",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM16",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM16: каркасная; длина по размерной таблице производителя — 400 мм (16 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM17",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM17",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM17: каркасная; длина по размерной таблице производителя — 425 мм (17 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM18",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM18",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM18: каркасная; длина по размерной таблице производителя — 450 мм (18 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM19",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM19",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM19: каркасная; длина по размерной таблице производителя — 475 мм (19 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM20",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM20",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM20: каркасная; длина по размерной таблице производителя — 500 мм (20 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM21",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM21",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM21: каркасная; длина по размерной таблице производителя — 525 мм (21 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM22",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM22",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM22: каркасная; длина по размерной таблице производителя — 550 мм (22 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM24",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM24",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM24: каркасная; длина по размерной таблице производителя — 600 мм (24 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM26",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM26",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM26: каркасная; длина по размерной таблице производителя — 650 мм (26 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFM28",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFM28",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFM28: каркасная; длина по размерной таблице производителя — 700 мм (28 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF11",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF11",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF11: бескаркасная; длина по размерной таблице производителя — 275 мм (11 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF12",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF12",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF12: бескаркасная; длина по размерной таблице производителя — 300 мм (12 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF13",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF13",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF13: бескаркасная; длина по размерной таблице производителя — 325 мм (13 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF14",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF14",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF14: бескаркасная; длина по размерной таблице производителя — 350 мм (14 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF15",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF15",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF15: бескаркасная; длина по размерной таблице производителя — 375 мм (15 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF16",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF16",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF16: бескаркасная; длина по размерной таблице производителя — 400 мм (16 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF17",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF17",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF17: бескаркасная; длина по размерной таблице производителя — 425 мм (17 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF18",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF18",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF18: бескаркасная; длина по размерной таблице производителя — 450 мм (18 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF19",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF19",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF19: бескаркасная; длина по размерной таблице производителя — 475 мм (19 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF20",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF20",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF20: бескаркасная; длина по размерной таблице производителя — 500 мм (20 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF21",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF21",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF21: бескаркасная; длина по размерной таблице производителя — 525 мм (21 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF22",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF22",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF22: бескаркасная; длина по размерной таблице производителя — 550 мм (22 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF24",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF24",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF24: бескаркасная; длина по размерной таблице производителя — 600 мм (24 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF26",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF26",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF26: бескаркасная; длина по размерной таблице производителя — 650 мм (26 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFF28",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFF28",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFF28: бескаркасная; длина по размерной таблице производителя — 700 мм (28 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY11",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY11",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY11: гибридная; длина по размерной таблице производителя — 275 мм (11 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY12",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY12",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY12: гибридная; длина по размерной таблице производителя — 300 мм (12 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY13",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY13",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY13: гибридная; длина по размерной таблице производителя — 325 мм (13 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY14",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY14",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY14: гибридная; длина по размерной таблице производителя — 350 мм (14 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY15",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY15",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY15: гибридная; длина по размерной таблице производителя — 375 мм (15 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY16",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY16",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY16: гибридная; длина по размерной таблице производителя — 400 мм (16 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY17",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY17",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY17: гибридная; длина по размерной таблице производителя — 425 мм (17 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY18",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY18",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY18: гибридная; длина по размерной таблице производителя — 450 мм (18 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY19",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY19",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY19: гибридная; длина по размерной таблице производителя — 475 мм (19 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY20",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY20",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY20: гибридная; длина по размерной таблице производителя — 500 мм (20 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY21",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY21",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY21: гибридная; длина по размерной таблице производителя — 525 мм (21 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY22",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY22",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY22: гибридная; длина по размерной таблице производителя — 550 мм (22 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY24",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY24",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY24: гибридная; длина по размерной таблице производителя — 600 мм (24 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY26",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY26",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY26: гибридная; длина по размерной таблице производителя — 650 мм (26 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "df-wiper-DFHY28",
+    "brand": "DOUBLE FORCE",
+    "part_number": "DFHY28",
+    "url": "https://doubleforce.ru/ru/catalog/wiper",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Щётка стеклоочистителя DOUBLE FORCE DFHY28: гибридная; длина по размерной таблице производителя — 700 мм (28 дюймов). Размер и тип крепления необходимо сверять с автомобилем; эта характеристика не подтверждает применяемость.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "soft99-fusso-feature-00298",
+    "brand": "SOFT99",
+    "part_number": "00298",
+    "url": "https://www.soft99.co.jp/en/products/detail/00298/",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Fusso Coat 12 Months Wax: защитный состав для светлых лакокрасочных покрытий; 200 г. Содержит фторсодержащие смолы, воски и нефтяные растворители.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "soft99-fusso-usage-00298",
+    "brand": "SOFT99",
+    "part_number": "00298",
+    "url": "https://www.soft99.co.jp/en/products/detail/00298/",
+    "kind": "instruction",
+    "scope": "article",
+    "text": "Способ применения Fusso Coat 12 Months Wax: вымойте автомобиль и полностью высушите кузов. Наберите немного пасты на комплектную губку и распределите тонким ровным слоем. Дождитесь высыхания покрытия — производитель указывает 5–20 минут в зависимости от температуры. Располируйте мягким сухим полотенцем.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "soft99-fusso-feature-00300",
+    "brand": "SOFT99",
+    "part_number": "00300",
+    "url": "https://www.soft99.co.jp/en/products/detail/00300/",
+    "kind": "feature",
+    "scope": "article",
+    "text": "Fusso Coat 12 Months Wax: защитный состав для тёмных лакокрасочных покрытий; 200 г. Содержит фторсодержащие смолы, воски и нефтяные растворители.",
+    "checked_at": "2026-10-16"
+  },
+  {
+    "id": "soft99-fusso-usage-00300",
+    "brand": "SOFT99",
+    "part_number": "00300",
+    "url": "https://www.soft99.co.jp/en/products/detail/00300/",
+    "kind": "instruction",
+    "scope": "article",
+    "text": "Способ применения Fusso Coat 12 Months Wax: вымойте автомобиль и полностью высушите кузов. Наберите немного пасты на комплектную губку и распределите тонким ровным слоем. Дождитесь высыхания покрытия — производитель указывает 5–20 минут в зависимости от температуры. Располируйте мягким сухим полотенцем.",
+    "checked_at": "2026-10-16"
+  }
+]
