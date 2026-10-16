@@ -72,7 +72,9 @@ class WebResearchProvider:
         return html.unescape(re.sub(r'<[^>]+>', ' ', value)).replace('\xa0', ' ').strip()
 
     async def search_instructions(self, product, db=None, topic='инструкция применения'):
-        query = f'"{product.brand}" "{product.name}" {topic}'
+        article = str(getattr(product, 'part_number', '') or '').strip()
+        identity = article if article else product.name
+        query = f'"{product.brand}" "{identity}" {topic}'
         owned = db is None
         if owned:
             db = Session()
@@ -502,7 +504,9 @@ class YandexProvider:
         return True
 
     async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
+        from .yandex_content import card_characteristics
         store, token = store_credentials(db, store_id)
+        category_cache = {}
         total, page = int((resume or {}).get('processed', 0)), str((resume or {}).get('page', ''))
         seen = {page} if page else set()
         for _ in range(1000):
@@ -519,6 +523,7 @@ class YandexProvider:
             payload = result.get('result')
             if result.get('status') == 'ERROR' or not isinstance(payload, dict) or not isinstance(payload.get('offerMappings'), list):
                 raise ValueError('Яндекс Маркет не вернул каталог товаров. Повторите синхронизацию позже.')
+            details = await card_characteristics(store, token, payload['offerMappings'], category_cache, cancelled)
             for item in payload['offerMappings']:
                 offer, mapping = item.get('offer') or {}, item.get('mapping') or {}
                 sku = str(offer.get('offerId') or '').strip()
@@ -533,6 +538,8 @@ class YandexProvider:
                 pictures = [url for url in offer.get('pictures') or [] if isinstance(url, str) and url.startswith('https://')]
                 product.image_url = pictures[0] if pictures else product.image_url or ''
                 facts = [fact for fact in product.facts or [] if fact.get('imported_from') != 'yandex-catalog']
+                if sku in details:
+                    facts = [fact for fact in facts if fact.get('imported_from') != 'yandex-parameters'] + details[sku]
                 description = html.unescape(str(offer.get('description') or '')).strip()
                 features = []
                 if product.part_number: features.append('Артикул производителя: ' + product.part_number)

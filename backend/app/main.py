@@ -1688,16 +1688,26 @@ async def research_product(pid: str, auth: MARKET_OPERATOR, db: DB):
         raise HTTPException(404, 'Товар не найден')
     saved = attach_verified_instructions(db, product)
     from .services import trusted_product_facts
-    if saved or any(f.get('kind')=='instruction' for f in trusted_product_facts(db,product)):
-        db.commit()
-        return {'product': public(product), 'found': saved, 'saved_instructions': saved, 'verified_instructions': any(f.get('kind')=='instruction' and f.get('verification_status')=='VERIFIED' for f in product.facts or [])}
-    instruction_sources = await web_research.search_instructions(product, db)
-    detail_sources = await web_research.search_instructions(product, db, 'характеристики состав комплектация')
-    sources = list({item['url']: item for item in instruction_sources + detail_sources}.values())
+    # Save the reviewed catalog even if an external search is slow or unavailable.
+    db.commit()
+    sources, warnings = [], []
+    for kind, topic in (('instruction', 'инструкция применения'), ('feature', 'характеристики состав комплектация')):
+        try:
+            found = await asyncio.wait_for(web_research.search_instructions(product, db, topic), timeout=12)
+            sources.extend({**item, 'kind': kind} for item in found)
+        except (asyncio.TimeoutError, ValueError):
+            warnings.append('Часть интернет-источников сейчас недоступна. Сохранённые сведения доступны.')
+    unique_sources = {}
+    for item in sources:
+        unique_sources.setdefault(item['url'], item)
+    sources = list(unique_sources.values())
+    db.refresh(product)
     if sources:
         remember_web_instruction_sources(product, sources)
         db.commit()
-    return {'product': public(product), 'found': len(sources)}
+    return {'product': public(product), 'found': len(sources), 'saved_instructions': saved,
+            'verified_instructions': any(f.get('kind')=='instruction' for f in trusted_product_facts(db, product)),
+            'message': warnings[0] if warnings else ''}
 
 
 @app.post('/products/{pid}/facts/{fact_index}/verify')

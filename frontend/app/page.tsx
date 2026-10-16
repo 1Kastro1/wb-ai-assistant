@@ -471,7 +471,7 @@ function ProductKnowledgeCard({product,busy,owner,canManage,onDiscuss,onRefresh,
   async function saveDomain(){await api('/products/'+product.id+'/official-domain','POST',{domain:officialDomain.trim()});await onRefresh()}
   async function save(){if(!fact.trim()||!source.trim())return;await api('/products/'+product.id+'/facts','POST',{text:fact.trim(),source:source.trim()});setFact('');setAdding(false);await onRefresh()}
   async function remove(index:number){await api('/products/'+product.id+'/facts/'+index,'DELETE');await onRefresh()}
-  async function research(){const result=await api('/products/'+product.id+'/research','POST');setResearchMessage(result.verified_instructions?'Проверенная инструкция производителя сохранена в карточке и используется в ответах.':result.found?`Найдено источников: ${result.found}. Проверьте соответствие товару и официальный адрес.`:'Подходящие источники не найдены. Попробуйте позднее или добавьте проверенный факт вручную.');await onRefresh()}
+  async function research(){const result=await api('/products/'+product.id+'/research','POST');setResearchMessage([result.verified_instructions?'Проверенная инструкция доступна в разделе «Применение».':'',result.found?'Найдено интернет-источников: '+result.found+'. Они отмечены для проверки. Сверьте товар и официальный адрес.':'Новые интернет-источники не найдены. Сохранённые характеристики и инструкции доступны.',result.message||''].filter(Boolean).join(' '));await onRefresh()}
   async function verify(index:number){await api('/products/'+product.id+'/facts/'+index+'/verify','POST');await onRefresh()}
   function trustedFact(item:Row){return trustedProductFact(product,item)}
 
