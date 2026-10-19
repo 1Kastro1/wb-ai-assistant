@@ -41,6 +41,7 @@ def test_catalog_sync_updates_review_placeholders_and_imports_products_without_r
     calls = []
 
     async def request(service, operation, **kwargs):
+        if kwargs.get('body') == {'archived': True}: return {'status': 'OK', 'result': {'offerMappings': []}}
         assert (service, operation) == ('yandex', 'products')
         assert kwargs['url'].endswith('/businesses/456/offer-mappings')
         assert kwargs.get('body') is None
@@ -74,6 +75,7 @@ def test_catalog_resumes_after_committed_page(client, monkeypatch):
     fail = True
 
     async def request(*args, **kwargs):
+        if kwargs.get('body') == {'archived': True}: return {'status': 'OK', 'result': {'offerMappings': []}}
         nonlocal fail
         cursor = kwargs['params'].get('pageToken', '')
         calls.append(cursor)
@@ -116,6 +118,7 @@ def test_repeated_catalog_page_stops_without_looping(client, monkeypatch):
     calls = []
 
     async def request(*args, **kwargs):
+        if kwargs.get('body') == {'archived': True}: return {'status': 'OK', 'result': {'offerMappings': []}}
         calls.append(kwargs['params'].get('pageToken', ''))
         return page('SKU-1', 'repeated')
 
@@ -134,6 +137,23 @@ def test_catalog_read_endpoint_does_not_allow_update_or_other_business_urls():
             guard.validate('yandex', 'products', url=invalid)
 
 
+def test_full_catalog_includes_all_archived_pages_without_review_placeholders(client, monkeypatch):
+    store = connected_store(client, monkeypatch)
+    calls = []
+    async def request(service, operation, **kwargs):
+        archived = kwargs.get('body') == {'archived': True}
+        cursor = kwargs['params'].get('pageToken', '')
+        calls.append((archived, cursor))
+        if archived: return page('archived-2') if cursor else page('archived-1', 'archive-next')
+        return page('current')
+    monkeypatch.setattr(guard, 'request', request)
+    with Session() as db:
+        assert asyncio.run(yandex.sync_products(db, store)) == 3
+        for sku in ('current', 'archived-1', 'archived-2'):
+            assert db.get(Product, f'yandex:{store}:{sku}').brand == 'BRAND'
+    assert calls == [(False, ''), (True, ''), (True, 'archive-next')]
+
+
 def test_historical_placeholder_missing_from_catalog_is_recovered_by_exact_sku(client, monkeypatch):
     store = connected_store(client, monkeypatch)
     manual = {'text': 'Правка сотрудника', 'source': 'Пользователь'}
@@ -148,6 +168,7 @@ def test_historical_placeholder_missing_from_catalog_is_recovered_by_exact_sku(c
         db.commit()
     calls = []
     async def request(service, operation, **kwargs):
+        if kwargs.get('body') == {'archived': True}: return {'status': 'OK', 'result': {'offerMappings': []}}
         assert (service, operation) == ('yandex', 'products')
         calls.append(kwargs)
         if kwargs.get('body'):
@@ -174,6 +195,7 @@ def test_missing_historical_offer_stays_unconfirmed_without_inventing_data(clien
         db.add(Product(id=f'yandex:{store}:gone', name='gone', marketplace='yandex'))
         db.commit()
     async def request(*args, **kwargs):
+        if kwargs.get('body') == {'archived': True}: return {'status': 'OK', 'result': {'offerMappings': []}}
         if kwargs.get('body'): return {'status': 'OK', 'result': {'offerMappings': []}}
         return page('current')
     monkeypatch.setattr(guard, 'request', request)

@@ -26,6 +26,7 @@ def fake_api(calls, denied=False, repeat=False):
         assert operation not in ('publish', 'question_publish')
         calls.append((operation, kwargs['body']))
         if operation == 'products':
+            if kwargs['body']['filter']['visibility'] == 'ARCHIVED': return {'result': {'items': [], 'total': 0}}
             return {'result': {'items': [{'product_id': 7}], 'total': 1000 if repeat else 1, 'last_id': 'cursor'}}
         if operation == 'product_info':
             return {'items': [{'id': 7, 'name': 'Фильтр NITTO 4ND-1008W', 'offer_id': 'SELLER-ID', 'sources': [{'sku': 11}, {'sku': 12}], 'primary_image': ['https://ir.ozone.ru/a.jpg']}]}
@@ -76,6 +77,29 @@ def test_future_question_uses_catalog_sku_alias(client, monkeypatch):
         assert question.product_id == f'ozon:{store}:11'
         db.commit()
     assert client.get('/products/page').json()['total'] == 1
+
+
+def test_full_catalog_loads_archived_products_without_any_messages(client, monkeypatch):
+    store = connected(client, monkeypatch)
+    calls = []
+    normal = fake_api(calls)
+    async def request(service, operation, **kwargs):
+        body = kwargs['body']
+        if operation == 'products' and body['filter']['visibility'] == 'ARCHIVED':
+            calls.append((operation, body))
+            return {'result': {'items': [{'product_id': 8}], 'total': 1}}
+        if operation in ('product_info', 'product_attributes'):
+            ids = body.get('product_id') or body.get('filter', {}).get('product_id')
+            if ids == ['8']:
+                if operation == 'product_info':
+                    return {'items': [{'id': 8, 'name': 'Архивный товар', 'sources': [{'sku': 21}]}]}
+                return {'result': [{'id': 8, 'sku': 21, 'attributes': []}]}
+        return await normal(service, operation, **kwargs)
+    monkeypatch.setattr(guard, 'request', request)
+    with Session() as db:
+        assert asyncio.run(ozon.sync_products(db, store)) == 2
+        assert db.get(Product, f'ozon:{store}:21').name == 'Архивный товар'
+    assert [body['filter']['visibility'] for op, body in calls if op == 'products'] == ['ALL', 'ARCHIVED']
 
 
 @pytest.mark.parametrize('empty_catalog', [False, True])

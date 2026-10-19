@@ -57,10 +57,11 @@ def store_card(db, store, item, attributes, definitions):
         db.add(product)
 
 
-async def sync_catalog(db, store, headers, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None, _skus=None):
+async def sync_catalog(db, store, headers, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None, _skus=None, _visibility='ALL'):
     cursor = str((resume or {}).get('last_id', ''))
     total = int((resume or {}).get('processed', 0))
     seen = {cursor} if cursor else set()
+    page_size = 1000 if _visibility == 'ARCHIVED' else 100
     category_cache = {}
     category_denied = False
     # Stable common fields returned by product/info/attributes. Category-specific
@@ -70,6 +71,9 @@ async def sync_catalog(db, store, headers, progress=None, cancelled=None, resume
     async def finish():
         # Archived offers can be absent from product/list even with visibility ALL.
         # Resolve historical message SKUs explicitly, preserving their product IDs.
+        if _visibility == 'ARCHIVED': return total
+        archived = await sync_catalog(db, store, headers, cancelled=cancelled,
+            between_pages=between_pages, _visibility='ARCHIVED')
         prefix = f'ozon:{store.id}:'
         missing = list(db.scalars(select(Product.id).where(
             Product.id.startswith(prefix),
@@ -85,12 +89,12 @@ async def sync_catalog(db, store, headers, progress=None, cancelled=None, resume
             if progress: progress(95 + int(4 * min(offset + 100, len(missing)) / len(missing)))
             if between_pages: await between_pages()
             await asyncio.sleep(0.2)
-        return total + recovered
+        return total + archived + recovered
 
     for _ in range(10000):
         if cancelled and cancelled(): raise asyncio.CancelledError()
         if _skus is None:
-            result = await guard.request('ozon', 'products', headers=headers, body={'filter': {'visibility': 'ALL'}, 'last_id': cursor, 'limit': 100})
+            result = await guard.request('ozon', 'products', headers=headers, body={'filter': {'visibility': _visibility}, 'last_id': cursor, 'limit': page_size})
             payload = result.get('result') or {}
             if not isinstance(payload.get('items'), list):
                 raise ValueError('Ozon не вернул каталог товаров. Проверьте права API-ключа на чтение товаров.')
@@ -104,7 +108,7 @@ async def sync_catalog(db, store, headers, progress=None, cancelled=None, resume
                 raise ValueError('Ozon не вернул результат поиска по SKU')
             if not details['items']: return 0
             ids = [str(item['id']) for item in details['items']]
-        attrs = await guard.request('ozon', 'product_attributes', headers=headers, body={'filter': {'product_id': ids, 'visibility': 'ALL'}, 'limit': 100})
+        attrs = await guard.request('ozon', 'product_attributes', headers=headers, body={'filter': {'product_id': ids, 'visibility': 'ALL'}, 'limit': max(100, len(ids))})
         cards = details.get('items')
         attributes = attrs.get('result')
         if not isinstance(cards, list) or not isinstance(attributes, list) or {str(c.get('id')) for c in cards} != set(ids) or {str(c.get('id')) for c in attributes} != set(ids):

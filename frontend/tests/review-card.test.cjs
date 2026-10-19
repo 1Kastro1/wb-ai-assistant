@@ -12,6 +12,24 @@ function loadComponent(file,source=fs.readFileSync(file,'utf8')){
  new Function('require','module','exports',compiled)(localRequire,moduleObject,moduleObject.exports);
  return moduleObject.exports;
 }
+test('store-specific product panels have distinct sibling keys on every marketplace switch',()=>{
+ const file=path.join(__dirname,'../app/page.tsx'),source=fs.readFileSync(file,'utf8');
+ const ast=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),keys={};
+ function visit(node){
+  if(ts.isJsxSelfClosingElement(node)&&['ProductKnowledgeOverview','CrossCatalog','ProductLibrary'].includes(node.tagName.getText(ast))){
+   const key=node.attributes.properties.find(a=>ts.isJsxAttribute(a)&&a.name.text==='key');
+   assert(key&&key.initializer&&ts.isJsxExpression(key.initializer));
+   keys[node.tagName.getText(ast)]=key.initializer.expression.getText(ast);
+  }
+  ts.forEachChild(node,visit);
+ }
+ visit(ast);assert.equal(Object.keys(keys).length,3);
+ for(const active of ['wb','ozon','yandex','wb']){
+  const evaluated=Object.values(keys).map(expression=>new Function('stores','return '+expression)({active}));
+  assert.equal(new Set(evaluated).size,3,'Sibling keys must identify the panel as well as its store');
+  assert(evaluated.every(key=>key.includes(active)));
+ }
+});
 const Card=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx')).default;
 function render(overrides={}){
  const review={id:'r',product_id:'p',product:{name:'Очиститель',brand:'KANGAROO'},rating:5,text:'',risk:'NORMAL',created_at:'2026-10-13',draft:{text:'Спасибо за оценку!',revision:2,quality:{passed:true},edits:[{at:'2026-10-13',old:'Прежний текст',new:'Новый текст'}]},...overrides.review};

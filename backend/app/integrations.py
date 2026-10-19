@@ -522,7 +522,7 @@ class YandexProvider:
         await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
         return True
 
-    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None, _offer_ids=None):
+    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None, _offer_ids=None, _archived=False):
         from .yandex_content import card_characteristics
         store, token = store_credentials(db, store_id)
         category_cache = {}
@@ -534,7 +534,7 @@ class YandexProvider:
             params = {} if _offer_ids is not None else {'limit': 100}
             if page and _offer_ids is None: params['pageToken'] = page
             try:
-                options = {'body': {'offerIds': _offer_ids}} if _offer_ids is not None else {}
+                options = {'body': {'offerIds': _offer_ids}} if _offer_ids is not None else ({'body': {'archived': True}} if _archived else {})
                 result = await guard.request('yandex', 'products', headers={'Api-Key': token}, url=self.target(store, 'products'), params=params, **options)
             except ValueError as error:
                 if 'HTTP 403' in str(error):
@@ -587,6 +587,9 @@ class YandexProvider:
             page = str((payload.get('paging') or {}).get('nextPageToken') or '')
             if _offer_ids is not None: return total
             if not page:
+                if _archived: return total
+                total += await self.sync_products(db, store_id, cancelled=cancelled,
+                    between_pages=between_pages, _archived=True)
                 # Historical reviews/questions can reference offers omitted from
                 # the current paginated catalog. Resolve their exact seller SKU
                 # before leaving numeric placeholders in the product library.
