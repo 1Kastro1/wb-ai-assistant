@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import select
 
-from app.db import Account, Product, Review, Session, StoreProfile, setting
+from app.db import Account, Job, Product, Review, Session, StoreProfile, setting
 from app.integrations import ozon, upsert_market_question
 from app.security import guard
 from app.services import generate_draft, trusted_product_facts
@@ -105,3 +105,29 @@ def test_ozon_catalog_endpoints_are_read_only_and_host_bound():
         method, url = guard.validate('ozon', operation)
         assert method == 'POST' and url.startswith('https://api-seller.ozon.ru/')
         with pytest.raises(ValueError): guard.validate('ozon', operation, url='https://other.example/')
+
+
+@pytest.mark.parametrize('kind,path', [('drafts', '/jobs/drafts'), ('question_drafts', '/jobs/question-drafts')])
+def test_batch_generation_does_not_reuse_another_store_job(client, monkeypatch, kind, path):
+    store = connected(client, monkeypatch)
+    monkeypatch.setattr('app.main.run_job_queue', AsyncMock())
+    with Session() as db:
+        db.add(Job(id='other-store-job', kind=kind, status='running', result={'account_id': 'owner'}))
+        db.commit()
+    created = client.post(path, json={}).json()
+    assert created['id'] != 'other-store-job'
+    assert created['result']['account_id'] == store
+    assert client.post(path, json={}).json()['id'] == created['id']
+
+
+def test_ozon_review_cursor_error_preserves_committed_progress(client, monkeypatch):
+    store = connected(client, monkeypatch)
+    saved = []
+    async def request(*args, **kwargs):
+        return {'reviews': [{'id': 'r', 'sku': 11, 'rating': 5, 'text': 'Спасибо'}], 'last_id': 'same', 'has_next': True}
+    monkeypatch.setattr(guard, 'request', request)
+    with Session() as db:
+        with pytest.raises(ValueError, match='повторил'):
+            asyncio.run(ozon.sync_reviews(db, store, checkpoint=saved.append))
+        assert saved == [{'last_id': 'same', 'processed': 1}]
+        assert db.scalar(select(Review).where(Review.wb_account_id == store)).text == 'Спасибо'
