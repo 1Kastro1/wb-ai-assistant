@@ -78,6 +78,65 @@ def test_future_question_uses_catalog_sku_alias(client, monkeypatch):
     assert client.get('/products/page').json()['total'] == 1
 
 
+@pytest.mark.parametrize('empty_catalog', [False, True])
+def test_archived_sku_recovery_is_exact_scoped_and_preserves_facts(client, monkeypatch, empty_catalog):
+    store = connected(client, monkeypatch)
+    manual = {'text': 'Проверено владельцем', 'source': 'Пользователь'}
+    with Session() as db:
+        db.add_all([Product(id=f'ozon:{store}:{sku}', name=sku, marketplace='ozon', facts=[manual]) for sku in ('21', '22', '23')])
+        db.add(Product(id='ozon:other:24', name='24', marketplace='ozon'))
+        db.commit()
+    calls = []
+    normal = fake_api(calls)
+    async def request(service, operation, **kwargs):
+        body = kwargs['body']
+        if operation == 'products' and empty_catalog:
+            return {'result': {'items': [], 'total': 0}}
+        if operation == 'product_info' and 'sku' in body:
+            calls.append((operation, body))
+            assert body == {'sku': ['21', '22', '23']}
+            return {'items': [{'id': 8, 'name': 'Архивный фильтр', 'sources': [{'sku': 21}, {'sku': 22}], 'primary_image': ['https://ir.ozone.ru/archived.jpg']}]}
+        if operation == 'product_attributes' and body['filter']['product_id'] == ['8']:
+            return {'result': [{'id': 8, 'sku': 21, 'attributes': [{'id': 85, 'values': [{'value': 'NITTO'}]}]}]}
+        return await normal(service, operation, **kwargs)
+    monkeypatch.setattr(guard, 'request', request)
+    with Session() as db:
+        assert asyncio.run(ozon.sync_products(db, store)) == (1 if empty_catalog else 2)
+        for sku in ('21', '22'):
+            product = db.get(Product, f'ozon:{store}:{sku}')
+            assert product.name == 'Архивный фильтр'
+            assert product.brand == 'NITTO'
+            assert manual in product.facts
+            assert product.image_url.endswith('archived.jpg')
+        assert db.get(Product, f'ozon:{store}:23').name == '23'
+        assert db.get(Product, 'ozon:other:24').name == '24'
+        assert setting(db, f'ozon-product:{store}:22') == f'ozon:{store}:21'
+
+
+@pytest.mark.parametrize('mode', ['missing', 'wrong', 'incomplete', 'cancelled'])
+def test_recovery_never_invents_or_misassigns_a_missing_sku(client, monkeypatch, mode):
+    from app.ozon_content import sync_catalog
+    store = connected(client, monkeypatch)
+    normal = fake_api([])
+    async def request(service, operation, **kwargs):
+        if operation == 'product_info':
+            if mode == 'missing': return {'items': []}
+            return await normal(service, operation, **kwargs)
+        if operation == 'product_attributes' and mode == 'incomplete': return {'result': []}
+        return await normal(service, operation, **kwargs)
+    monkeypatch.setattr(guard, 'request', request)
+    with Session() as db:
+        db.add(Product(id=f'ozon:{store}:999', name='999', marketplace='ozon'))
+        db.commit()
+        call = sync_catalog(db, db.get(StoreProfile, store), {}, _skus=['999'], cancelled=lambda: mode == 'cancelled')
+        if mode == 'missing': assert asyncio.run(call) == 0
+        elif mode == 'cancelled':
+            with pytest.raises(asyncio.CancelledError): asyncio.run(call)
+        else:
+            with pytest.raises(ValueError): asyncio.run(call)
+        assert db.get(Product, f'ozon:{store}:999').name == '999'
+
+
 def test_repeated_catalog_page_is_not_reported_as_success(client, monkeypatch):
     store = connected(client, monkeypatch)
     monkeypatch.setattr(guard, 'request', fake_api([], repeat=True))
