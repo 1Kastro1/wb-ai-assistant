@@ -51,7 +51,7 @@ test('review header keeps scheduling details collapsed and controls permission-a
 test('product knowledge card renders its own thumbnail',()=>{
  const file=path.join(__dirname,'../app/page.tsx'),page=fs.readFileSync(file,'utf8');
  const start=page.indexOf('function ProductKnowledgeCard('),end=page.indexOf('\nfunction reviewIntent',start);
- const fragment="import {useState,useEffect} from 'react'; import ProductThumbnail from './ProductThumbnail'; import {ProductFacts,productArticle,trustedProductFact} from './ProductLibrary'; type Row=Record<string,any>;"+page.slice(start,end)+';export default ProductKnowledgeCard;';
+ const fragment="import {useState,useEffect} from 'react'; import ActionButton from './ActionButton'; import ProductThumbnail from './ProductThumbnail'; import {ProductFacts,productArticle,trustedProductFact} from './ProductLibrary'; type Row=Record<string,any>;"+page.slice(start,end)+';export default ProductKnowledgeCard;';
  const KnowledgeCard=loadComponent(file,fragment).default;
  const html=renderToStaticMarkup(React.createElement(KnowledgeCard,{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp',facts:[]},busy:false,owner:false,canManage:true,onDiscuss(){},onRefresh(){},onRun(){}}));
  assert(html.includes('src="https://example.com/card.webp"'));
@@ -69,3 +69,24 @@ test('question publication is permission-aware',()=>{const html=renderQuestion({
 test('instruction indicator rejects untrusted verified URLs',()=>{const {instructionState}=loadComponent(path.join(__dirname,'../app/ProductLibrary.tsx'));assert.equal(instructionState({facts:[{kind:'instruction',verification_status:'VERIFIED',source:'https://untrusted.test'}]}).tone,'neutral');assert.equal(instructionState({facts:[{kind:'instruction',verification_status:'VERIFIED',source:'Карточка товара'}]}).tone,'green')});
 
 test('manufacturer article comes from verified WB characteristics, never seller SKU',()=>{const {productArticle}=loadComponent(path.join(__dirname,'../app/ProductLibrary.tsx'));assert.equal(productArticle({vendor_code:'seller',facts:[{source:'Карточка WB: характеристики',verification_status:'VERIFIED',text:'Артикул производителя: DFF12'}]}),'DFF12');assert.equal(productArticle({vendor_code:'seller',facts:[{source:'other',verification_status:'VERIFIED',text:'Артикул производителя: WRONG'}]}),'')});
+
+
+test('density controls expose the selected mode without submitting forms',()=>{
+ const Control=loadComponent(path.join(__dirname,'../app/DensityControl.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Control,{value:'compact',onChange(){}}));
+ assert(html.includes('Плотность списков'));assert(html.includes('Просторный'));assert(html.includes('Компактный'));
+ assert.equal((html.match(/aria-pressed="true"/g)||[]).length,1);
+ assert.equal((html.match(/type="button"/g)||[]).length,2);
+});
+test('product drawer has a native modal, accessible heading and explicit close action',()=>{
+ const Drawer=loadComponent(path.join(__dirname,'../app/ProductDrawer.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Drawer,{name:'Фильтр',busy:true,error:'Ошибка сервера',onClose(){}},'Характеристики'));
+ assert(html.includes('<dialog'));assert(html.includes('aria-labelledby='));assert(html.includes('Закрыть карточку'));
+ assert(html.includes('disabled'));assert(html.includes('role="alert"'));assert(html.includes('Ошибка сервера'));
+});
+test('action buttons preserve an accessible name and permission-based disabling',()=>{
+ const Button=loadComponent(path.join(__dirname,'../app/ActionButton.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Button,{label:'Найти',disabled:true,onAction:async()=>true}));
+ assert(html.includes('aria-label="Найти"'));assert(html.includes('aria-busy="false"'));assert(html.includes('disabled'));
+ assert(html.includes('type="button"'));
+});
