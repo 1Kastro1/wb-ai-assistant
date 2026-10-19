@@ -78,7 +78,8 @@ def test_detailed_read_operations_cannot_be_redirected_to_writes_or_other_operat
 
 
 @pytest.mark.parametrize('status', [403, 500])
-def test_unavailable_category_dictionary_does_not_block_catalog_or_erase_old_facts(client, monkeypatch, status):
+@pytest.mark.parametrize('unavailable', ['category_parameters', 'product_cards'])
+def test_unavailable_category_dictionary_does_not_block_catalog_or_erase_old_facts(client, monkeypatch, status, unavailable):
     store = connected_store(client, monkeypatch)
     old = {'text': 'Мощность: 55 Вт', 'kind': 'feature', 'imported_from': 'yandex-parameters',
            'source': 'Карточка товара', 'verification_status': 'VERIFIED'}
@@ -94,6 +95,7 @@ def test_unavailable_category_dictionary_does_not_block_catalog_or_erase_old_fac
             for item in result['result']['offerMappings']: item['mapping']['marketCategoryId'] = 123
             return result
         if operation == 'product_cards':
+            if unavailable == 'product_cards': raise ValueError(f'yandex: HTTP {status}')
             return {'result': {'offerCards': [{'offerId': sku, 'parameterValues': [{'parameterId': 1, 'value': '99'}]} for sku in ('SKU-1', 'SKU-2')]}}
         assert operation == 'category_parameters'
         schemas.append(kwargs['url'])
@@ -103,8 +105,8 @@ def test_unavailable_category_dictionary_does_not_block_catalog_or_erase_old_fac
     result = client.get('/jobs/' + job['id']).json()
     assert result['status'] == 'completed', result
     assert result['result']['processed'] == 2
-    assert '123' in result['result']['warning']
-    assert len(schemas) == 1
+    assert ('123' if unavailable == 'category_parameters' else 'SKU-1') in result['result']['warning']
+    assert len(schemas) == (1 if unavailable == 'category_parameters' else 0)
     with Session() as db:
         assert old in db.get(Product, f'yandex:{store}:SKU-1').facts
         product = db.get(Product, f'yandex:{store}:SKU-2')
