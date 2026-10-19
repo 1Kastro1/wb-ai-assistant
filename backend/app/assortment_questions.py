@@ -1,7 +1,29 @@
-"""Answer accessory and fragrance questions from the active store's WB catalog."""
+"""Answer accessory and fragrance questions from the active store's catalog."""
 import re
 from sqlalchemy import select
-from .db import Product, StoreListing
+from .db import Product, StoreListing, StoreProfile
+
+
+def store_products(db, store_id):
+    store = db.get(StoreProfile, store_id)
+    query = select(Product).where(Product.brand.ilike('EIKOSHA'))
+    if store and store.provider != 'wb':
+        query = query.where(Product.marketplace == store.provider, Product.id.startswith(f'{store.provider}:{store_id}:'))
+    else:
+        query = query.join(StoreListing, StoreListing.product_id == Product.id).where(StoreListing.store_id == store_id, Product.marketplace == 'wb')
+    return list(db.scalars(query.order_by(Product.id)))
+
+
+def catalog_reference(product):
+    if product.marketplace == 'ozon':
+        sku = product.id.rsplit(':', 1)[-1]
+        if not sku.isdigit() or ':product:' in product.id: return None
+        return 'артикул Ozon ' + sku, 'https://www.ozon.ru/product/' + sku + '/'
+    if product.marketplace == 'yandex':
+        return 'артикул в нашем каталоге Яндекс Маркета ' + product.id.rsplit(':', 1)[-1], 'Карточка товара'
+    if re.fullmatch(r'[1-9][0-9]{0,11}', product.id):
+        return 'артикул Wildberries ' + product.id, 'https://www.wildberries.ru/catalog/' + product.id + '/detail.aspx'
+    return None
 
 SCENTS = (
     ('яблочный', r'ябл|\bapple\b'),
@@ -37,17 +59,15 @@ def assortment_question_answer(db, question, product, facts_for_product):
         return None
     if scents and re.search(r'без\s+(?:ябл|лимон|ванил|цитрус|вишн|персик|мускус)|не\s+(?:хочу|люблю|нужен)', text):
         return None
-    products = list(db.scalars(select(Product).join(StoreListing, StoreListing.product_id == Product.id).where(
-        StoreListing.store_id == question.wb_account_id, Product.marketplace == 'wb',
-        Product.brand.ilike('EIKOSHA')).order_by(Product.id)))
-    products = [p for p in products if re.fullmatch(r'[1-9][0-9]{0,11}', p.id)]
+    products = [p for p in store_products(db, question.wb_account_id) if catalog_reference(p)]
     sources, selected = [], []
 
     def evidence(p):
         if p.id not in selected:
             selected.append(p.id)
-            sources.append({'text': p.brand+' '+p.name+' · WB '+p.id,
-                            'source': 'https://www.wildberries.ru/catalog/'+p.id+'/detail.aspx',
+            reference, source = catalog_reference(p)
+            sources.append({'text': p.brand+' '+p.name+' · '+reference,
+                            'source': source,
                             'verification_status': 'VERIFIED'})
 
     def result(answer, intent):
@@ -71,10 +91,10 @@ def assortment_question_answer(db, question, product, facts_for_product):
         parts = ['Добрый день!']
         if vent:
             evidence(vent)
-            parts.append('Для баночки EIKOSHA есть держатель на дефлектор «'+vent.name+'», артикул Wildberries '+vent.id+'.')
+            parts.append('Для баночки EIKOSHA есть держатель на дефлектор «'+vent.name+'», '+catalog_reference(vent)[0]+'.')
         if panel:
             evidence(panel)
-            parts.append('Для устойчивого размещения на горизонтальной поверхности есть «'+panel.name+'», артикул Wildberries '+panel.id+'; перед размещением на торпеде сверьтесь с инструкцией держателя.')
+            parts.append('Для устойчивого размещения на горизонтальной поверхности есть «'+panel.name+'», '+catalog_reference(panel)[0]+'; перед размещением на торпеде сверьтесь с инструкцией держателя.')
         parts.append('Баночку ароматизатора также можно разместить в подходящем подстаканнике или кармане двери.')
         if vent:
             parts.append('Для Kia Optima перед выбором крепления на дефлектор сверьте форму и толщину ламелей с требованиями держателя.' if re.search(r'optima|оптим', text) else 'Перед выбором крепления на дефлектор сверьте форму и толщину ламелей с требованиями держателя.')
@@ -93,7 +113,7 @@ def assortment_question_answer(db, question, product, facts_for_product):
     current_format = fragrance_format(product)
     chosen = sorted(matches, key=lambda p: (fragrance_format(p) != current_format, p.id))[0]
     evidence(chosen)
-    answer = 'Добрый день! В нашем каталоге есть '+label+' аромат — EIKOSHA «'+chosen.name+'», артикул Wildberries '+chosen.id+'.'
+    answer = 'Добрый день! В нашем каталоге есть '+label+' аромат — EIKOSHA «'+chosen.name+'», '+catalog_reference(chosen)[0]+'.'
     chosen_format = fragrance_format(chosen)
     if current_format == 'giga' and chosen_format == 'can':
         answer += ' Это отдельный ароматизатор в баночке, а не сменные стержни для GIGA.'
@@ -104,8 +124,9 @@ def assortment_question_answer(db, question, product, facts_for_product):
 
 def review_vent_holder(db,review,product):
     if product.brand.strip().casefold()!='eikosha' or fragrance_format(product)!='can':return None
-    holders=db.scalars(select(Product).join(StoreListing,StoreListing.product_id==Product.id).where(StoreListing.store_id==review.wb_account_id,Product.marketplace=='wb',Product.brand.ilike('EIKOSHA'),Product.name.ilike('%дефлектор%')).order_by(Product.id))
+    holders=store_products(db, review.wb_account_id)
     for holder in holders:
-        if not re.search(r'держател|креплен',holder.name,re.I) or re.search(r'набор|giga|стерж|\+',holder.name,re.I) or not re.fullmatch(r'[1-9][0-9]{0,11}',holder.id):continue
-        return {'text':holder.name+' · WB '+holder.id,'kind':'vent_holder','wb_nm_id':holder.id,'verification_status':'VERIFIED','source':'https://www.wildberries.ru/catalog/'+holder.id+'/detail.aspx'}
+        if not re.search(r'дефлектор',holder.name,re.I) or not re.search(r'держател|креплен',holder.name,re.I) or re.search(r'набор|giga|стерж|\+',holder.name,re.I) or not catalog_reference(holder):continue
+        reference, source = catalog_reference(holder)
+        return {'text':holder.name+' · '+reference,'kind':'vent_holder','wb_nm_id':holder.id,'article_label':reference,'verification_status':'VERIFIED','source':source}
     return None

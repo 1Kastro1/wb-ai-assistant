@@ -191,7 +191,7 @@ export default function App() {
     try {
       const result=await syncJob(kind,job=>setWbStatus({state:'working',kind,progress:job.progress||0,message:job.status==='queued'?'Ожидание запуска синхронизации '+label+'…':'Синхронизация '+label+': '+(job.progress||0)+'%'}));
       await refresh();
-      setWbStatus({state:'success',kind,progress:100,message:'Синхронизация завершена. Обработано '+label+': '+result.processed+'.'});
+      setWbStatus({state:'success',kind,progress:100,message:'Синхронизация завершена. Обработано '+label+': '+result.processed+'.'+(result.warning?' '+result.warning:'')});
       setNotice('Обработано '+label+': '+result.processed);
     } catch(error) {const message=error instanceof Error?error.message:'Синхронизация не завершена';setWbStatus({state:'error',kind,message});throw error}
   }

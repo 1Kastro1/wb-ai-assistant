@@ -996,7 +996,7 @@ async def run_sync_job(job_id):
         await execute_job(job_id)
 
 
-async def run_waiting_sync(kinds=('products', 'reviews', 'questions')):
+async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft')):
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
@@ -1134,15 +1134,10 @@ async def execute_job(job_id):
                 provider = provider_for(store) if store else None
                 if not provider:
                     raise ValueError('Провайдер магазина не поддерживается')
-                if kind == 'products' and store.provider not in ('wb', 'yandex'):
-                    count = 0  # Ozon and Yandex products are learned from their review payloads.
-                    job.result = {'message':'Товары этого маркетплейса обновляются вместе с отзывами'}
-                    operation = None
-                else:
-                    operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
+                operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
                 try:
                     options = {'resume': start_checkpoint, 'checkpoint': save_checkpoint}
-                    if kind in ('reviews', 'products') and store.provider == 'yandex':
+                    if (kind in ('reviews', 'products') and store.provider == 'yandex') or (kind == 'products' and store.provider == 'ozon'):
                         options['between_pages'] = run_waiting_questions
                     if operation: count = await operation(db, account_id, update_progress, cancelled, **options)
                 except TypeError as exc:
@@ -1155,6 +1150,8 @@ async def execute_job(job_id):
                             raise
                         count = await operation(db)
                 job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id, 'finished_at': now()}
+                if kind == 'products' and store.provider == 'ozon':
+                    job.result = {**job.result, 'warning': setting(db, 'ozon-catalog-warning:' + store.id, '')}
                 if kind == 'reviews':
                     negative = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == False, Review.rating <= 2)) or 0
                     if negative:
@@ -1239,7 +1236,7 @@ async def scheduler_loop():
                     if db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
                         continue
                     for store in connected_stores:
-                        if kind == 'products' and store.provider not in ('wb', 'yandex'):
+                        if kind == 'products' and store.provider not in ('wb', 'yandex', 'ozon'):
                             continue
                         last_key = f'last_{kind}:{store.id}'
                         last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
@@ -1337,7 +1334,7 @@ async def schedule_all_drafts(background: BackgroundTasks, auth: AUTH, db: DB):
     store = db.get(StoreProfile, active)
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
-    existing = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running'])))
+    existing = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), func.coalesce(Job.result['account_id'].as_string(), 'owner') == active))
     if existing:
         return public(existing)
     job = Job(id=str(uuid4()), kind='drafts', priority=50, result={'account_id': active, 'message': 'Подготовка ответов поставлена в очередь'})
@@ -1499,7 +1496,7 @@ async def sync(kind: str, auth: MARKET_OPERATOR, db: DB):
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
-    if kind == 'products' and store.provider not in ('wb', 'yandex'):
+    if kind == 'products' and store.provider not in ('wb', 'yandex', 'ozon'):
         raise ValueError('Отдельная загрузка каталога для этого маркетплейса пока недоступна')
     provider = provider_for(store)
     if sync_lock.locked():
@@ -1614,7 +1611,7 @@ def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset:
     query = select(Product).where(scope)
     count_query = select(func.count()).select_from(Product).where(scope)
     if q:
-        condition = Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True) | Product.category.contains(q, autoescape=True)
+        condition = Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True) | Product.category.contains(q, autoescape=True) | Product.part_number.contains(q, autoescape=True)
         query, count_query = query.where(condition), count_query.where(condition)
     domains={row.key.removeprefix('official_domain:'):row.value for row in db.scalars(select(Setting).where(Setting.key.startswith('official_domain:')))}
     items = [{**public(p), 'official_domain': domains.get(p.id, '')}
@@ -1927,7 +1924,7 @@ async def schedule_question_drafts(body: QuestionDraftBatch, background: Backgro
         valid = set(db.scalars(select(Review.id).where(Review.id.in_(selected), Review.wb_account_id == active, Review.marketplace.like('%_question'), Review.is_answered == False)))
         if valid != set(selected):
             raise ValueError('В выборке есть недоступные или уже отвеченные вопросы')
-    existing = db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued','running'])))
+    existing = next((job for job in db.scalars(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued','running']))) if (job.result or {}).get('account_id') == active), None)
     if existing:
         return public(existing)
     job = Job(id=str(uuid4()), kind='question_drafts', priority=50, result={'account_id': active, 'selected_ids': selected, 'message': 'Подготовка ответов на вопросы поставлена в очередь'})

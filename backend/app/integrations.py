@@ -383,6 +383,8 @@ def store_credentials(db, store_id):
 
 def upsert_market_review(db, store, external_id, product_external_id, product_name, brand, rating, text, created_at, answered=False, answer=''):
     product_id = f'{store.provider}:{store.id}:{product_external_id}'
+    if store.provider == 'ozon' and not db.get(Product, product_id):
+        product_id = setting(db, f'ozon-product:{store.id}:{product_external_id}', product_id)
     product = db.get(Product, product_id) or Product(id=product_id, name=product_name or str(product_external_id), brand=brand or '', category='', marketplace=store.provider)
     db.add(product)
     db.flush()
@@ -402,6 +404,8 @@ def upsert_market_question(db, store, external_id, product_external_id, product_
     if not external_id:
         return None
     product_id = f'{store.provider}:{store.id}:{product_external_id or "unknown"}'
+    if store.provider == 'ozon' and not db.get(Product, product_id):
+        product_id = setting(db, f'ozon-product:{store.id}:{product_external_id}', product_id)
     product = db.get(Product, product_id) or Product(id=product_id, name=product_name or str(product_external_id or 'Товар'), brand='', category='', marketplace=store.provider)
     db.add(product)
     db.flush()
@@ -419,6 +423,11 @@ def upsert_market_question(db, store, external_id, product_external_id, product_
 
 
 class OzonProvider:
+    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
+        from .ozon_content import sync_catalog
+        store, token = store_credentials(db, store_id)
+        return await sync_catalog(db, store, self.headers(store, token), progress, cancelled, resume, checkpoint, between_pages)
+
     def headers(self, store, token):
         client_id = str((store.config or {}).get('client_id', '')).strip()
         if not client_id:
@@ -433,7 +442,8 @@ class OzonProvider:
     async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
         store, token = store_credentials(db, store_id)
         total, last_id = int((resume or {}).get('processed', 0)), str((resume or {}).get('last_id', ''))
-        for _ in range(1000):
+        seen = {last_id} if last_id else set()
+        for _ in range(10000):
             if cancelled and cancelled(): raise asyncio.CancelledError()
             body = {'limit': 100, 'sort_dir': 'DESC'}
             if last_id: body['last_id'] = last_id
@@ -446,11 +456,14 @@ class OzonProvider:
                 total += 1
             db.commit()
             if progress: progress(min(95, 5 + total // 100))
-            if len(items) < 100: break
-            last_id = str(result.get('last_id') or items[-1].get('id') or '')
+            payload = result.get('result') or result
+            if not items or payload.get('has_next') is False or (len(items) < 100 and not payload.get('has_next')): return total
+            last_id = str(payload.get('last_id') or items[-1].get('id') or '')
+            if not last_id or last_id in seen:
+                raise ValueError('Ozon повторил страницу отзывов; прогресс сохранён')
+            seen.add(last_id)
             if checkpoint: checkpoint({'last_id': last_id, 'processed': total})
-            if not last_id: break
-        return total
+        raise ValueError('Достигнут лимит страниц отзывов Ozon; продолжите с сохранённого прогресса')
 
     async def publish(self, db, review, text):
         store, token = store_credentials(db, review.wb_account_id)
