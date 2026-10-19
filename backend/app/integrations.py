@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 from urllib.parse import parse_qs, unquote, urlsplit
 from sqlalchemy import select, func
 from .config import MODEL
-from .db import StoreListing, Account, Draft, Product, Review, StoreProfile, Session, now, setting
+from .db import StoreListing, Account, Draft, Product, Review, StoreProfile, Session, now, setting, set_setting
 from .safety import classify, mask_vin
 from .verified_instructions import attach_verified_instructions
 from .product_images import card_image_url
