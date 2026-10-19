@@ -48,3 +48,25 @@ def test_review_views_filter_before_pagination_and_count(client):
     assert {item['id'] for item in context['items']} == {'filter-34', 'filter-03'}
     assert client.get('/reviews/page?view=context').json()['total'] == 0
     assert client.get('/reviews/page?view=unknown').status_code == 422
+
+
+def test_with_text_paginates_and_counts_customer_text_in_selected_store(client):
+    with Session() as db:
+        db.add(Product(id='text-product', name='Товар'))
+        db.flush()
+        for rid, text, store, marketplace in [
+            ('text-1', 'Отличный товар', 'owner', 'wb'),
+            ('text-2', 'Есть замечание', 'owner', 'wb'),
+            ('empty', '', 'owner', 'wb'),
+            ('spaces', ' \n\t\r ', 'owner', 'wb'),
+            ('question', 'Вопрос?', 'owner', 'wb_question'),
+            ('foreign', 'Чужой отзыв', 'other', 'ozon')]:
+            db.add(Review(id=rid, wb_review_id=rid, wb_account_id=store, product_id='text-product',
+                          text=text, rating=5, marketplace=marketplace, is_answered=(rid == 'text-2')))
+        db.commit()
+    first = client.get('/reviews/page?view=with_text&limit=1').json()
+    second = client.get('/reviews/page?view=with_text&limit=1&offset=1').json()
+    assert first['total'] == second['total'] == 2
+    assert first['has_more'] and not second['has_more']
+    assert {first['items'][0]['id'], second['items'][0]['id']} == {'text-1', 'text-2'}
+    assert client.get('/reviews/counts').json()['with_text'] == 2

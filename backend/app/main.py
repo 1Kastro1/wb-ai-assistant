@@ -28,6 +28,7 @@ from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for, web_research
+from .product_search import product_search_condition
 from .services import reviews_search, reviews_page, review_filter_counts, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public, review_items
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
@@ -1519,7 +1520,7 @@ def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_ratin
 
 
 @app.get('/reviews/page')
-def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = ''):
+def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'with_text', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = ''):
     return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids)
 
 
@@ -1586,7 +1587,7 @@ def question_stats(auth: AUTH, db: DB):
 def products(auth: AUTH, db: DB, q: str = ''):
     store = db.get(StoreProfile, active_store(db, auth))
     scope = product_scope(store)
-    return [public(p) for p in db.scalars(select(Product).where(scope, Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True)).limit(200))]
+    return [public(p) for p in db.scalars(select(Product).where(scope, product_search_condition(q)).limit(200))]
 
 
 @app.get('/products/knowledge')
@@ -1611,7 +1612,7 @@ def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset:
     query = select(Product).where(scope)
     count_query = select(func.count()).select_from(Product).where(scope)
     if q:
-        condition = Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True) | Product.category.contains(q, autoescape=True) | Product.part_number.contains(q, autoescape=True)
+        condition = product_search_condition(q)
         query, count_query = query.where(condition), count_query.where(condition)
     domains={row.key.removeprefix('official_domain:'):row.value for row in db.scalars(select(Setting).where(Setting.key.startswith('official_domain:')))}
     items = [{**public(p), 'official_domain': domains.get(p.id, '')}

@@ -34,6 +34,11 @@ class SimpleReviewFilterTests(unittest.TestCase):
     def test_rating_only_accepts_whitespace_but_not_questions(self):
         self.assertEqual(self.ids('rating_only'),{'two','empty','spaces'})
 
+    def test_with_text_excludes_empty_whitespace_and_questions(self):
+        self.assertEqual(self.ids('with_text'),{'one','three','four','five'})
+        self.assertEqual(self.ids('with_text',q='Great'),{'five'})
+        self.assertEqual(self.ids('with_text',account_id='another-store'),set())
+
     def test_manual_retains_flags_and_failed_drafts(self):
         self.assertEqual(self.ids('manual'),{'one','two','three','four','five'})
 
@@ -43,7 +48,7 @@ class SimpleReviewFilterTests(unittest.TestCase):
         self.assertEqual(self.ids('rating_only',account_id='another-store'),set())
 
     def test_counts_are_for_full_results_and_store(self):
-        self.assertEqual(review_filter_counts(self.db),{'all':7,'positive':4,'negative':3,'rating_only':3,'manual':5})
+        self.assertEqual(review_filter_counts(self.db),{'all':7,'positive':4,'negative':3,'rating_only':3,'with_text':4,'manual':5})
         self.assertEqual(review_filter_counts(self.db,q='Great')['positive'],1)
         self.assertEqual(review_filter_counts(self.db,account_id='another-store')['all'],0)
 

@@ -243,9 +243,9 @@ def _review_query(filters):
         conditions.append(Review.rating.between(4, 5))
     elif view == 'negative':
         conditions.append(Review.rating.between(1, 3))
-    elif view == 'rating_only':
+    elif view in ('rating_only', 'with_text'):
         text_without_whitespace = func.replace(func.replace(func.replace(func.coalesce(Review.text, ''), '\n', ''), '\r', ''), '\t', '')
-        conditions.append(func.trim(text_without_whitespace) == '')
+        conditions.append(func.trim(text_without_whitespace) != '' if view == 'with_text' else func.trim(text_without_whitespace) == '')
     elif view == 'context':
         raw_ids = filters.get('review_ids', '')
         if len(raw_ids) > 12000:
@@ -319,8 +319,9 @@ def review_filter_counts(db, q='', account_id=''):
         func.sum(case((Review.rating.between(4, 5), 1), else_=0)),
         func.sum(case((Review.rating.between(1, 3), 1), else_=0)),
         func.sum(case((empty_text, 1), else_=0)),
+        func.sum(case((~empty_text, 1), else_=0)),
         func.sum(case((manual, 1), else_=0))).order_by(None)).one()
-    return dict(zip(('all', 'positive', 'negative', 'rating_only', 'manual'), (value or 0 for value in values)))
+    return dict(zip(('all', 'positive', 'negative', 'rating_only', 'with_text', 'manual'), (value or 0 for value in values)))
 
 
 def assess_reply(review, product, reply, verified_facts=None):
