@@ -142,3 +142,19 @@ def test_interactive_generation_can_run_between_bulk_items(client, monkeypatch):
     monkeypatch.setattr(main, 'execute_job', execute)
     asyncio.run(main.run_waiting_sync())
     execute.assert_awaited_once_with('interactive')
+
+
+@pytest.mark.parametrize('provider', ['ozon', 'yandex'])
+def test_assortment_recommendations_use_the_selected_marketplace(client, provider):
+    from app.assortment_questions import assortment_question_answer, review_vent_holder
+    with Session() as db:
+        db.add(StoreProfile(id='shop', provider=provider, name='Shop'))
+        current = Product(id=f'{provider}:shop:100', marketplace=provider, brand='EIKOSHA', name='Меловой ароматизатор A-43')
+        db.add_all([current, Product(id=f'{provider}:shop:200', marketplace=provider, brand='EIKOSHA', name='Яблочный ароматизатор A-11'), Product(id=f'{provider}:shop:300', marketplace=provider, brand='EIKOSHA', name='Держатель на дефлектор'), Product(id=f'{provider}:other:999', marketplace=provider, brand='EIKOSHA', name='Яблочный ароматизатор')])
+        db.flush()
+        question = Review(wb_account_id='shop', text='Есть яблочный запах?')
+        result = assortment_question_answer(db, question, current, lambda *_: [])
+        assert '200' in result['answer'] and '999' not in result['answer']
+        assert 'Wildberries' not in result['answer']
+        holder = review_vent_holder(db, question, current)
+        assert '300' in holder['article_label'] and 'Wildberries' not in holder['article_label']
