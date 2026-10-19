@@ -48,9 +48,17 @@ async def card_characteristics(store, token, offers, category_cache, cancelled=N
     if cancelled and cancelled():
         raise asyncio.CancelledError()
     await asyncio.sleep(0.65)
-    response = await guard.request('yandex', 'product_cards', headers={'Api-Key': token},
-        url=f'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/offer-cards',
-        params={'limit': 200}, body={'offerIds': list(eligible)})
+    try:
+        response = await guard.request('yandex', 'product_cards', headers={'Api-Key': token},
+            url=f'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/offer-cards',
+            params={'limit': 200}, body={'offerIds': list(eligible)})
+    except ValueError as error:
+        if not any(f'HTTP {code}' in str(error) for code in (403, 429, 500, 502, 503, 504)): raise
+        # Detailed cards are supplemental; the primary offer-mappings response
+        # still supplies authoritative product identities and base properties.
+        warning = 'подробные карточки, начиная с ' + next(iter(eligible))
+        if warnings is not None and warning not in warnings: warnings.append(warning)
+        return {}
     payload = response.get('result')
     if response.get('status') == 'ERROR' or not isinstance(payload, dict) or not isinstance(payload.get('offerCards'), list):
         raise ValueError('Яндекс Маркет не вернул подробные характеристики карточек')
