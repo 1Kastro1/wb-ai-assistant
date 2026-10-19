@@ -40,6 +40,7 @@ def test_full_sync_enriches_each_page_caches_category_and_preserves_manual_facts
     store = connected_store(client, monkeypatch)
     calls = []
     async def request(service, operation, **kwargs):
+        if kwargs.get('body') == {'archived': True}: return {'status': 'OK', 'result': {'offerMappings': []}}
         calls.append(operation)
         if operation == 'products':
             result = page('SKU-1')
