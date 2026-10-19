@@ -131,3 +131,14 @@ def test_ozon_review_cursor_error_preserves_committed_progress(client, monkeypat
             asyncio.run(ozon.sync_reviews(db, store, checkpoint=saved.append))
         assert saved == [{'last_id': 'same', 'processed': 1}]
         assert db.scalar(select(Review).where(Review.wb_account_id == store)).text == 'Спасибо'
+
+
+def test_interactive_generation_can_run_between_bulk_items(client, monkeypatch):
+    from app import main
+    with Session() as db:
+        db.add(Job(id='interactive', kind='single_question_draft', status='queued', priority=10, result={'account_id': 'other-store'}))
+        db.commit()
+    execute = AsyncMock()
+    monkeypatch.setattr(main, 'execute_job', execute)
+    asyncio.run(main.run_waiting_sync())
+    execute.assert_awaited_once_with('interactive')

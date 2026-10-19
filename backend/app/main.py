@@ -996,7 +996,7 @@ async def run_sync_job(job_id):
         await execute_job(job_id)
 
 
-async def run_waiting_sync(kinds=('products', 'reviews', 'questions')):
+async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft')):
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
