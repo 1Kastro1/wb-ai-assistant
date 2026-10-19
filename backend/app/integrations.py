@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from xml.etree import ElementTree
 from urllib.parse import parse_qs, unquote, urlsplit
-from sqlalchemy import select
+from sqlalchemy import select, func
 from .config import MODEL
 from .db import StoreListing, Account, Draft, Product, Review, StoreProfile, Session, now, setting
 from .safety import classify, mask_vin
@@ -522,7 +522,7 @@ class YandexProvider:
         await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
         return True
 
-    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
+    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None, _offer_ids=None):
         from .yandex_content import card_characteristics
         store, token = store_credentials(db, store_id)
         category_cache = {}
@@ -531,10 +531,11 @@ class YandexProvider:
         for _ in range(1000):
             if cancelled and cancelled():
                 raise asyncio.CancelledError()
-            params = {'limit': 100}
-            if page: params['pageToken'] = page
+            params = {} if _offer_ids is not None else {'limit': 100}
+            if page and _offer_ids is None: params['pageToken'] = page
             try:
-                result = await guard.request('yandex', 'products', headers={'Api-Key': token}, url=self.target(store, 'products'), params=params)
+                options = {'body': {'offerIds': _offer_ids}} if _offer_ids is not None else {}
+                result = await guard.request('yandex', 'products', headers={'Api-Key': token}, url=self.target(store, 'products'), params=params, **options)
             except ValueError as error:
                 if 'HTTP 403' in str(error):
                     raise ValueError('Яндекс Маркет запретил загрузку каталога. Проверьте Business ID и доступ API-ключа «Просмотр товаров и карточек».') from None
@@ -542,6 +543,8 @@ class YandexProvider:
             payload = result.get('result')
             if result.get('status') == 'ERROR' or not isinstance(payload, dict) or not isinstance(payload.get('offerMappings'), list):
                 raise ValueError('Яндекс Маркет не вернул каталог товаров. Повторите синхронизацию позже.')
+            if _offer_ids is not None and any(str((item.get('offer') or {}).get('offerId') or '') not in _offer_ids for item in payload['offerMappings']):
+                raise ValueError('Яндекс Маркет вернул другой артикул при точном поиске товара')
             details = await card_characteristics(store, token, payload['offerMappings'], category_cache, cancelled)
             for item in payload['offerMappings']:
                 offer, mapping = item.get('offer') or {}, item.get('mapping') or {}
@@ -582,7 +585,23 @@ class YandexProvider:
             db.commit()
             if progress: progress(min(95, 5 + total // 100))
             page = str((payload.get('paging') or {}).get('nextPageToken') or '')
-            if not page: return total
+            if _offer_ids is not None: return total
+            if not page:
+                # Historical reviews/questions can reference offers omitted from
+                # the current paginated catalog. Resolve their exact seller SKU
+                # before leaving numeric placeholders in the product library.
+                prefix = f'yandex:{store.id}:'
+                missing = list(db.scalars(select(Product.id).where(
+                    Product.id.startswith(prefix),
+                    Product.name == func.substr(Product.id, len(prefix) + 1),
+                    Product.brand == '',
+                ).order_by(Product.id)))
+                for offset in range(0, len(missing), 100):
+                    if cancelled and cancelled(): raise asyncio.CancelledError()
+                    total += await self.sync_products(db, store_id, cancelled=cancelled,
+                        _offer_ids=[pid[len(prefix):] for pid in missing[offset:offset + 100]])
+                    if between_pages: await between_pages()
+                return total
             if page in seen:
                 raise ValueError('Яндекс Маркет вернул повторную страницу каталога; прогресс сохранён')
             seen.add(page)

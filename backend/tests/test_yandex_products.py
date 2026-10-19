@@ -132,3 +132,52 @@ def test_catalog_read_endpoint_does_not_allow_update_or_other_business_urls():
     for invalid in (url + '/update', url.replace('api.partner.market.yandex.ru', 'other.example'), url + '?token=secret'):
         with pytest.raises(ValueError):
             guard.validate('yandex', 'products', url=invalid)
+
+
+def test_historical_placeholder_missing_from_catalog_is_recovered_by_exact_sku(client, monkeypatch):
+    store = connected_store(client, monkeypatch)
+    manual = {'text': 'Правка сотрудника', 'source': 'Пользователь'}
+    with Session() as db:
+        db.add_all([
+            Product(id=f'yandex:{store}:101482', name='101482', marketplace='yandex', facts=[manual]),
+            Product(id='yandex:another:101482', name='101482', marketplace='yandex'),
+        ])
+        db.flush()
+        db.add(Review(id='historical', wb_review_id='historical', wb_account_id=store,
+            product_id=f'yandex:{store}:101482', marketplace='yandex', rating=5, text='Хорошо'))
+        db.commit()
+    calls = []
+    async def request(service, operation, **kwargs):
+        assert (service, operation) == ('yandex', 'products')
+        calls.append(kwargs)
+        if kwargs.get('body'):
+            assert kwargs['body'] == {'offerIds': ['101482']}
+            assert kwargs['params'] == {}  # Exact SKU lookup forbids pagination filters.
+            return page('101482')
+        return page('current')
+    monkeypatch.setattr(guard, 'request', request)
+    with Session() as db:
+        assert asyncio.run(yandex.sync_products(db, store)) == 2
+        product = db.get(Product, f'yandex:{store}:101482')
+        assert product.name == 'Масляный фильтр 101482'
+        assert product.brand == 'BRAND' and product.part_number == 'PART-101482'
+        assert manual in product.facts
+        assert db.get(Review, 'historical').product_id == product.id
+        assert db.get(Product, 'yandex:another:101482').brand == ''
+        assert asyncio.run(yandex.sync_products(db, store)) == 1
+    assert len(calls) == 3  # No repeat lookup after the placeholder is resolved.
+
+
+def test_missing_historical_offer_stays_unconfirmed_without_inventing_data(client, monkeypatch):
+    store = connected_store(client, monkeypatch)
+    with Session() as db:
+        db.add(Product(id=f'yandex:{store}:gone', name='gone', marketplace='yandex'))
+        db.commit()
+    async def request(*args, **kwargs):
+        if kwargs.get('body'): return {'status': 'OK', 'result': {'offerMappings': []}}
+        return page('current')
+    monkeypatch.setattr(guard, 'request', request)
+    with Session() as db:
+        assert asyncio.run(yandex.sync_products(db, store)) == 1
+        product = db.get(Product, f'yandex:{store}:gone')
+        assert product.name == 'gone' and not product.facts and not product.brand
