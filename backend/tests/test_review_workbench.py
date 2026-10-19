@@ -78,7 +78,7 @@ class WorkbenchTests(unittest.TestCase):
             db.get(Review,'r2').manual=True
             db.get(Review,'r1').text=' \n\t'
             db.commit()
-            expected={view:db.scalar(select(func.count()).select_from(_review_query({'view':view,'account_id':'owner'}).subquery())) for view in ('all','positive','negative','rating_only','manual')}
+            expected={view:db.scalar(select(func.count()).select_from(_review_query({'view':view,'account_id':'owner'}).subquery())) for view in ('all','positive','negative','rating_only','with_text','manual')}
             statements=[]
             def count(*args):statements.append(args[2])
             event.listen(self.engine,'before_cursor_execute',count)
