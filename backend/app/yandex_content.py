@@ -38,7 +38,7 @@ def parameter_lines(values, parameters):
     return lines
 
 
-async def card_characteristics(store, token, offers, category_cache, cancelled=None):
+async def card_characteristics(store, token, offers, category_cache, cancelled=None, warnings=None):
     """At most 100 offers from the current page; category schemas cached per import."""
     eligible = {str((item.get('offer') or {}).get('offerId')): item for item in offers
                 if (item.get('mapping') or {}).get('marketCategoryId')}
@@ -73,13 +73,22 @@ async def card_characteristics(store, token, offers, category_cache, cancelled=N
             if cancelled and cancelled():
                 raise asyncio.CancelledError()
             await asyncio.sleep(0.65)
-            schema = await guard.request('yandex', 'category_parameters', headers={'Api-Key': token},
-                url=f'https://api.partner.market.yandex.ru/v2/category/{category}/parameters',
-                params={'businessId': int(business_id)})
+            try:
+                schema = await guard.request('yandex', 'category_parameters', headers={'Api-Key': token},
+                    url=f'https://api.partner.market.yandex.ru/v2/category/{category}/parameters',
+                    params={'businessId': int(business_id)})
+            except ValueError as error:
+                # Optional category dictionaries must not block the base catalog.
+                # None keeps existing detailed facts instead of replacing them.
+                if not any(f'HTTP {code}' in str(error) for code in (403, 429, 500, 502, 503, 504)): raise
+                category_cache[category] = None
+                if warnings is not None and category not in warnings: warnings.append(category)
+                continue
             data = schema.get('result')
             if schema.get('status') == 'ERROR' or not isinstance(data, dict) or not isinstance(data.get('parameters'), list):
                 raise ValueError('Не удалось получить названия характеристик категории Яндекс Маркета')
             category_cache[category] = data['parameters']
+        if category_cache[category] is None: continue
         lines = parameter_lines(values, category_cache[category])
         result[sku] = [{'text': '\n'.join(lines[start:start + 30]), 'source': 'Карточка товара',
                         'source_label': 'Яндекс Маркет · подробные характеристики',

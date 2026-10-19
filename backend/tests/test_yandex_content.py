@@ -77,6 +77,41 @@ def test_detailed_read_operations_cannot_be_redirected_to_writes_or_other_operat
     with pytest.raises(ValueError): guard.validate('yandex', 'products', root + 'businesses/456/offer-cards')
 
 
+@pytest.mark.parametrize('status', [403, 500])
+def test_unavailable_category_dictionary_does_not_block_catalog_or_erase_old_facts(client, monkeypatch, status):
+    store = connected_store(client, monkeypatch)
+    old = {'text': 'Мощность: 55 Вт', 'kind': 'feature', 'imported_from': 'yandex-parameters',
+           'source': 'Карточка товара', 'verification_status': 'VERIFIED'}
+    with Session() as db:
+        db.add(Product(id=f'yandex:{store}:SKU-1', name='SKU-1', marketplace='yandex', facts=[old]))
+        db.commit()
+    schemas = []
+    async def request(service, operation, **kwargs):
+        if operation == 'products':
+            if kwargs.get('body') == {'archived': True}: return {'result': {'offerMappings': []}}
+            result = page('SKU-1')
+            result['result']['offerMappings'] += page('SKU-2')['result']['offerMappings']
+            for item in result['result']['offerMappings']: item['mapping']['marketCategoryId'] = 123
+            return result
+        if operation == 'product_cards':
+            return {'result': {'offerCards': [{'offerId': sku, 'parameterValues': [{'parameterId': 1, 'value': '99'}]} for sku in ('SKU-1', 'SKU-2')]}}
+        assert operation == 'category_parameters'
+        schemas.append(kwargs['url'])
+        raise ValueError(f'yandex: HTTP {status}')
+    monkeypatch.setattr(guard, 'request', request)
+    job = client.post('/jobs/sync/products').json()
+    result = client.get('/jobs/' + job['id']).json()
+    assert result['status'] == 'completed', result
+    assert result['result']['processed'] == 2
+    assert '123' in result['result']['warning']
+    assert len(schemas) == 1
+    with Session() as db:
+        assert old in db.get(Product, f'yandex:{store}:SKU-1').facts
+        product = db.get(Product, f'yandex:{store}:SKU-2')
+        assert product.name == 'Масляный фильтр SKU-2'
+        assert not any('99' in fact.get('text', '') for fact in product.facts)
+
+
 def test_research_still_finds_details_when_instruction_already_exists(client, seeded, monkeypatch):
     from app import main
     with Session() as db:
