@@ -522,10 +522,11 @@ class YandexProvider:
         await guard.request('yandex', 'reviews', headers={'Api-Key': token}, url=self.target(store, 'reviews'), params={'limit': 1}, body={'reactionStatus':'ALL'})
         return True
 
-    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None, _offer_ids=None, _archived=False):
+    async def sync_products(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None, _offer_ids=None, _archived=False, _detail_warnings=None):
         from .yandex_content import card_characteristics
         store, token = store_credentials(db, store_id)
         category_cache = {}
+        detail_warnings = _detail_warnings if _detail_warnings is not None else []
         total, page = int((resume or {}).get('processed', 0)), str((resume or {}).get('page', ''))
         seen = {page} if page else set()
         for _ in range(1000):
@@ -545,7 +546,8 @@ class YandexProvider:
                 raise ValueError('Яндекс Маркет не вернул каталог товаров. Повторите синхронизацию позже.')
             if _offer_ids is not None and any(str((item.get('offer') or {}).get('offerId') or '') not in _offer_ids for item in payload['offerMappings']):
                 raise ValueError('Яндекс Маркет вернул другой артикул при точном поиске товара')
-            details = await card_characteristics(store, token, payload['offerMappings'], category_cache, cancelled)
+            details = await card_characteristics(store, token, payload['offerMappings'], category_cache, cancelled, detail_warnings)
+            set_setting(db, 'yandex-catalog-warning:' + store.id, ('Не удалось получить справочники дополнительных характеристик для категорий: ' + ', '.join(detail_warnings) + '. Основные карточки загружены; прежние проверенные характеристики сохранены.') if detail_warnings else '')
             for item in payload['offerMappings']:
                 offer, mapping = item.get('offer') or {}, item.get('mapping') or {}
                 sku = str(offer.get('offerId') or '').strip()
@@ -589,7 +591,7 @@ class YandexProvider:
             if not page:
                 if _archived: return total
                 total += await self.sync_products(db, store_id, cancelled=cancelled,
-                    between_pages=between_pages, _archived=True)
+                    between_pages=between_pages, _archived=True, _detail_warnings=detail_warnings)
                 # Historical reviews/questions can reference offers omitted from
                 # the current paginated catalog. Resolve their exact seller SKU
                 # before leaving numeric placeholders in the product library.
@@ -602,7 +604,7 @@ class YandexProvider:
                 for offset in range(0, len(missing), 100):
                     if cancelled and cancelled(): raise asyncio.CancelledError()
                     total += await self.sync_products(db, store_id, cancelled=cancelled,
-                        _offer_ids=[pid[len(prefix):] for pid in missing[offset:offset + 100]])
+                        _offer_ids=[pid[len(prefix):] for pid in missing[offset:offset + 100]], _detail_warnings=detail_warnings)
                     if between_pages: await between_pages()
                 return total
             if page in seen:

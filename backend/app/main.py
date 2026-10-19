@@ -1150,8 +1150,8 @@ async def execute_job(job_id):
                             raise
                         count = await operation(db)
                 job.status, job.progress, job.result = 'completed', 100, {'processed':count, 'account_id': account_id, 'finished_at': now()}
-                if kind == 'products' and store.provider == 'ozon':
-                    job.result = {**job.result, 'warning': setting(db, 'ozon-catalog-warning:' + store.id, '')}
+                if kind == 'products' and store.provider in ('ozon', 'yandex'):
+                    job.result = {**job.result, 'warning': setting(db, store.provider + '-catalog-warning:' + store.id, '')}
                 if kind == 'reviews':
                     negative = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == False, Review.rating <= 2)) or 0
                     if negative:
