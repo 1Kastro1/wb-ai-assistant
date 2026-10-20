@@ -28,6 +28,11 @@ def test_question_cold_start_has_a_finite_budget_without_generating_three_varian
     calls = []
     async def variants(messages, count):
         calls.append(count)
+        assert len(messages[0]['content']) < 2500
+        payload = __import__('json').loads(messages[1]['content'])
+        assert payload['verified_facts'][0]['text'] == 'Материал корпуса: полипропилен'
+        assert 'verified_at' not in payload['verified_facts'][0]
+        assert 'store_rules' in payload and 'owner_instruction' in payload
         return ['Здравствуйте! Корпус этого контейнера изготовлен из полипропилена, как указано в характеристиках товара.']
     real_budget = services.GenerationBudget
     def budget(seconds=30):
