@@ -327,7 +327,7 @@ def reviews_page(db, **filters):
 def review_facets(db, account_id):
     result = {}
     for name, column in (('brands', Product.brand), ('categories', Product.category)):
-        query = _review_query({'account_id': account_id}).with_only_columns(column).where(column != '').distinct().order_by(column)
+        query = _review_query({'account_id': account_id}).with_only_columns(column, maintain_column_froms=True).where(column != '').distinct().order_by(column)
         result[name] = list(db.scalars(query))
     return result
 
@@ -1098,3 +1098,4 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
     action.result = {'items': results, 'test_mode': test, 'confirmed_by': actor_id, 'confirmed_at': now()}
     db.commit()
     return public(action)
+
