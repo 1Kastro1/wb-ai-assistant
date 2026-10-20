@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Annotated, Literal
-from fastapi import FastAPI, Depends, Request, Response, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, Depends, Request, Response, HTTPException, UploadFile, File, Form, BackgroundTasks, Query
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +29,7 @@ from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_P
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for, web_research
 from .product_search import product_search_condition
-from .services import reviews_search, reviews_page, review_filter_counts, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public, review_items
+from .services import reviews_search, reviews_page, review_filter_counts, review_facets, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public, review_items
 from .assistant import assistant
 from .compatibility import import_catalog, validate_vin, check_compatibility
 from .safety import mask_vin
@@ -1520,8 +1520,15 @@ def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_ratin
 
 
 @app.get('/reviews/page')
-def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'with_text', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = ''):
-    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids)
+def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'with_text', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = '', ratings: list[int] = Query(default=[]), text_status: Literal['all', 'with_text', 'rating_only'] = 'all', answer_status: Literal['all', 'answered', 'unanswered'] = 'all', manual_only: bool = False, brands: list[str] = Query(default=[]), categories: list[str] = Query(default=[])):
+    if len(ratings) > 5 or any(r < 1 or r > 5 for r in ratings) or any(len(values) > 100 or any(len(value) > 200 for value in values) for values in (brands, categories)):
+        raise HTTPException(422, 'Недопустимые значения фильтра')
+    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids, ratings=ratings, text_status=text_status, answer_status=answer_status, manual_only=manual_only, brands=brands, categories=categories)
+
+
+@app.get('/reviews/facets')
+def reviews_available_filters(auth: AUTH, db: DB):
+    return review_facets(db, active_store(db, auth))
 
 
 @app.get('/reviews/counts')

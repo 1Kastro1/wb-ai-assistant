@@ -6,6 +6,8 @@ import {createAudioCapture,speechChunks,wavFromAudio} from './voice-utils';
 import CrossCatalog from './CrossCatalog';
 import MarketplaceConnection from './MarketplaceConnection';
 import AppSidebar from './AppSidebar';
+import ReviewFilters from './ReviewFilters';
+import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams,reviewFilterCount,legacyReviewFilters} from './review-filters.mjs';
 import ActivityHistory from './ActivityHistory';
 import ApprovalDialog from './ApprovalDialog';
 import AuthScreen from './AuthScreen';
@@ -27,6 +29,7 @@ import './activity-history.css';
 import './workbench.css';
 import './workspace.css';
 import './polish.css';
+import './navigation-filters.css';
 import ActionButton from './ActionButton';
 import QuestionCard from './QuestionCard';
 import ProductKnowledgeOverview from './ProductKnowledgeOverview';
@@ -82,6 +85,7 @@ export default function App() {
   const [marketOverview,setMarketOverview]=useState<Row|null>(null),[overviewDays,setOverviewDays]=useState(0);
   const [reviews, setReviews] = useState<Row[]>([]), [questions, setQuestions] = useState<Row[]>([]), [products, setProducts] = useState<Row[]>([]), [actions, setActions] = useState<Row[]>([]), [memories, setMemories] = useState<Row[]>([]);
   const [messages, setMessages] = useState<Row[]>([]), [conversations, setConversations] = useState<Row[]>([]), [conversation, setConversation] = useState<string | null>(null), [input, setInput] = useState('');
+  const [reviewFilters,setReviewFilters]=useState(emptyReviewFilters);
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all'), [selected, setSelected] = useState<string[]>([]), [context, setContext] = useState<Row>({});
   const [performance, setPerformance] = useState('normal');
   const [token, setToken] = useState(''), [connectionConfig,setConnectionConfig]=useState<Row>({}), [memory, setMemory] = useState(''), [brand, setBrand] = useState(''), [brands, setBrands] = useState<Row[]>([]);
@@ -153,8 +157,8 @@ export default function App() {
     try { setAi(await api('/ollama')); }
     catch(error) { setAi({available:false,models:[],message:error instanceof Error?error.message:'Не удалось проверить Ollama'}); }
   }
-  async function findReviews(offset=0,append=false,view=filter,reuse=false){
-    scrollReady.current=false;const request=++reviewSearchRequest.current,key=currentUser.id+':'+stores.active+':'+view+':'+query,cached=reviewViews.current.get(key);setReviewLoading(true);
+  async function findReviews(offset=0,append=false,view=filter,reuse=false,conditions=reviewFilters){
+    scrollReady.current=false;const request=++reviewSearchRequest.current,key=currentUser.id+':'+stores.active+':'+view+':'+query+':'+JSON.stringify(conditions),cached=reviewViews.current.get(key);setReviewLoading(true);
     try{
       let loadedCounts=cached?.counts;
       if(reuse&&cached&&Date.now()-cached.at<15000){setReviews(cached.items);setReviewPage(cached.page);if(cached.counts)setReviewCounts(cached.counts);return}
@@ -163,8 +167,9 @@ export default function App() {
       const params=new URLSearchParams({q:query,unanswered:String(view==='unanswered'),attention:String(view==='attention'),max_rating:String(view==='negative'?3:5),limit:String(limit),offset:String(offset)});
       if(['positive','negative','rating_only','with_text','manual','context'].includes(view))params.set('view',view);
       if(view==='context')params.set('review_ids',(context.last_result_ids||[]).join(','));
+      reviewFilterParams(view==='all'?conditions:emptyReviewFilters()).forEach((value,key)=>params.append(key,value));
       const result=await api('/reviews/page?'+params,'GET',undefined,15000);
-      if(request===reviewSearchRequest.current){const items=append?[...(cached?.items||reviews),...result.items]:result.items;setReviews(items);setReviewPage(result);reviewViews.current.set(key,{items,page:result,at:Date.now(),counts:loadedCounts});viewPreferences.current.reviewLimit=Math.min(100,items.length);persistView()}
+      if(request===reviewSearchRequest.current){const items=append?[...(cached?.items||reviews),...result.items]:result.items;setReviews(items);setReviewPage(result);reviewViews.current.set(key,{items,page:result,at:Date.now(),counts:loadedCounts});viewPreferences.current.reviewLimit=Math.min(100,items.length);try{sessionStorage.setItem(viewKey,JSON.stringify(viewPreferences.current))}catch{}}
     }finally{if(request===reviewSearchRequest.current)setReviewLoading(false)}
   }
   async function findProducts(offset=0, append=false) {
@@ -199,11 +204,11 @@ export default function App() {
     } catch(error) {const message=error instanceof Error?error.message:'Синхронизация не завершена';setWbStatus({state:'error',kind,message});throw error}
   }
   const viewKey='workspace-view:'+currentUser.id+':'+(stores.active||'unassigned');visibleScope.current=viewKey;
-  function persistView(){if(!logged||viewReady!==viewKey)return;const value={...viewPreferences.current,page,filter,query,productQuery,questionQuery,questionFilter,questionKind};viewPreferences.current=value;try{sessionStorage.setItem(viewKey,JSON.stringify(value))}catch{}}
-  useEffect(()=>{if(!logged||!ready)return;let storage=null;try{storage=sessionStorage}catch{};const saved=readViewPreferences(storage,viewKey);viewPreferences.current=saved;if(restoredScope.current&&restoredScope.current!==viewKey)workspaceLoader.current.clear();restoredScope.current=viewKey;reviewViews.current.clear();reviewSearchRequest.current++;productSearchRequest.current++;questionSearchRequest.current++;setFilter(saved.filter==='context'?'all':saved.filter);setQuery(saved.query);setProductQuery(saved.productQuery);setQuestionQuery(saved.questionQuery);setQuestionFilter(saved.questionFilter);setQuestionKind(saved.questionKind);if(saved.exists&&nav.some(([,name])=>name===saved.page))setPage(saved.page);setSelected([]);setViewReady(viewKey);},[logged,ready,viewKey]);
-  useEffect(()=>{persistView()},[viewReady,page,filter,query,productQuery,questionQuery,questionFilter,questionKind]);
+  function persistView(){if(!logged||viewReady!==viewKey)return;const value={...viewPreferences.current,page,filter,reviewFilters,query,productQuery,questionQuery,questionFilter,questionKind};viewPreferences.current=value;try{sessionStorage.setItem(viewKey,JSON.stringify(value))}catch{}}
+  useEffect(()=>{if(!logged||!ready)return;let storage=null;try{storage=sessionStorage}catch{};const saved=readViewPreferences(storage,viewKey);viewPreferences.current=saved;if(restoredScope.current&&restoredScope.current!==viewKey)workspaceLoader.current.clear();restoredScope.current=viewKey;reviewViews.current.clear();reviewSearchRequest.current++;productSearchRequest.current++;questionSearchRequest.current++;setReviewFilters(normalizeReviewFilters(saved.reviewFilters));setFilter(saved.filter==='context'?'all':saved.filter);setQuery(saved.query);setProductQuery(saved.productQuery);setQuestionQuery(saved.questionQuery);setQuestionFilter(saved.questionFilter);setQuestionKind(saved.questionKind);if(saved.exists&&nav.some(([,name])=>name===saved.page))setPage(saved.page);setSelected([]);setViewReady(viewKey);},[logged,ready,viewKey]);
+  useEffect(()=>{persistView()},[viewReady,page,filter,reviewFilters,query,productQuery,questionQuery,questionFilter,questionKind]);
   useEffect(()=>{if(!logged||!ready||viewReady!==viewKey)return;const request=++sectionSequence.current;scrollReady.current=false;setSectionLoading(true);setSectionError('');async function load(){try{await refresh(page,false);if(request!==sectionSequence.current)return;if(page==='Отзывы')await findReviews(0,false,filter,true);if(page==='Вопросы')await findQuestions();if(page==='Настройки'&&settingsTab==='connections')await refreshAi()}catch(e){if(request===sectionSequence.current)setSectionError(e instanceof Error?e.message:'Не удалось загрузить раздел')}finally{if(request===sectionSequence.current)setSectionLoading(false)}}void load();return()=>{sectionSequence.current++}},[logged,ready,page,settingsTab,viewReady]);
-  useEffect(()=>{if(!logged||viewReady!==viewKey)return;const saver=createScrollSaver(()=>{if(!scrollReady.current)return;viewPreferences.current.scroll={...(viewPreferences.current.scroll||{}),[page]:window.scrollY};persistView()});const saveScroll=()=>saver.schedule();window.addEventListener('scroll',saveScroll,{passive:true});return()=>{window.removeEventListener('scroll',saveScroll);saver.flush()}},[logged,viewReady,page,filter,query]);
+  useEffect(()=>{if(!logged||viewReady!==viewKey)return;const saver=createScrollSaver(()=>{if(!scrollReady.current)return;viewPreferences.current.scroll={...(viewPreferences.current.scroll||{}),[page]:window.scrollY};persistView()});const saveScroll=()=>saver.schedule();window.addEventListener('scroll',saveScroll,{passive:true});return()=>{window.removeEventListener('scroll',saveScroll);saver.flush()}},[logged,viewReady,page,filter,reviewFilters,query,productQuery,questionQuery,questionFilter,questionKind]);
   useEffect(()=>{if(!logged||viewReady!==viewKey||sectionLoading||reviewLoading)return;const target=Number(viewPreferences.current.scroll?.[page])||0;const frame=requestAnimationFrame(()=>{window.scrollTo({top:target,behavior:'instant'});scrollReady.current=true});return()=>cancelAnimationFrame(frame)},[page,viewReady,sectionLoading,reviewLoading]);
   useEffect(()=>{const preventLoss=(event:BeforeUnloadEvent)=>{if(Object.values(pendingEdits).some(Boolean)){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',preventLoss);return()=>window.removeEventListener('beforeunload',preventLoss)},[pendingEdits]);
   useEffect(() => { let stopped=false;async function initialize(){try{let r;try{r=await api('/auth/session','GET',undefined,12000)}catch(e){if((e as {status?:number}).status!==401)throw e;const status=await api('/auth/status','GET',undefined,12000);if(!stopped){setInitialized(status.initialized);setReady(true)}return}if(stopped)return;setCsrf(r.csrf);setCurrentUser(r.user||{});setLogged(true);setStartupPhase('workspace');if(!r.user?.must_change_password){await refresh('shell',false,r.user?.role)}if(!stopped)setReady(true)}catch(e){if(!stopped)setStartupError(e instanceof Error?e.message:'Не удалось подключиться к серверу.')}}void initialize();return()=>{stopped=true}},[]);
@@ -414,13 +419,13 @@ export default function App() {
           onPublish={()=>run(async()=>{await Promise.all(reviews.filter(r=>selected.includes(r.id)&&r.draft).map(r=>draftFlushers.current.get(r.draft.id)?.()));await api('/actions/publish','POST',{review_ids:selected});await refresh();setApprovalOpen(true)})}/>
         <p className="review-policy-note">{canManageStore?'Отзывы с низкой оценкой и опасные ситуации требуют личной проверки.':'Ваша должность разрешает просмотр. Операции выполняют владелец и назначенный менеджер.'}</p>
         {filter==='context'&&<p className="muted">Показаны отзывы из чата. <button className="link" onClick={()=>{setFilter('all');void run(()=>findReviews(0,false,'all'));}}>Показать все отзывы</button></p>}
-        <div className="review-filter-tabs" role="group" aria-label="Фильтры отзывов">{[['all','Все отзывы'],['positive','4–5 ★'],['negative','1–3 ★'],['with_text','С текстом'],['rating_only','Без текста'],['manual','Ручная проверка']].map(([view,label])=><button key={view} className={filter===view?'active':''} aria-pressed={filter===view} disabled={busy} onClick={()=>{setFilter(view);setSelected([]);void run(()=>findReviews(0,false,view));}}><span>{label}</span><b>{reviewCounts[view]??'…'}</b></button>)}</div>
+        <ReviewFilters value={filter==='all'?reviewFilters:legacyReviewFilters(filter)} scope={viewKey} busy={busy} onApply={next=>{setReviewFilters(next);setFilter('all');setSelected([]);void run(()=>findReviews(0,false,'all',false,next));}}/>
         <div className="toolbar"><input placeholder="Текст, товар или бренд" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')run(()=>findReviews())}}/><ActionButton label="Найти" pendingLabel="Ищем…" successLabel="Найдено" disabled={busy} onAction={()=>runWithResult(()=>findReviews())}/></div>
         <div className="selection-toolbar"><label className="check"><input type="checkbox" aria-label="Выбрать отзывы на странице" checked={reviews.some(r=>!r.is_answered)&&reviews.filter(r=>!r.is_answered).every(r=>selected.includes(r.id))} disabled={!canManageStore||reviewLoading} onChange={e=>setSelected(e.target.checked?reviews.filter(r=>!r.is_answered).slice(0,100).map(r=>r.id):[])}/>Выбрать на странице</label><span>Выбрано: {selected.length}</span><div className="button-row"><button className="primary" disabled={!canManageStore||!assistantEnabled||!selected.length||batchBusy} onClick={()=>void generateSelected()}>{batchBusy?'Добавляем в очередь…':'Подготовить выбранные ('+selected.length+')'}</button>{selected.length>0&&<button onClick={()=>setSelected([])}>Снять выбор</button>}</div></div>
         <BatchDraftPanel job={batchJob} busy={batchBusy} onCancel={()=>{if(batchJob)void run(async()=>{setBatchJob(await api('/jobs/'+batchJob.id+'/cancel','POST'))})}} onReview={()=>void run(()=>findReviews())}/>
         {reviewLoading&&<p className="section-loading" role="status">Обновляем список отзывов…</p>}<div className="review-list">{reviews.map(r => <ReviewCard key={r.id} review={r} checked={selected.includes(r.id)} toggle={() => setSelected(s => s.includes(r.id) ? s.filter(id => id !== r.id) : [...s, r.id].slice(0,100))} busy={Boolean(reviewOperations[r.id]?.busy)} operationError={reviewOperations[r.id]?.error||''} assistantEnabled={assistantEnabled} generating={Boolean(draftWorking[r.id])} generationPhase={draftWorking[r.id]?.status||'running'} generationError={draftErrors[r.id] || ''} canManage={Boolean(canManageStore)} generate={(instruction) => generateDraft(r, instruction)} storageKey={'draft-edit:'+currentUser.id+':'+stores.active+':'+r.draft?.id} onRegister={registerDraft} publish={()=>runReview(r.id,async()=>{await api('/actions/publish','POST',{review_ids:[r.id]});await refresh();setApprovalOpen(true)})} onPending={value=>setPendingEdits(current=>current[r.id]===value?current:{...current,[r.id]:value})} save={(text,revision)=>saveReviewDraft(r,text,revision)} feedback={(rating,reasons)=>runReview(r.id,async()=>{const updated=await api('/drafts/'+r.draft.id+'/feedback','POST',{rating,reasons});const draft=await api('/drafts/'+r.draft.id);acceptReviewDraft(r.id,draft);setNotice('Оценка сохранена.');})}/>)}
           {reviewPage.has_more && <button className="full" disabled={busy} onClick={()=>run(()=>findReviews(reviewPage.offset+reviewPage.limit,true))}>Показать ещё</button>}
-          {!reviews.length && !reviewLoading && !sectionLoading && <Empty text={query.trim() || filter !== 'all' ? 'По выбранным условиям отзывы не найдены. Измените запрос или фильтр.' : 'Отзывов пока нет. Подключите активный магазин и выполните синхронизацию в настройках.'}/>}
+          {!reviews.length && !reviewLoading && !sectionLoading && <Empty text={query.trim() || filter !== 'all' || reviewFilterCount(reviewFilters)>0 ? 'По выбранным условиям отзывы не найдены. Измените запрос или фильтр.' : 'Отзывов пока нет. Подключите активный магазин и выполните синхронизацию в настройках.'}/>}
         </div>
       </section>}
 
