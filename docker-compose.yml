@@ -15,6 +15,7 @@ services:
     restart: unless-stopped
   postgres:
     image: postgres:17-alpine
+    shm_size: 256mb
     environment:
       POSTGRES_DB: wb_assistant
       POSTGRES_USER: wb_assistant
