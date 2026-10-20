@@ -75,7 +75,7 @@ def usage_excerpt(facts):
             if not sentence:
                 continue
             action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
-            if (heading or action) and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
+            if (heading or action or fact.get('kind') == 'instruction') and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
                 result.append(sentence)
     return '; '.join(sentence.rstrip('.') for sentence in result) + ('.' if result else '')
 
@@ -228,3 +228,4 @@ def product_usage_reply(review, product, facts, revision=0):
         if instruction:
             return intro + ' ' + ('Сожалеем, что Вы не получили ожидаемого результата. ' if complaints else '') + 'По инструкции к этому товару: ' + instruction
     return None
+
