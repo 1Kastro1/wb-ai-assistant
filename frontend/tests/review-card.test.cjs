@@ -8,7 +8,7 @@ const {renderToStaticMarkup}=require('react-dom/server');
 function loadComponent(file,source=fs.readFileSync(file,'utf8')){
  const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
  const moduleObject={exports:{}};
- const localRequire=name=>{if(!name.startsWith('.'))return require(name);const target=path.resolve(path.dirname(file),name);return loadComponent([target,target+'.tsx',target+'.ts',target+'.mjs'].find(file=>fs.existsSync(file))||target)};
+ const localRequire=name=>{if(name.endsWith('.css'))return {};if(!name.startsWith('.'))return require(name);const target=path.resolve(path.dirname(file),name);return loadComponent([target,target+'.tsx',target+'.ts',target+'.mjs'].find(file=>fs.existsSync(file))||target)};
  new Function('require','module','exports',compiled)(localRequire,moduleObject,moduleObject.exports);
  return moduleObject.exports;
 }
@@ -90,3 +90,10 @@ test('action buttons preserve an accessible name and permission-based disabling'
  assert(html.includes('aria-label="Найти"'));assert(html.includes('aria-busy="false"'));assert(html.includes('disabled'));
  assert(html.includes('type="button"'));
 });
+
+const Connection=loadComponent(path.join(__dirname,'../app/MarketplaceConnection.tsx')).default;
+function syncCard(overrides={}){const success={tone:'success',title:'20.10.2026, 14:00',count:9717,detail:'Обработано: 9717'};return renderToStaticMarkup(React.createElement(Connection,{store:{id:'owner',provider:'wb',config:{}},stores:{active:'owner',items:[{id:'owner',name:'Магазин',provider:'wb'}]},name:'Wildberries',connected:true,owner:true,canManage:true,busy:false,token:'',config:{},status:{state:'idle'},onSelect(){},onSave(){},onTest(){},onSync(){},onHistory(){},productSync:success,reviewSync:success,questionSync:success,...overrides}));}
+test('sync cards keep a queued job distinct from its previous successful import',()=>{const html=syncCard({questionSync:{tone:'working',state:'queued',progress:0,title:'В очереди',detail:'Прогресс 0%'}});assert(html.includes('Ожидает запуска'));assert(html.includes('Начнётся после текущего задания'));assert(!html.includes('aria-valuenow="0"'));assert(html.includes('aria-label="Синхронизировать вопросы"'));assert(html.includes('9'));});
+test('sync progress has a bounded accessible value and preserves independent controls',()=>{const html=syncCard({status:{state:'working',kind:'products',phase:'running',progress:37,message:'Загрузка'}});assert(html.includes('aria-valuenow="37"'));assert(html.includes('37%'));assert(html.includes('Обновить отзывы'));assert(html.includes('Обновить вопросы'));assert(!html.includes('sync-overview'));});
+test('sync operations remain disabled for a viewer',()=>{const html=syncCard({canManage:false});for(const label of ['товары','отзывы','вопросы'])assert(new RegExp('button[^>]+disabled[^>]+aria-label="Синхронизировать '+label+'"').test(html));});
+test('question recovery continues the saved job instead of suggesting a new generation',()=>{const html=renderQuestion({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));});

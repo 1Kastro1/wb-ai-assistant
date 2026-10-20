@@ -46,8 +46,8 @@ import {createBackgroundPoller,createScrollSaver} from './background-work.mjs';
 import {startSelectedDrafts} from './batch-job.mjs';
 
 type Row = Record<string, any>;
-async function syncJob(kind:string, onUpdate?: (job:Row)=>void) {
-  let job = await api('/jobs/sync/'+kind,'POST');
+async function syncJob(kind:string, onUpdate?: (job:Row)=>void, initialJob?:Row) {
+  let job = initialJob || await api('/jobs/sync/'+kind,'POST');
   onUpdate?.(job);
   for(let attempt=0;attempt<1800;attempt++) {
     if(job.status==='completed') return job.result;
@@ -198,13 +198,20 @@ export default function App() {
   }
   async function syncWildberries(kind:'products'|'reviews'|'questions') {
     const label=kind==='products'?'товаров':kind==='questions'?'вопросов':'отзывов';
-    setWbStatus({state:'working',kind,message:'Синхронизация '+label+' поставлена в очередь…',progress:0});
-    try {
-      const result=await syncJob(kind,job=>setWbStatus({state:'working',kind,progress:job.progress||0,message:job.status==='queued'?'Ожидание запуска синхронизации '+label+'…':'Синхронизация '+label+': '+(job.progress||0)+'%'}));
-      await refresh();
+    const scope=visibleScope.current;
+    const job=await api('/jobs/sync/'+kind+'?store_id='+encodeURIComponent(activeStore.id),'POST');
+    setJobs(current=>[job,...current.filter(item=>item.id!==job.id)]);
+    setWbStatus({state:'working',kind,phase:job.status,progress:job.progress||0,message:'Синхронизация '+label+' поставлена в очередь. Можно продолжать работу.'});
+    void syncJob(kind,next=>{
+      if(visibleScope.current===scope)setWbStatus({state:'working',kind,phase:next.status,progress:next.progress||0,message:next.status==='queued'?'Ожидание запуска синхронизации '+label+'…':'Синхронизация '+label+': '+(next.progress||0)+'%'});
+    },job).then(async result=>{
+      if(visibleScope.current!==scope)return;
       setWbStatus({state:'success',kind,progress:100,message:'Синхронизация завершена. Обработано '+label+': '+result.processed+'.'+(result.warning?' '+result.warning:'')});
       setNotice('Обработано '+label+': '+result.processed);
-    } catch(error) {const message=error instanceof Error?error.message:'Синхронизация не завершена';setWbStatus({state:'error',kind,message});throw error}
+      try{await refresh()}catch{/* The saved sync result remains available in its card. */}
+    }).catch(error=>{
+      if(visibleScope.current===scope)setWbStatus({state:'error',kind,message:error instanceof Error?error.message:'Синхронизация не завершена'});
+    });
   }
   const viewKey='workspace-view:'+currentUser.id+':'+(stores.active||'unassigned');visibleScope.current=viewKey;
   function persistView(){if(!logged||viewReady!==viewKey)return;const value={...viewPreferences.current,page,filter,reviewFilters,query,productQuery,questionQuery,questionFilter,questionKind};viewPreferences.current=value;try{sessionStorage.setItem(viewKey,JSON.stringify(value))}catch{}}
@@ -372,9 +379,9 @@ export default function App() {
   const syncSummary = (kind:'products'|'reviews'|'questions') => {
     const item=activeSync[kind];
     if(!item||item.state==='never')return {tone:'idle',title:'Ещё не синхронизировались',detail:'Нажмите кнопку синхронизации'};
-    if(['queued','running'].includes(item.state))return {tone:'working',title:item.state==='queued'?'В очереди':'Выполняется',detail:'Прогресс '+(item.progress||0)+'%'};
+    if(['queued','running'].includes(item.state))return {tone:'working',state:item.state,progress:item.progress||0,title:item.state==='queued'?'В очереди':'Выполняется',detail:'Прогресс '+(item.progress||0)+'%'};
     if(['failed','interrupted','cancelled'].includes(item.state))return {tone:'error',title:statusLabel[item.state]||item.state,detail:item.message||'Откройте историю синхронизаций'};
-    return {tone:'success',title:item.last_success_at?new Date(item.last_success_at).toLocaleString('ru'):'Синхронизация завершена',detail:'Обработано: '+(item.last_success_count??item.processed??0)};
+    return {tone:'success',count:item.last_success_count??item.processed??0,title:item.last_success_at?new Date(item.last_success_at).toLocaleString('ru'):'Синхронизация завершена',detail:'Обработано: '+(item.last_success_count??item.processed??0)};
   };
   const productSync=syncSummary('products'),reviewSync=syncSummary('reviews'),questionSync=syncSummary('questions');
   const reviewsStale = !lastReviewsAt || Date.now() - lastReviewsAt.getTime() > 24 * 3600 * 1000;

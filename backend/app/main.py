@@ -1011,8 +1011,14 @@ async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_dr
         await execute_job(pending_id)
 
 
+async def run_waiting_interactive():
+    # Only the current lock-owning worker calls this after an import commit.
+    # Never start another import recursively from an interactive draft.
+    await run_waiting_sync(('single_draft', 'single_question_draft'))
+
+
 async def run_waiting_questions():
-    await run_waiting_sync(('questions',))
+    await run_waiting_sync(('single_draft', 'single_question_draft', 'questions'))
 
 
 async def execute_job(job_id):
@@ -1137,7 +1143,7 @@ async def execute_job(job_id):
                     raise ValueError('Провайдер магазина не поддерживается')
                 operation = provider.sync_products if kind == 'products' else provider.sync_questions if kind == 'questions' else provider.sync_reviews
                 try:
-                    options = {'resume': start_checkpoint, 'checkpoint': save_checkpoint}
+                    options = {'resume': start_checkpoint, 'checkpoint': save_checkpoint, 'between_pages': run_waiting_interactive}
                     if (kind in ('reviews', 'products') and store.provider == 'yandex') or (kind == 'products' and store.provider == 'ozon'):
                         options['between_pages'] = run_waiting_questions
                     if operation: count = await operation(db, account_id, update_progress, cancelled, **options)
@@ -1303,10 +1309,10 @@ async def scheduler_loop():
 
 
 @app.post('/jobs/sync/{kind}')
-async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: DB):
+async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: DB, store_id: str = ''):
     if kind not in ('products','reviews','questions'):
         raise HTTPException(404)
-    active = active_store(db, auth)
+    active = store_id or active_store(db, auth)
     store = db.get(StoreProfile, active)
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
