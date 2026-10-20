@@ -23,3 +23,5 @@ body{background:#f6f7fc;color:var(--ink)}
 
 .shell .main.is-section-loading>.body>.home-dashboard,.shell .main.is-section-loading>.body>.home-analytics{display:block}.shell .body:has(>.home-dashboard)>.section-skeleton{display:none}
 
+
+.shell .readiness-card{isolation:isolate}.shell .readiness-card:after{z-index:-1;opacity:.55}
