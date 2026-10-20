@@ -436,7 +436,7 @@ class OzonProvider:
 
     async def test(self, db, store_id):
         store, token = store_credentials(db, store_id)
-        await guard.request('ozon', 'reviews', headers=self.headers(store, token), body={'limit': 1, 'sort_dir': 'DESC'})
+        await guard.request('ozon', 'reviews', headers=self.headers(store, token), body={'limit': 20, 'sort_dir': 'DESC'})
         return True
 
     async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
