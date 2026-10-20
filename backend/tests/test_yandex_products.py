@@ -88,7 +88,7 @@ def test_catalog_resumes_after_committed_page(client, monkeypatch):
     with Session() as db:
         with pytest.raises(ValueError, match='Temporary'):
             asyncio.run(yandex.sync_products(db, store, checkpoint=saved.append))
-    assert saved[-1] == {'page': 'next', 'processed': 1}
+    assert saved[-1] == {'page': 'next', 'processed': 1, 'phase': 'active'}
     with Session() as db:
         assert asyncio.run(yandex.sync_products(db, store, resume=saved[-1])) == 2
     assert calls == ['', 'next', 'next']
