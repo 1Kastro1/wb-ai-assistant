@@ -213,7 +213,7 @@ async def wb_question_pages(token, answered, cancelled=None, page_size=5000, win
 
 
 class WildberriesProvider:
-    async def sync_products(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None):
+    async def sync_products(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         token = wb_token(db, account_id)
         cursor, total = (resume or {}).get('cursor') or {'limit': 100}, int((resume or {}).get('processed', 0))
         seen = set()
@@ -245,6 +245,9 @@ class WildberriesProvider:
                 # vendorCode is seller SKU, not verified manufacturer part number.
                 db.add(product)
                 total += 1
+                if total % 100 == 0 and between_pages:
+                    db.commit()
+                    await between_pages()
             db.commit()
             if progress:
                 progress(min(95, total // 150 + 5))
@@ -260,7 +263,7 @@ class WildberriesProvider:
             await asyncio.sleep(0.65)
         raise ValueError('Достигнут лимит страниц синхронизации')
 
-    async def sync_reviews(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None):
+    async def sync_reviews(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         account_id = account_id or setting(db, 'active_store', 'owner')
         token, total = wb_token(db, account_id), int((resume or {}).get('processed', 0))
         for answered in (False, True):
@@ -299,6 +302,9 @@ class WildberriesProvider:
                         row.status = 'manual_review'
                     db.add(row)
                     total += 1
+                    if total % 100 == 0 and between_pages:
+                        db.commit()
+                        await between_pages()
                 db.commit()
                 if checkpoint: checkpoint({'answered': answered if len(items) >= 5000 else True, 'skip': skip + 5000 if len(items) >= 5000 else 0, 'processed': total})
                 if progress:
@@ -308,7 +314,7 @@ class WildberriesProvider:
                 await asyncio.sleep(0.4)
         return total
 
-    async def sync_questions(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None):
+    async def sync_questions(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         account_id = account_id or setting(db, 'active_store', 'owner')
         token, total = wb_token(db, account_id), int((resume or {}).get('processed', 0))
         for answered in (False, True):
@@ -343,6 +349,9 @@ class WildberriesProvider:
                     row.marketplace = 'wb_question'
                     db.add(row)
                     total += 1
+                    if total % 100 == 0 and between_pages:
+                        db.commit()
+                        await between_pages()
                 db.commit()
                 if checkpoint: checkpoint({'answered': answered, 'cursor': next_cursor, 'processed': total})
                 if progress:
@@ -439,7 +448,7 @@ class OzonProvider:
         await guard.request('ozon', 'reviews', headers=self.headers(store, token), body={'limit': 20, 'sort_dir': 'DESC'})
         return True
 
-    async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
+    async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)
         total, last_id = int((resume or {}).get('processed', 0)), str((resume or {}).get('last_id', ''))
         seen = {last_id} if last_id else set()
@@ -455,6 +464,7 @@ class OzonProvider:
                 upsert_market_review(db, store, item.get('id'), item.get('sku') or item.get('product_id') or 'unknown', item.get('product_name') or item.get('sku_name'), '', item.get('rating'), content, item.get('published_at') or item.get('created_at'), bool(comments))
                 total += 1
             db.commit()
+            if between_pages: await between_pages()
             if progress: progress(min(95, 5 + total // 100))
             payload = result.get('result') or result
             if not items or payload.get('has_next') is False or (len(items) < 100 and not payload.get('has_next')): return total
@@ -482,7 +492,7 @@ class OzonProvider:
             return
         await guard.request('ozon', 'publish', headers=self.headers(store, token), body={'review_id': review.wb_review_id, 'text': text})
 
-    async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
+    async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)
         total, last_id, seen = int((resume or {}).get('processed', 0)), str((resume or {}).get('last_id', '')), set()
         for _ in range(1000):
@@ -495,6 +505,7 @@ class OzonProvider:
                 if upsert_market_question(db, store, item.get('id') or item.get('question_id'), item.get('sku'), item.get('product_name'), item.get('text'), item.get('published_at') or item.get('created_at'), status in ('PROCESSED', 'ANSWERED')):
                     total += 1
             db.commit()
+            if between_pages: await between_pages()
             if progress: progress(min(95, 5 + total // 100))
             if len(items) < 100: break
             next_id = str(result.get('last_id') or (result.get('result') or {}).get('last_id') or '')
@@ -658,7 +669,7 @@ class YandexProvider:
         if not review.wb_review_id.isdigit(): raise ValueError('Некорректный идентификатор отзыва Яндекс Маркета')
         await guard.request('yandex', 'publish', headers={'Api-Key': token}, url=self.target(store, 'publish'), body={'feedbackId': int(review.wb_review_id), 'comment': {'text': text[:4096]}})
 
-    async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None):
+    async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)
         total = int((resume or {}).get('processed', 0))
         # The API exposes needAnswer as a filter, not a property of each question.
@@ -679,6 +690,7 @@ class YandexProvider:
                     if upsert_market_question(db, store, ids.get('id'), ids.get('offerId'), ids.get('offerId'), item.get('text'), item.get('createdAt'), not need_answer):
                         total += 1 if not need_answer else 0
                 db.commit()
+                if between_pages: await between_pages()
                 if progress: progress(min(95, 5 + total // 50))
                 page = str((payload.get('paging') or {}).get('nextPageToken') or '')
                 if not page or page in seen: break
