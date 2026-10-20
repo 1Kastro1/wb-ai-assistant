@@ -530,21 +530,23 @@ def analytics(db, days=0, product_id='', account_id=''):
         func.avg(Review.rating),
     ).select_from(Review).where(*filters)
     total, unanswered, negative, published, average = db.execute(aggregate).one()
-    # Group the draft quality once per unanswered review. Joining it into the
-    # totals and scanning it again for ready drafts parsed large JSON twice.
-    manual_basis = or_(Review.rating <= 3, Review.manual == True,
-        Review.risk != 'NORMAL', Review.status == 'manual_review',
-        Draft.model.startswith('safety-fallback'))
-    ready_basis = (Review.rating >= 4) & (Review.manual == False) & (Review.risk == 'NORMAL') & (Review.status == 'draft_ready')
-    quality_passed = Draft.quality['passed'].as_boolean()
-    workflow_groups = db.execute(
-        select(manual_basis, ready_basis, quality_passed, func.count())
-        .select_from(Review).outerjoin(Draft, Draft.review_id == Review.id)
-        .where(*filters, Review.is_answered == False)
-        .group_by(manual_basis, ready_basis, quality_passed)
-    ).all()
-    manual = sum(count for needs_review, _, passed, count in workflow_groups if needs_review or passed is False)
-    ready = sum(count for _, can_prepare, passed, count in workflow_groups if can_prepare and passed is True)
+    # PostgreSQL must parse large quality JSON only once. Materialize the
+    # narrow unanswered-review projection before computing both workflow counts.
+    workflow = select(
+        Review.rating.label('rating'), Review.manual.label('manual'),
+        Review.risk.label('risk'), Review.status.label('status'),
+        Draft.model.label('model'), Draft.quality['passed'].as_boolean().label('passed'),
+    ).select_from(Review).outerjoin(Draft, Draft.review_id == Review.id).where(
+        *filters, Review.is_answered == False,
+    ).cte('analytics_workflow').prefix_with('MATERIALIZED', dialect='postgresql')
+    needs_review = or_(workflow.c.rating <= 3, workflow.c.manual == True,
+        workflow.c.risk != 'NORMAL', workflow.c.status == 'manual_review',
+        workflow.c.passed == False, workflow.c.model.startswith('safety-fallback'))
+    can_prepare = (workflow.c.rating >= 4) & (workflow.c.manual == False) & (workflow.c.risk == 'NORMAL') & (workflow.c.status == 'draft_ready') & (workflow.c.passed == True)
+    manual, ready = db.execute(select(
+        func.sum(case((needs_review, 1), else_=0)),
+        func.sum(case((can_prepare, 1), else_=0)),
+    ).select_from(workflow)).one()
     topic_where = ["r.marketplace NOT LIKE '%_question'"]
     topic_params = {}
     if days:
@@ -576,7 +578,7 @@ def analytics(db, days=0, product_id='', account_id=''):
         'negative': negative or 0,
         'manual': manual or 0,
         'published': published or 0,
-        'ready': ready,
+        'ready': ready or 0,
         'failed_jobs': db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['failed','interrupted']),*([Job.result['account_id'].as_string()==account_id] if account_id else []))) or 0,
         'average': round(float(average), 2) if average is not None else 0,
         'drafts': db.scalar(select(func.count()).select_from(Draft).join(Review).where(*filters)),
