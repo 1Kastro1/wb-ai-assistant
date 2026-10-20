@@ -7,6 +7,7 @@ import secrets
 import time
 import hashlib
 import asyncio
+import inspect
 import shutil
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -1146,6 +1147,9 @@ async def execute_job(job_id):
                     options = {'resume': start_checkpoint, 'checkpoint': save_checkpoint, 'between_pages': run_waiting_interactive}
                     if (kind in ('reviews', 'products') and store.provider == 'yandex') or (kind == 'products' and store.provider == 'ozon'):
                         options['between_pages'] = run_waiting_questions
+                    parameters = inspect.signature(operation).parameters
+                    if 'between_pages' not in parameters and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                        options.pop('between_pages', None)
                     if operation: count = await operation(db, account_id, update_progress, cancelled, **options)
                 except TypeError as exc:
                     if 'unexpected keyword argument' not in str(exc):
