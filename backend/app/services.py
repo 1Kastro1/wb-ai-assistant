@@ -222,9 +222,21 @@ def manual_review_condition():
 def _review_query(filters):
     view = filters.get('view', 'all')
     query = select(Review).join(Product)
-    if view in ('manual', 'wrong_item', 'no_effect', 'odor'):
+    if view in ('manual', 'wrong_item', 'no_effect', 'odor') or filters.get('manual_only'):
         query = query.outerjoin(Draft, Draft.review_id == Review.id)
     conditions = [Review.rating <= filters.get('max_rating', 5), ~Review.marketplace.like('%_question')]
+    if filters.get('ratings'):
+        conditions.append(Review.rating.in_(filters['ratings']))
+    for key, column in (('brands', Product.brand), ('categories', Product.category)):
+        if filters.get(key):
+            conditions.append(column.in_(filters[key]))
+    if filters.get('text_status') in ('with_text', 'rating_only'):
+        compact = func.trim(func.replace(func.replace(func.replace(func.coalesce(Review.text, ''), '\n', ''), '\r', ''), '\t', ''))
+        conditions.append(compact != '' if filters['text_status'] == 'with_text' else compact == '')
+    if filters.get('answer_status') in ('answered', 'unanswered'):
+        conditions.append(Review.is_answered == (filters['answer_status'] == 'answered'))
+    if filters.get('manual_only'):
+        conditions.append(manual_review_condition())
     if filters.get('q'):
         q = filters['q']
         conditions.append(Review.text.contains(q, autoescape=True) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
@@ -298,7 +310,7 @@ def review_items(db, rows):
     return result
 
 
-def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids=''):
+def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids='', ratings=None, text_status='all', answer_status='all', manual_only=False, brands=None, categories=None):
     query = _review_query(locals())
     rows = db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(max(0, offset)).limit(min(200, max(1, limit)))).all()
     return review_items(db, rows)
@@ -310,6 +322,14 @@ def reviews_page(db, **filters):
     rows = reviews_search(db, **{**filters, 'limit': limit, 'offset': offset})
     total = db.scalar(_review_query(filters).with_only_columns(func.count()).order_by(None)) or 0
     return {'items': rows, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(rows) < total}
+
+
+def review_facets(db, account_id):
+    result = {}
+    for name, column in (('brands', Product.brand), ('categories', Product.category)):
+        query = _review_query({'account_id': account_id}).with_only_columns(column, maintain_column_froms=True).where(column != '').distinct().order_by(column)
+        result[name] = list(db.scalars(query))
+    return result
 
 
 def review_filter_counts(db, q='', account_id=''):
@@ -1078,3 +1098,4 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
     action.result = {'items': results, 'test_mode': test, 'confirmed_by': actor_id, 'confirmed_at': now()}
     db.commit()
     return public(action)
+
