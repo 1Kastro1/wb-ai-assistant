@@ -23,7 +23,7 @@ export function createWorkspaceLoader(api,{ttl=15000,now=()=>Date.now()}={}){
   const results=await Promise.allSettled(resources.map(async([key,path])=>{
    let entry=cache.get(path);
    if(!entry?.promise&&(force||!entry||now()-entry.at>ttl))entry=undefined;
-   if(!entry){entry={promise:null,at:0,value:null};const record=entry;record.promise=api(path,'GET',undefined,15000).then(value=>{record.value=value;record.at=now();record.promise=null;return value}).catch(error=>{if(cache.get(path)===record)cache.delete(path);throw error});cache.set(path,record)}
+   if(!entry){entry={promise:null,at:0,value:null};const record=entry;record.promise=api(path,'GET',undefined,path.split('?')[0]==='/analytics'?45000:15000).then(value=>{record.value=value;record.at=now();record.promise=null;return value}).catch(error=>{if(cache.get(path)===record)cache.delete(path);throw error});cache.set(path,record)}
    const value=entry.promise?await entry.promise:entry.value;
    if(epoch===generation)onValue(key,value);
    return value;

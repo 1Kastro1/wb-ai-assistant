@@ -526,11 +526,25 @@ def analytics(db, days=0, product_id='', account_id=''):
         func.count(),
         func.sum(case((Review.is_answered == False, 1), else_=0)),
         func.sum(case((Review.rating <= 3, 1), else_=0)),
-        func.sum(case((manual_review_condition(), 1), else_=0)),
         func.sum(case((Review.is_answered == True, 1), else_=0)),
         func.avg(Review.rating),
-    ).select_from(Review).outerjoin(Draft,Draft.review_id==Review.id).where(*filters)
-    total, unanswered, negative, manual, published, average = db.execute(aggregate).one()
+    ).select_from(Review).where(*filters)
+    total, unanswered, negative, published, average = db.execute(aggregate).one()
+    # Group the draft quality once per unanswered review. Joining it into the
+    # totals and scanning it again for ready drafts parsed large JSON twice.
+    manual_basis = or_(Review.rating <= 3, Review.manual == True,
+        Review.risk != 'NORMAL', Review.status == 'manual_review',
+        Draft.model.startswith('safety-fallback'))
+    ready_basis = (Review.rating >= 4) & (Review.manual == False) & (Review.risk == 'NORMAL') & (Review.status == 'draft_ready')
+    quality_passed = Draft.quality['passed'].as_boolean()
+    workflow_groups = db.execute(
+        select(manual_basis, ready_basis, quality_passed, func.count())
+        .select_from(Review).outerjoin(Draft, Draft.review_id == Review.id)
+        .where(*filters, Review.is_answered == False)
+        .group_by(manual_basis, ready_basis, quality_passed)
+    ).all()
+    manual = sum(count for needs_review, _, passed, count in workflow_groups if needs_review or passed is False)
+    ready = sum(count for _, can_prepare, passed, count in workflow_groups if can_prepare and passed is True)
     topic_where = ["r.marketplace NOT LIKE '%_question'"]
     topic_params = {}
     if days:
@@ -562,7 +576,7 @@ def analytics(db, days=0, product_id='', account_id=''):
         'negative': negative or 0,
         'manual': manual or 0,
         'published': published or 0,
-        'ready': db.scalar(select(func.count()).select_from(Review).join(Draft).where(*filters,Review.is_answered==False,Review.rating>=4,Review.manual==False,Review.risk=='NORMAL',Review.status=='draft_ready',Draft.quality['passed'].as_boolean()==True)) or 0,
+        'ready': ready,
         'failed_jobs': db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['failed','interrupted']),*([Job.result['account_id'].as_string()==account_id] if account_id else []))) or 0,
         'average': round(float(average), 2) if average is not None else 0,
         'drafts': db.scalar(select(func.count()).select_from(Draft).join(Review).where(*filters)),
