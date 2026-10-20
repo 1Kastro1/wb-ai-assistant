@@ -11,6 +11,20 @@ def strip_other_product_comparisons(text):
     return text
 
 
+def weak_cleaning_result(text):
+    value = ' '.join((text or '').lower().replace('ё', 'е').split())
+    for match in re.finditer(r'(?<!\w)(?:слабо|плохо|неважно|почти не|не)\s+(?:смыва\w*|отмыва\w*|очища\w*|удаля\w*|справля\w*)', value):
+        if not re.search(r'(?<!\w)не\s*$', value[:match.start()]): return True
+    return False
+
+
+def authenticity_concern(text):
+    value = ' '.join((text or '').lower().replace('ё', 'е').split())
+    if re.search(r'(?<!\w)не\s*оригинал|контрафакт|фальсификат|пален', value): return True
+    return any(not re.search(r'(?<!\w)(?:не|нет)\s*$', value[:match.start()])
+               for match in re.finditer(r'поддел\w*', value))
+
+
 def faded_scent(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
     pattern = r'перестал[аио]?\s+пахн\w*|(?:запах|аромат)\w*[^.!?;]{0,35}?(?:исчез|пропал|выветрил)\w*|(?:исчез|пропал|выветрил)\w*[^.!?;]{0,35}?(?:запах|аромат)\w*'
@@ -49,6 +63,7 @@ COMPLAINT_PATTERNS = {
     'DELIVERY_ISSUE': ('долго достав', 'задержали достав', 'проблема с достав', 'не достав'),
 }
 TOPIC_WORDS = {
+    'AUTHENTICITY': ('оригинал', 'подлин', 'дистрибьютор', 'поддел'),
     'WRONG_ITEM': ('не тот', 'другой товар', 'выбранный товар'),
     'MISSING_PARTS': ('комплект', 'недоста', 'не хватает', 'элемент', 'детал'),
     'DAMAGED_ITEM': ('поврежд', 'разбит', 'сломан', 'сломал', 'поломк', 'трещин'),
@@ -79,6 +94,8 @@ def analyze_customer_message(text, rating=None):
     if any(x in value for x in ('производител', 'япони', 'китай', 'страна', 'оригинал')) and any(x in value for x in ('х/з', 'хз', 'непонят', 'неизвест', 'без маркиров')) and any(x in value for x in ('приш', 'получ', 'присла')):
         if 'DESCRIPTION_MISMATCH' not in complaints:
             complaints.append('DESCRIPTION_MISMATCH')
+    if weak_cleaning_result(text) and 'NO_RESULT' not in complaints: complaints.append('NO_RESULT')
+    if authenticity_concern(text) and 'AUTHENTICITY' not in complaints: complaints.append('AUTHENTICITY')
     positive = any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'\b(?:понравил\w*|отличн\w*|рекомендую|хорош\w*|вкусн\w*|приятн\w*|ненавязчив\w*)', value))
     negative = bool(complaints) or (rating is not None and rating <= 3) or any(x in value for x in ('разочар', 'недовол')) or bool(re.search(r'(?<!\w)не\s+понрав', value))
     question = '?' in value or bool(re.search(r'\b(?:как|сколько|какой|какая|подойдет|можно ли|где|когда|подскажите)\b', value))
@@ -109,6 +126,7 @@ def official_support_reply():
 
 def contextual_complaint_reply(analysis, revision=0):
     clauses = {
+        'AUTHENTICITY': 'подлинность товара вызвала сомнения',
         'WRONG_ITEM': 'Вы получили не тот товар',
         'MISSING_PARTS': 'в комплекте не хватает элементов',
         'DAMAGED_ITEM': 'товар оказался повреждённым',

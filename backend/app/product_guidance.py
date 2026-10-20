@@ -4,7 +4,7 @@ import re
 
 def is_cleaner(product):
     text = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
-    return any(x in text for x in ('очистител', 'чистящ', 'моющ', 'пятновывод', 'химчист', 'бытовая хим', 'автохим', 'полироль', 'воск автомобильный'))
+    return any(x in text for x in ('антижир', 'жироудал', 'средство для кухни', 'очистител', 'чистящ', 'моющ', 'пятновывод', 'химчист', 'бытовая хим', 'автохим', 'полироль', 'воск автомобильный'))
 
 
 def positive_detail(text):
@@ -75,9 +75,27 @@ def usage_excerpt(facts):
             if not sentence:
                 continue
             action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
-            if (heading or action) and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
+            if (heading or action or fact.get('kind') == 'instruction') and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
                 result.append(sentence)
     return '; '.join(sentence.rstrip('.') for sentence in result) + ('.' if result else '')
+
+
+def eikosha_placement(product, facts):
+    name = product.name.lower()
+    giga = bool(re.search(r'картридж|стерж|giga|\bv-?\d+', name))
+    can = not giga and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+', name))
+    if not (giga or can): return ''
+    holder = next((fact for fact in facts or [] if fact.get('kind') == 'vent_holder'
+                   and fact.get('verification_status') == 'VERIFIED'), None)
+    if giga:
+        advice = 'Сменные стержни предназначены для корпуса GIGA: установите их в совместимый корпус на дефлекторе. Поток воздуха поможет аромату распространяться по салону.'
+    else:
+        advice = 'Меловая основа отдаёт аромат постепенно, создавая тонкий, ненавязчивый запах. Для распространения аромата по салону разместите баночку на дефлекторе в совместимом держателе.'
+    if holder:
+        advice += ' Подходящий держатель в нашем каталоге — ' + holder['article_label'] + '; перед заказом сверьте форму ламелей дефлектора с требованиями крепления.'
+    elif can:
+        advice = 'Меловая основа отдаёт аромат постепенно, создавая тонкий, ненавязчивый запах. Оставьте доступ воздуха к баночке в подходящем подстаканнике или кармане двери; для установки на дефлекторе требуется совместимый держатель.'
+    return advice
 
 
 def product_usage_reply(review, product, facts, revision=0):
@@ -90,6 +108,16 @@ def product_usage_reply(review, product, facts, revision=0):
         return positive_review_reply(review, product, revision)
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     text = review.text.lower().replace('ё', 'е')
+    if 'AUTHENTICITY' in complaints and getattr(product, 'brand', '').strip().casefold() == 'eikosha':
+        parts = ['Добрый день! Спасибо за отзыв. Сожалеем, что товар вызвал у Вас сомнения.']
+        if any(f.get('policy') == 'eikosha_distributor' and f.get('verification_status') == 'VERIFIED' for f in facts or []):
+            parts.append('Мы являемся официальным дистрибьютором EIKOSHA.')
+        else:
+            parts.append('По впечатлению от аромата нельзя установить подлинность конкретного экземпляра; для проверки можно сверить маркировку и номер партии на упаковке.')
+        advice = eikosha_placement(product, facts)
+        if advice: parts.append(advice)
+        if 'ODOR_COMPLAINT' in complaints: parts.append('Восприятие аромата индивидуально; нам жаль, что эта композиция Вам не подошла.')
+        return ' '.join(parts)
     if complaints & {'LEAKAGE', 'PACKAGING_ISSUE'} and not complaints - {'LEAKAGE', 'PACKAGING_ISSUE', 'ODOR_COMPLAINT'}:
         thanks = ['Спасибо за отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что рассказали о ситуации.'][int(revision) % 3]
         parts = ['Здравствуйте! ' + thanks]
@@ -200,3 +228,4 @@ def product_usage_reply(review, product, facts, revision=0):
         if instruction:
             return intro + ' ' + ('Сожалеем, что Вы не получили ожидаемого результата. ' if complaints else '') + 'По инструкции к этому товару: ' + instruction
     return None
+
