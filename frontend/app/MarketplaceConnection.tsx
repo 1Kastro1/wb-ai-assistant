@@ -24,9 +24,12 @@ export default function MarketplaceConnection({store,stores,name,connected,owner
         const queued=local?status.phase==='queued':info.state==='queued';
         const progress=Number(local?status.progress:info.progress)||0;
         const tone=working?'working':info.tone;
+        const catalog=kind==='products';
+        const processed=Number(local?status.processed:info.processed)||0;
+        const phaseLabel=info.phase==='archived'?'Загружаем архивные товары':info.phase==='missing'?'Уточняем карточки из истории':'Загружаем каталог';
         return <article className={'marketplace-sync-card '+tone} key={kind} aria-busy={working}>
           <div className="sync-card-top"><span className="sync-card-icon"><AppIcon name={icon}/></span><h4>{label}</h4><span className={'sync-state '+tone}>{working?(queued?'В очереди':'Загружаем'):tone==='success'?'Обновлено':tone==='error'?'Нужна проверка':'Нет данных'}</span></div>
-          <div className="sync-card-result">{working?<><strong>{queued?'Ожидает запуска':progress+'%'}</strong><div className={'sync-card-progress '+(queued?'queued':'')} role="progressbar" aria-label={'Синхронизация: '+label} aria-valuemin={0} aria-valuemax={100} {...(!queued?{'aria-valuenow':progress}:{})}><i style={{width:queued?'28%':Math.max(2,Math.min(100,progress))+'%'}}/></div><small>{queued?'Начнётся после текущего задания':'Можно продолжать работу на сайте'}</small></>:<><strong>{tone==='success'?info.count?.toLocaleString('ru-RU')??'—':tone==='error'?'Не завершена':'Ещё не загружались'}</strong><small>{tone==='success'?'Записей обработано':info.detail}</small>{tone==='success'&&<time>{info.title}</time>}</>}</div>
+          <div className="sync-card-result">{working?<><strong>{queued?'Ожидает запуска':catalog?processed.toLocaleString('ru-RU'):progress+'%'}</strong><div className={'sync-card-progress '+(queued||catalog?'queued':'')} role="progressbar" aria-label={'Синхронизация: '+label} aria-valuemin={0} aria-valuemax={100} {...(!queued&&!catalog?{'aria-valuenow':progress}:{})}><i style={{width:queued||catalog?'28%':Math.max(2,Math.min(100,progress))+'%'}}/></div><small>{queued?'Начнётся после текущего задания':catalog?phaseLabel+' · обработано карточек':'Можно продолжать работу на сайте'}</small>{catalog&&info.updatedAt&&<time>Прогресс обновлён: {new Date(info.updatedAt).toLocaleTimeString('ru-RU')}</time>}</>:<><strong>{tone==='success'?info.count?.toLocaleString('ru-RU')??'—':tone==='error'?'Не завершена':'Ещё не загружались'}</strong><small>{tone==='success'?'Записей обработано':info.detail}</small>{tone==='success'&&<time>{info.title}</time>}</>}</div>
           <button className="sync-card-button" disabled={busy||!canManage||!connected||working} onClick={()=>onSync(kind)} aria-label={'Синхронизировать '+label.toLowerCase()}><span className={working?'sync-rotate':''}>↻</span>{working?(queued?'Ожидаем запуска':'Синхронизация…'):'Обновить '+label.toLowerCase()}</button>
         </article>;
       })}</div>
@@ -34,7 +37,7 @@ export default function MarketplaceConnection({store,stores,name,connected,owner
     {store.provider==='yandex'&&<p className="muted">Загрузка каталога обновляет названия, фотографии, описания и артикулы товаров. Для API-ключа нужен доступ «Просмотр товаров и карточек».</p>}
     {store.provider==='ozon'&&<p className="muted">Загрузка каталога обновляет названия, фотографии и характеристики товаров. Для полных названий характеристик API-ключу нужен доступ к справочникам категорий Ozon.</p>}
     {store.provider==='ozon'&&<p className="muted">Доступ к вопросам Ozon зависит от прав и возможностей кабинета. При отказе API проверьте доступ в Ozon Seller.</p>}
-    {status.message&&<div className={'wb-feedback '+status.state} role={status.state==='error'?'alert':'status'}><span>{status.state==='success'?'✓':status.state==='error'?'!':'↻'}</span><div><b>{status.message}</b>{status.state==='working'&&<div className="job-progress"><i style={{width:(status.progress||5)+'%'}}/></div>}</div></div>}
+    {status.message&&<div className={'wb-feedback '+status.state} role={status.state==='error'?'alert':'status'}><span>{status.state==='success'?'✓':status.state==='error'?'!':'↻'}</span><div><b>{status.message}</b>{status.state==='working'&&<div className={status.kind==='products'?'sync-card-progress queued':'job-progress'}><i style={{width:status.kind==='products'?'28%':(status.progress||5)+'%'}}/></div>}</div></div>}
 
     <button className="sync-details" onClick={onHistory}>Открыть историю синхронизаций →</button>
   </div>;

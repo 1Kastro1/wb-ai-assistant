@@ -547,6 +547,28 @@ class YandexProvider:
         category_cache = {}
         detail_warnings = _detail_warnings if _detail_warnings is not None else []
         total, page = int((resume or {}).get('processed', 0)), str((resume or {}).get('page', ''))
+        _archived = _archived or (resume or {}).get('phase') == 'archived'
+
+        async def resolve_missing(count):
+            prefix = f'yandex:{store.id}:'
+            missing = list(db.scalars(select(Product.id).where(
+                Product.id.startswith(prefix),
+                Product.name == func.substr(Product.id, len(prefix) + 1),
+                Product.brand == '',
+            ).order_by(Product.id)))
+            if checkpoint: checkpoint({'page': '', 'processed': count, 'phase': 'missing'})
+            for offset in range(0, len(missing), 100):
+                if cancelled and cancelled(): raise asyncio.CancelledError()
+                count += await self.sync_products(db, store_id, cancelled=cancelled,
+                    _offer_ids=[pid[len(prefix):] for pid in missing[offset:offset + 100]],
+                    _detail_warnings=detail_warnings, between_pages=between_pages)
+                if checkpoint: checkpoint({'page': '', 'processed': count, 'phase': 'missing'})
+                if between_pages: await between_pages()
+                await asyncio.sleep(0)
+            return count
+
+        if (resume or {}).get('phase') == 'missing' and _offer_ids is None:
+            return await resolve_missing(total)
         seen = {page} if page else set()
         for _ in range(1000):
             if cancelled and cancelled():
@@ -603,33 +625,23 @@ class YandexProvider:
                 attach_verified_instructions(db, product)
                 db.add(product)
                 total += 1
+                if total % 20 == 0:
+                    await asyncio.sleep(0)
             db.commit()
             if progress: progress(min(95, 5 + total // 100))
             page = str((payload.get('paging') or {}).get('nextPageToken') or '')
             if _offer_ids is not None: return total
             if not page:
-                if _archived: return total
-                total += await self.sync_products(db, store_id, cancelled=cancelled,
+                if _archived:
+                    return await resolve_missing(total)
+                if checkpoint: checkpoint({'page': '', 'processed': total, 'phase': 'archived'})
+                return await self.sync_products(db, store_id, progress=progress, cancelled=cancelled,
+                    resume={'processed': total, 'phase': 'archived'}, checkpoint=checkpoint,
                     between_pages=between_pages, _archived=True, _detail_warnings=detail_warnings)
-                # Historical reviews/questions can reference offers omitted from
-                # the current paginated catalog. Resolve their exact seller SKU
-                # before leaving numeric placeholders in the product library.
-                prefix = f'yandex:{store.id}:'
-                missing = list(db.scalars(select(Product.id).where(
-                    Product.id.startswith(prefix),
-                    Product.name == func.substr(Product.id, len(prefix) + 1),
-                    Product.brand == '',
-                ).order_by(Product.id)))
-                for offset in range(0, len(missing), 100):
-                    if cancelled and cancelled(): raise asyncio.CancelledError()
-                    total += await self.sync_products(db, store_id, cancelled=cancelled,
-                        _offer_ids=[pid[len(prefix):] for pid in missing[offset:offset + 100]], _detail_warnings=detail_warnings)
-                    if between_pages: await between_pages()
-                return total
             if page in seen:
                 raise ValueError('Яндекс Маркет вернул повторную страницу каталога; прогресс сохранён')
             seen.add(page)
-            if checkpoint: checkpoint({'page': page, 'processed': total})
+            if checkpoint: checkpoint({'page': page, 'processed': total, 'phase': 'archived' if _archived else 'active'})
             if between_pages: await between_pages()
             await asyncio.sleep(0.65)  # Keep below the catalog API's 100 requests/minute.
         raise ValueError('Каталог слишком большой для одного запуска; продолжите синхронизацию с сохранённого прогресса')

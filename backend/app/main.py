@@ -1005,6 +1005,7 @@ async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_dr
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
+    await asyncio.sleep(0)  # Let HTTP requests run even when no interactive job is queued.
     with Session() as db:
         pending = db.scalar(select(Job).where(
             Job.kind.in_(kinds),
@@ -1054,7 +1055,7 @@ async def execute_job(job_id):
         def save_checkpoint(value):
             db.refresh(job)
             job.result = {**(job.result or {}), 'checkpoint': value, 'account_id': account_id,
-                          'message': f'Сохранён прогресс: {value.get("processed", 0)} записей'}
+                          'updated_at': now(), 'message': f'Сохранён прогресс: {value.get("processed", 0)} записей'}
             db.commit()
         try:
             if kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft'):
@@ -1495,6 +1496,8 @@ def sync_status(auth: AUTH, db: DB):
             kinds[kind] = {
                 'state': latest.status if latest else 'never',
                 'progress': latest.progress if latest else 0,
+                'phase': (latest.result or {}).get('checkpoint', {}).get('phase', '') if latest else '',
+                'updated_at': (latest.result or {}).get('updated_at', '') if latest else '',
                 'message': (latest.result or {}).get('message', '') if latest else '',
                 'processed': (latest.result or {}).get('processed', (latest.result or {}).get('checkpoint', {}).get('processed', 0)) if latest else 0,
                 'last_success_at': (success.result or {}).get('finished_at', success.created_at) if success else '',
