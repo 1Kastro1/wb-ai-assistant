@@ -35,3 +35,8 @@ export function createWorkspaceLoader(api,{ttl=15000,now=()=>Date.now()}={}){
 export function readViewPreferences(storage,key){
  try{const data=JSON.parse(storage?.getItem(key)||'{}');return {exists:Object.keys(data).length>0,reviewFilters:normalizeReviewFilters(data.reviewFilters),reviewLimit:Math.max(30,Math.min(100,Number(data.reviewLimit)||30)),filter:['all','positive','negative','rating_only','with_text','manual','context'].includes(data.filter)?data.filter:'all',query:typeof data.query==='string'?data.query.slice(0,200):'',productQuery:typeof data.productQuery==='string'?data.productQuery.slice(0,200):'',questionQuery:typeof data.questionQuery==='string'?data.questionQuery.slice(0,200):'',questionFilter:['all','unanswered','draft','answered'].includes(data.questionFilter)?data.questionFilter:'unanswered',questionKind:typeof data.questionKind==='string'?data.questionKind.slice(0,80):'',page:typeof data.page==='string'?data.page:'Ассистент',scroll:data.scroll&&typeof data.scroll==='object'?data.scroll:{}}}catch{return {filter:'all',query:'',productQuery:'',questionQuery:'',questionFilter:'unanswered',questionKind:'',page:'Ассистент',scroll:{}}}
 }
+
+// Restore the saved section on startup; store changes keep the current section.
+export function restoredWorkspacePage(previousScope,currentPage,savedPage,allowedPages){
+ return !previousScope&&allowedPages.includes(savedPage)?savedPage:currentPage;
+}
