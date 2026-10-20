@@ -18,6 +18,7 @@ from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
+from .owner_reply_rules import matching_owner_rules, owner_business_facts, apply_owner_preferences
 from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply
 from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
@@ -71,7 +72,7 @@ INTENT_LABELS = {
     'WRONG_ITEM': 'пришёл другой товар', 'MISSING_PARTS': 'неполная комплектация',
     'DAMAGED_ITEM': 'повреждение товара', 'FITMENT_PROBLEM': 'товар не подошёл',
     'NO_RESULT': 'нет ожидаемого результата', 'ODOR_COMPLAINT': 'неприятный запах',
-    'WEAK_SCENT': 'слабый аромат', 'DESCRIPTION_MISMATCH': 'несоответствие описанию',
+    'AUTHENTICITY': 'сомнения в оригинальности', 'WEAK_SCENT': 'слабый аромат', 'DESCRIPTION_MISMATCH': 'несоответствие описанию',
     'PACKAGING_ISSUE': 'проблема с упаковкой', 'DELIVERY_ISSUE': 'проблема с доставкой',
     'USAGE_QUESTION': 'вопрос по применению', 'POSITIVE_EXPERIENCE': 'положительный опыт',
     'GENERAL': 'общее впечатление',
@@ -368,7 +369,13 @@ def assess_reply(review, product, reply, verified_facts=None):
         issues.append('не учтено существенное замечание: ' + INTENT_LABELS.get(topic, topic))
     intent = review_intent(review.text)
     combined_cleaner_complaint = cleaner_effectiveness_complaint(review, product)
-    if intent == 'WRONG_ITEM':
+    if intent == 'AUTHENTICITY':
+        if any(x in lowered for x in ('подлин', 'дистрибьютор', 'оригинал')):
+            score += 18
+            breakdown['resolution']['score'] = 18
+        else:
+            issues.append('ответить на сомнения в оригинальности')
+    elif intent == 'WRONG_ITEM':
         if any(x in lowered for x in ('извин', 'сожале', 'жаль')):
             score += 18
             breakdown['resolution']['score'] = 18
@@ -771,10 +778,11 @@ async def generate_draft(db, review_id, instruction=''):
     if specific_case:verified_facts = verified_facts + specific_case['sources']
     if review_intent(review.text)=='DIM_LIGHT' and 'галоген' in product.name.lower():
         verified_facts = verified_facts + [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]
-    if review_intent(review.text)=='WEAK_SCENT':
+    if review_intent(review.text) in ('WEAK_SCENT','AUTHENTICITY'):
         holder=review_vent_holder(db,review,product)
         if holder:verified_facts=verified_facts+[holder]
-    memories = [m.text for m in db.scalars(select(Memory).where(Memory.enabled == True)) if m.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
+    memories = matching_owner_rules(db, product)
+    verified_facts += owner_business_facts(product, memories)
     generation_revision = initial_draft.revision if initial_draft else 0
     rule_candidates = []
     for offset in range(3):
@@ -786,7 +794,7 @@ async def generate_draft(db, review_id, instruction=''):
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
-    structured_intents = ('DIM_LIGHT', 'WEAK_SCENT', 'ODOR_COMPLAINT', 'WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
+    structured_intents = ('AUTHENTICITY', 'NO_RESULT', 'DIM_LIGHT', 'WEAK_SCENT', 'ODOR_COMPLAINT', 'WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
     forced_model = None
     comparison_texts = []
     candidates_evaluated = max(1, len(rule_candidates))
@@ -822,7 +830,7 @@ async def generate_draft(db, review_id, instruction=''):
     web_sources = []
     if not reply:
         model = MODEL
-        facts = trusted_product_facts(db, product)
+        facts = verified_facts
         style = owner_style_profile(db, review.wb_account_id)
         style['learned_from_edits'] = setting(db, 'learned_edit_preferences:' + review.wb_account_id, {})
         style['owner_feedback'] = setting(db, 'reply_feedback:' + review.wb_account_id, {})
@@ -894,7 +902,7 @@ async def generate_draft(db, review_id, instruction=''):
                     {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания; давай советы по применению только из verified_usage_instruction и verified_facts. Верни только ответ.'},
                 ]
         model_seconds = time.monotonic() - model_started
-        fallback = validate_reply(safe_fallback_reply(review, product, generation_revision, trusted_product_facts(db, product)))
+        fallback = validate_reply(safe_fallback_reply(review, product, generation_revision, verified_facts))
         fallback_quality = assess_reply(review, product, fallback, verified_facts)
         candidates_evaluated = len(valid_candidates)
         if best_reply is None or fallback_quality['score'] > best_quality['score']:
@@ -905,24 +913,22 @@ async def generate_draft(db, review_id, instruction=''):
             selection_note = f'Выбран лучший из {max(1, len(valid_candidates))} безопасных вариантов'
         if initial_draft and reply.strip() == initial_draft.text.strip() and not review.text.strip() and review.rating >= 4:
             reply = f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали {product.name}. Надеемся, товар будет радовать вас при использовании. Будем рады видеть вас снова!'
-    # Explicit forbidden-word preferences can be enforced even for safety templates.
-    for memory in memories:
-        if any(x in memory.lower() for x in ('не использ', 'не пиши')):
-            for word in re.findall('[«“\"]([^»”\"]+)[»”\"]', memory):
-                reply = re.sub(re.escape(word), '', reply, flags=re.I)
+    reply, applied_rules = apply_owner_preferences(reply, review, memories)
     try:
         reply = validate_reply(mask_vin(reply))
     except ValueError:
         # A local-model answer may be useful but still violate a hard safety rule.
         # Preserve the safety boundary while always giving the owner a reviewable draft.
-        reply = validate_reply(safe_fallback_reply(review, product, generation_revision, trusted_product_facts(db, product)))
+        reply, applied_rules = apply_owner_preferences(safe_fallback_reply(review, product, generation_revision, verified_facts), review, memories)
+        reply = validate_reply(mask_vin(reply))
         model = 'safety-fallback-1.2'
     if web_search_failed:
         model += ' · без интернет-источников'
     quality = assess_reply(review, product, reply, verified_facts)
+    quality['owner_rules'] = {'matched': len(memories), 'applied_preferences': applied_rules}
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
-    quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы.'
+    quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы. Правил магазина в контексте: {len(memories)}.'
     quality['sources'] = [{'text': f.get('text', ''), 'source': f.get('source', ''), 'verification_status': 'VERIFIED'} for f in verified_facts]
     quality['unverified_sources_count'] = len(web_sources)
     route = 'fallback' if model.startswith('safety-fallback') else 'model' if model.split(' · ')[0] == MODEL else 'rules'
