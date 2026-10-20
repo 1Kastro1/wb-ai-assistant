@@ -57,9 +57,12 @@ async def lifespan(app):
         if not setting(db, 'active_store'):
             set_setting(db, 'active_store', 'owner')
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
-            if job.kind in ('products', 'reviews', 'questions') and not job.cancel_requested:
+            resumable_import = job.kind in ('products', 'reviews', 'questions')
+            waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
+            if (resumable_import or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
-                job.result = {**(job.result or {}), 'message': 'Продолжение синхронизации после перезапуска'}
+                message = 'Продолжение синхронизации после перезапуска' if resumable_import else 'Подготовка ответа ожидает запуска'
+                job.result = {**(job.result or {}), 'message': message}
             else:
                 job.status, job.result = 'interrupted', {**(job.result or {}), 'message':'Приложение перезапущено; повторите задание'}
         for job in db.scalars(select(Job).where(Job.status == 'completed', Job.progress < 100)):
