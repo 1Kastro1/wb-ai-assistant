@@ -36,11 +36,11 @@ def test_question_cold_start_has_a_finite_budget_without_generating_three_varian
         return ['Здравствуйте! Корпус этого контейнера изготовлен из полипропилена, как указано в характеристиках товара.']
     real_budget = services.GenerationBudget
     def budget(seconds=30):
-        # Simulate a model that needs more than the previous 30-second budget
+        # Simulate a model that needs more than the previous 60-second budget
         # for prompt evaluation, without sleeping in the regression suite.
-        assert 30 < seconds <= 60
+        assert 60 < seconds <= 105
         value = real_budget(seconds)
-        value.deadline -= 35
+        value.deadline -= 65
         return value
     monkeypatch.setattr(ollama, 'reply_variants', variants)
     monkeypatch.setattr(services, 'GenerationBudget', budget)
