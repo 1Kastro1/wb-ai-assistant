@@ -66,7 +66,9 @@ jobs:
         env:
           DATABASE_URL: postgresql+psycopg://test_runner:disposable-test-password@127.0.0.1:5432/wb_workbench_tests
           WB_POSTGRES_TEST: '1'
-        run: python -m unittest discover -s backend/tests -p 'test_postgres_draft_conflicts.py'
+        run: |
+          python -m unittest discover -s backend/tests -p 'test_postgres_draft_conflicts.py'
+          python -m unittest discover -s backend/tests -p 'test_dashboard_analytics.py'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'
