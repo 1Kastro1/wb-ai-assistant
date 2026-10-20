@@ -53,7 +53,15 @@ class OllamaProvider:
                 'Внутри variants должны быть только готовые ответы покупателю, без анализа, правил, пояснений и служебного текста.'
             ),
         }]
-        raw = await self.chat(request)
+        if count == 1:
+            request[-1]['content'] = ('Подготовь один краткий ответ покупателю до 450 символов. '
+                'Верни только JSON {"variants":["готовый ответ"]}, без рассуждений. '
+                'Отвечай по существу только по подтверждённым сведениям.')
+            schema = {'type': 'object', 'properties': {'variants': {'type': 'array', 'items': {'type': 'string', 'maxLength': 450},
+                       'minItems': 1, 'maxItems': 1}}, 'required': ['variants'], 'additionalProperties': False}
+            raw = await self.chat(request, schema=schema)
+        else:
+            raw = await self.chat(request)
         try:
             match = re.search(r'\{.*\}', raw, re.S)
             payload = json.loads(match.group(0) if match else raw)

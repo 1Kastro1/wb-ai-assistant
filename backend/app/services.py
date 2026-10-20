@@ -28,6 +28,7 @@ WORDS = re.compile(r'[а-яё0-9]{4,}', re.I)
 MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
+QUESTION_GENERATION_SECONDS = 60
 QUALITY_EVALUATOR_VERSION = '3.0'
 WEB_FACT_MAX_AGE_DAYS = 30
 
@@ -717,7 +718,7 @@ async def generate_question_draft(db, question, instruction=''):
     uses_model = not analysis['buyer_asks_about_money'] and not voltage and not fitment and not assortment
     model_started = time.monotonic()
     try:
-        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await GenerationBudget().run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
+        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await GenerationBudget(QUESTION_GENERATION_SECONDS).run(lambda: ollama.reply_variants(messages, 1))
     except Exception as error:
         fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
         candidates = []
