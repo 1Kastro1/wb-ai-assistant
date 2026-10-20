@@ -12,9 +12,9 @@ def test_single_question_variant_uses_bounded_structured_output(client, monkeypa
         assert body['options']['num_predict'] <= 256
         assert body['format']['properties']['variants']['maxItems'] == 1
         assert body['think'] is False
-        return {'message': {'content': '{"variants":["Здравствуйте! Корпус изготовлен из полипропилена."]}'}}
+        return {'message': {'content': '{"variants":["Здравствуйте! Корпус этого контейнера изготовлен из полипропилена, как указано в характеристиках товара."]}'}}
     monkeypatch.setattr(guard, 'request', request)
-    assert asyncio.run(OllamaProvider().reply_variants([{'role':'user','content':'Из чего корпус?'}], 1)) == ['Здравствуйте! Корпус изготовлен из полипропилена.']
+    assert asyncio.run(OllamaProvider().reply_variants([{'role':'user','content':'Из чего корпус?'}], 1)) == ['Здравствуйте! Корпус этого контейнера изготовлен из полипропилена, как указано в характеристиках товара.']
 
 
 def test_question_cold_start_has_a_finite_budget_without_generating_three_variants(client, monkeypatch):
@@ -28,7 +28,7 @@ def test_question_cold_start_has_a_finite_budget_without_generating_three_varian
     calls = []
     async def variants(messages, count):
         calls.append(count)
-        return ['Здравствуйте! Корпус изготовлен из полипропилена.']
+        return ['Здравствуйте! Корпус этого контейнера изготовлен из полипропилена, как указано в характеристиках товара.']
     real_budget = services.GenerationBudget
     def budget(seconds=30):
         # Simulate a model that needs more than the previous 30-second budget
