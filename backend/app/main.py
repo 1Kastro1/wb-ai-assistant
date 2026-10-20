@@ -1804,7 +1804,7 @@ def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
         for kind in ('products', 'reviews', 'questions'):
             latest = db.scalar(select(Job).where(Job.kind == kind, Job.result['account_id'].as_string() == store.id).order_by(Job.created_at.desc()).limit(1))
             sync[kind] = {'status': latest.status, 'started_at': latest.created_at, 'progress': latest.progress,
-                          'processed': (latest.result or {}).get('processed'), 'message': (latest.result or {}).get('message', '')} if latest else None
+                          'processed': (latest.result or {}).get('processed', (latest.result or {}).get('checkpoint', {}).get('processed', 0)), 'message': (latest.result or {}).get('message', '')} if latest else None
         item = {'id': store.id, 'name': store.name, 'provider': store.provider, 'sync': sync,
                 'accessible': True,
                 'can_operate': (auth['role'] == 'owner' or '*' in allowed or store.id in allowed) and ('*' in auth.get('permissions', []) or store.provider + ':operate' in auth.get('permissions', [])),
