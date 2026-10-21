@@ -17,9 +17,10 @@ def test_signature_is_idempotent_and_preserves_length_validation():
     signature = 'С уважением ГК Юником.'
     rules = ['В конце каждого ответа на отзыв добавляй подпись «' + signature + '».']
     for suffix in ('', '\n\n' + signature, '\n' + signature + '\n' + signature):
-        assert apply_review_signature('Спасибо!' + suffix, rules) == 'Спасибо!\n\n' + signature
+        assert apply_review_signature('Спасибо!' + suffix, rules) == 'Спасибо!\n' + signature
+    assert apply_review_signature('<p>Спасибо!</p><p>' + signature + '</p>', rules) == 'Спасибо!\n' + signature
     assert apply_review_signature('Спасибо!', []) == 'Спасибо!'
-    body = 'А' * (5000 - len(signature) - 2)
+    body = 'А' * (5000 - len(signature) - 1)
     assert len(validate_reply(apply_review_signature(body, rules))) == 5000
     with pytest.raises(ValueError):
         validate_reply(apply_review_signature(body + 'А', rules))

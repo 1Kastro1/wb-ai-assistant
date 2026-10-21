@@ -266,7 +266,7 @@ class SharedMarketplaceTests(unittest.TestCase):
                 with self.factory() as db:
                     for _ in range(2):
                         result = asyncio.run(services.generate_draft(db, 'review-' + provider))
-                        self.assertTrue(result['text'].endswith('\n\n' + signature))
+                        self.assertTrue(result['text'].endswith('\n' + signature))
                         self.assertEqual(result['text'].count(signature), 1)
                     question = asyncio.run(services.generate_question_draft(db, db.get(Review, 'question-' + provider)))
                     self.assertNotIn(signature, question['text'])

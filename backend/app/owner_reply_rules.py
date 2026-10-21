@@ -2,6 +2,7 @@
 import re
 from sqlalchemy import select
 from .db import Memory
+from .plain_text import plain_text
 
 
 def review_signature(rule):
@@ -17,8 +18,8 @@ def apply_review_signature(reply, rules):
     if not signature:
         return reply
     # Models may already include the closing line, including after regeneration.
-    body = re.sub(r'(?:\s*' + re.escape(signature) + r')+\s*$', '', reply, flags=re.I).rstrip()
-    return body + '\n\n' + signature if body else signature
+    body = re.sub(r'(?:\s*' + re.escape(signature) + r')+\s*$', '', plain_text(reply), flags=re.I).rstrip()
+    return body + '\n' + signature if body else signature
 
 
 def matching_owner_rules(db, product, for_questions=False):
