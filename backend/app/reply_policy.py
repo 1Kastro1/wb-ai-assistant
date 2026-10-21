@@ -21,6 +21,8 @@ def weak_cleaning_result(text):
 def authenticity_concern(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
     if re.search(r'(?<!\w)не\s*оригинал|контрафакт|фальсификат|пален', value): return True
+    if any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'(?:жалк\w*\s+)?пародия\s+на\b', value)):
+        return True
     return any(not re.search(r'(?<!\w)(?:не|нет)\s*$', value[:match.start()])
                for match in re.finditer(r'поддел\w*', value))
 
@@ -44,7 +46,14 @@ def yellow_light_complaint(text):
 
 def subtle_scent_complaint(text):
     value = ' '.join((text or '').lower().replace('ё','е').split())
+    if re.search(r'(?:пахн\w*|(?:запах|аромат)\w*)[^.!?;]{0,20}кое[\s-]*как', value):
+        return True
     return bool(re.search(r'(?:пахн\w*|(?:запах|аромат)\w*)\s*(?:совсем\s+|очень\s+|лишь\s+|только\s+)*(?:чуть[\s-]*чуть|еле|едва|слабоват\w*)|слабоват\w*\s+(?:запах|аромат)', value))
+
+
+def quantity_shortage(text):
+    value = ' '.join((text or '').lower().replace('ё', 'е').split())
+    return bool(re.search(r'вместо\s+(?:двух|2|трех|3|четырех|4)[^.!?]{0,35}(?:один|одну|1)|(?:пришел|пришла|прислали|отправили|получил\w*)[^.!?]{0,20}(?:один|одну|1)[^.!?]{0,20}(?:вместо|а не)\s+(?:двух|два|две|2)', value))
 
 COMPLAINT_PATTERNS = {
     'WRONG_ITEM': ('не тот товар', 'другой товар', 'пришел не тот', 'прислали не тот'),
@@ -57,7 +66,7 @@ COMPLAINT_PATTERNS = {
     'DESCRIPTION_MISMATCH': ('не соответствует описанию', 'не как на фото', 'отличается от описания', 'характеристики не совпадают'),
     'FITMENT_PROBLEM': ('не подошел', 'не подходит', 'несовместим'),
     'NO_RESULT': ('нет результата', 'не увидела результата', 'не увидел результата', 'не помог', 'не очищает', 'не очистил', 'не отмыл', 'бесполезн', 'деньги на ветер', 'толку нет'),
-    'ODOR_COMPLAINT': ('воняет', 'вонюч', 'неприятный запах', 'резкий запах', 'ужасный запах', 'невыносимый запах', 'запах кислый', 'запах не понрав', 'аромат не понрав', 'не понравился запах', 'не понравился аромат'),
+    'ODOR_COMPLAINT': ('воняет', 'вонюч', 'неприятный запах', 'запах неприят', 'аромат неприят', 'резкий запах', 'ужасный запах', 'невыносимый запах', 'запах кислый', 'запах не понрав', 'аромат не понрав', 'не понравился запах', 'не понравился аромат'),
     'WEAK_SCENT': ('запаха почти нет', 'слабый запах', 'слабый аромат', 'слабо пахнет', 'пахнет слабо', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха'),
     'DIM_LIGHT': ('свет тусклый', 'тусклый свет', 'слабо светит', 'свет слабый'),
     'DELIVERY_ISSUE': ('долго достав', 'задержали достав', 'проблема с достав', 'не достав'),
@@ -89,6 +98,8 @@ def analyze_customer_message(text, rating=None):
             return any(not re.search(r'(?<!\w)(?:не|без)\s*$', value[:match.start()]) for match in re.finditer(r'(?<!\w)' + re.escape(marker), value))
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
+    if quantity_shortage(text) and 'MISSING_PARTS' not in complaints:
+        complaints.append('MISSING_PARTS')
     if yellow_light_complaint(text) and 'DIM_LIGHT' not in complaints:complaints.append('DIM_LIGHT')
     if (faded_scent(text) or subtle_scent_complaint(text)) and 'WEAK_SCENT' not in complaints:complaints.append('WEAK_SCENT')
     if any(x in value for x in ('производител', 'япони', 'китай', 'страна', 'оригинал')) and any(x in value for x in ('х/з', 'хз', 'непонят', 'неизвест', 'без маркиров')) and any(x in value for x in ('приш', 'получ', 'присла')):

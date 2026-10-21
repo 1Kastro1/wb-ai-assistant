@@ -1,6 +1,7 @@
 from .review_cases import specific_review_case
 from .fitment_catalog import VIN, vehicle_identifiers, fitment_answer, oem_numbers
 from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
+from .plain_text import plain_text
 from .verified_instructions import prefer_manufacturer_instructions
 from .assortment_questions import assortment_question_answer, review_vent_holder
 import difflib
@@ -54,7 +55,7 @@ def local_product_facts(db, product):
             result.append(fact)
     from .steam_deo_guidance import reviewed_steam_facts
     result.extend(fact for fact in reviewed_steam_facts(product) if fact not in result)
-    return prefer_manufacturer_instructions(result)
+    return prefer_manufacturer_instructions([{**fact, 'text': plain_text(fact.get('text', ''))} for fact in result])
 
 
 def trusted_product_facts(db, product):
@@ -77,6 +78,7 @@ def draft_public(db, draft, actors=None):
     if not draft:
         return None
     item = public(draft)
+    item['text'] = plain_text(item.get('text', ''))
     for key in ('created_by', 'updated_by'):
         actor = (actors.get(item[key]) if actors is not None else db.get(User, item[key])) if item[key] else None
         item[key + '_name'] = actor.display_name if actor else ('Автоматизация' if not item[key] else 'Бывший сотрудник')
@@ -872,7 +874,9 @@ async def generate_draft(db, review_id, instruction=''):
             reply = None
     web_search_failed = False
     if reply and 'короче' in instruction.lower():
-        if review.risk == 'HIGH':
+        if specific_case:
+            reply = specific_case['answer']
+        elif review.risk == 'HIGH':
             reply = 'Здравствуйте! Описанные симптомы требуют проверки тормозной системы специалистом до дальнейшей эксплуатации. По отзыву установить причину невозможно. Пожалуйста, обратитесь в сервис.'
         elif review.risk == 'CAUTION':
             reply = 'Здравствуйте! Причины скрипа бывают разными; по отзыву определить их нельзя. Рекомендуем проверить тормозную систему и установку в сервисе.'
@@ -1054,7 +1058,12 @@ def propose_publish(db, review_ids):
         if len(ids) > 1 and not is_question and (review.rating <= 3 or review.manual):
             excluded.append(rid)
             continue
-        validate_reply(draft.text)
+        # Persist any legacy HTML cleanup before preparing the exact text the
+        # owner will approve. A pending action still uses revision/text locking.
+        cleaned = validate_reply(draft.text)
+        if cleaned != draft.text:
+            draft.edits = draft.edits + [{'old': draft.text, 'new': cleaned, 'at': now(), 'by': 'automation', 'reason': 'plain_text_cleanup'}]
+            draft.text, draft.revision = cleaned, draft.revision + 1
         items.append({'review_id': rid, 'draft_id': draft.id, 'revision': draft.revision, 'text': draft.text, 'rating': review.rating, 'manual': review.manual, 'kind': 'question' if is_question else 'review'})
         review.status = 'pending_confirmation'
     if not items:
@@ -1098,7 +1107,8 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
         if review.manual and not manual_ack:
             raise ValueError('Нужно отдельное подтверждение ручной проверки опасного отзыва')
-        validate_reply(draft.text)
+        if validate_reply(draft.text) != draft.text:
+            raise ValueError('Текст требует очистки. Подготовьте новое подтверждение')
         if not test:
             if db.scalar(select(Publication).where(Publication.review_id == review.id)):
                 raise ValueError('Для ответа уже выполнялась публикация. Сначала проверьте его в маркетплейсе')

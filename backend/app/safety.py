@@ -2,7 +2,7 @@ from .vehicle_identifiers import mask_frames
 import re
 from .review_cases import specific_review_case
 from .product_guidance import product_usage_reply, is_cleaner, positive_review_reply
-from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons, faded_scent, subtle_scent_complaint, yellow_light_complaint, weak_cleaning_result, authenticity_concern
+from .reply_policy import analyze_customer_message, contextual_complaint_reply, official_support_reply, strip_other_product_comparisons, faded_scent, subtle_scent_complaint, yellow_light_complaint, weak_cleaning_result, authenticity_concern, quantity_shortage
 
 VIN = re.compile(r'\b[A-HJ-NPR-Z0-9]{17}\b', re.I)
 HIGH = ('хуже тормоз', 'плохо тормоз', 'ухудшен', 'провалива', 'дым', 'перегрев', 'заклини', 'утеч', 'скрежет', 'сильн', 'не тормоз', 'отказ тормоз')
@@ -20,7 +20,7 @@ def review_intent(text):
     value = ' '.join(strip_other_product_comparisons(text).lower().replace('ё', 'е').split())
     if _contains_any(value, ('не тот товар', 'другой товар', 'пришел не тот', 'прислали не тот', 'получил не тот')):
         return 'WRONG_ITEM'
-    if _contains_any(value, ('нет детал', 'не хватает', 'неполная комплектац', 'не доложили')):
+    if quantity_shortage(value) or _contains_any(value, ('нет детал', 'не хватает', 'неполная комплектац', 'не доложили')):
         return 'MISSING_PARTS'
     if any(x in value for x in ('упаковка поврежд', 'упаковка помят', 'коробка помят', 'плохо упакован', 'упаковка вскрыт')):
         return 'PACKAGING_ISSUE'
@@ -91,6 +91,8 @@ def classify(text, category=''):
 
 
 def validate_reply(text):
+    from .plain_text import plain_text
+    text = plain_text(text)
     if not 2 <= len(text.strip()) <= 5000:
         raise ValueError('Ответ должен содержать от 2 до 5000 символов')
     if VIN.search(text):
@@ -204,6 +206,9 @@ def rule_reply(review, product, revision=0, facts=None):
 
 
 def safe_fallback_reply(review, product, revision=0, facts=None):
+    specific = specific_review_case(review, product)
+    if specific:
+        return specific['answer']
     if getattr(review,'risk','NORMAL') in ('HIGH', 'CAUTION'):
         return rule_reply(review, product, revision, facts)
     guidance = product_usage_reply(review, product, facts if facts is not None else (getattr(product, 'facts', None) or []), revision)

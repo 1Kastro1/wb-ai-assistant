@@ -75,7 +75,8 @@ class ProductGuidanceTests(unittest.TestCase):
         self.review.text = 'Слабый запах'
         answer = rule_reply(self.review, self.product, facts=[])
         self.assertIn('подстаканнике', answer)
-        self.assertNotIn('держател', answer)
+        self.assertIn('для установки на дефлекторе требуется совместимый держатель', answer)
+        self.assertNotIn('в нашем каталоге', answer)
         self.assertNotIn('артикул', answer)
 
     def test_disliked_fragrance_offers_individual_choice(self):
