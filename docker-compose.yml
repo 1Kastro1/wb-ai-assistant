@@ -6,6 +6,7 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
       DATABASE_URL: postgresql+psycopg://wb_assistant:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/wb_assistant
       WB_CONTAINER: "1"
+      WB_ENABLE_REAL_PUBLISH: ${WB_ENABLE_REAL_PUBLISH:-}
       WB_PUBLIC_ORIGIN: ${WB_PUBLIC_ORIGIN:-https://assistant.blackmindworks.com}
     volumes: ["wb_data:/data"]
     secrets: [wb_key]
