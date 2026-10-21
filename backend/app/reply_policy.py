@@ -21,7 +21,7 @@ def weak_cleaning_result(text):
 def authenticity_concern(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
     if re.search(r'(?<!\w)не\s*оригинал|контрафакт|фальсификат|пален', value): return True
-    if any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'(?:жалк\w*\s+)?пародия\s+на\b', value)):
+    if any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'(?:жалк\w*\s+)?п[ао]родия\s+на\b', value)):
         return True
     return any(not re.search(r'(?<!\w)(?:не|нет)\s*$', value[:match.start()])
                for match in re.finditer(r'поддел\w*', value))
