@@ -56,7 +56,7 @@ class ReviewScreenshotFollowups(unittest.TestCase):
             db.flush()
             db.add(Review(id='r', wb_review_id='r', product_id='p', text='Хороший', rating=5))
             db.flush()
-            draft = Draft(id='d', review_id='r', text='Добрый день!<br/>Спасибо за отзыв.', revision=1)
+            draft = Draft(id='d', review_id='r', text='Добрый день!<br/>Спасибо за отзыв.', original='Добрый день!<br/>Спасибо за отзыв.', revision=1)
             db.add(draft)
             db.commit()
             self.assertNotIn('<br', draft_public(db, draft)['text'])
