@@ -35,7 +35,8 @@ def equivalent_products(db, product):
         predicates.append(and_(Product.part_number == '', Product.facts.cast(String).contains(article)))
     candidates = db.scalars(select(Product).where(
         func.lower(func.trim(Product.brand)) == identity[0], or_(*predicates)))
-    return [candidate for candidate in candidates if product_identity(candidate) == identity]
+    matches = [candidate for candidate in candidates if product_identity(candidate) == identity]
+    return [product, *(candidate for candidate in matches if candidate.id != product.id)]
 
 
 def shared_counters(db, prefix):

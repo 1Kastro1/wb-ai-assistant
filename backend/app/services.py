@@ -172,6 +172,12 @@ def previous_answer_examples(db, review, product, limit=5):
     return [item[2] for item in scored[:limit] if item[0] > 0]
 
 
+def shared_reply_style(db):
+    return {**owner_style_profile(db),
+            'learned_from_edits': shared_counters(db, 'learned_edit_preferences:'),
+            'owner_feedback': shared_counters(db, 'reply_feedback:')}
+
+
 def has_usage_instruction(facts):
     text = ' '.join(str(f.get('text', '')) for f in facts).lower()
     return any(word in text for word in ('способ применен', 'применение', 'нанесите', 'нанести', 'распылите', 'встряхните', 'используйте', 'рекомендуется обработать', 'обработать поверхность'))
@@ -716,7 +722,7 @@ async def generate_question_draft(db, question, instruction=''):
     memories = matching_owner_rules(db, product)
     messages = [
         {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
-        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': memories, 'reply_style': owner_style_profile(db, question.wb_account_id), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
+        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': memories, 'reply_style': shared_reply_style(db), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
     fitment = fitment_answer(db, question, product) if not assortment and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк|сошк|рулев|наконечник|шаров', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
@@ -871,9 +877,7 @@ async def generate_draft(db, review_id, instruction=''):
     if not reply:
         model = MODEL
         facts = verified_facts
-        style = owner_style_profile(db, review.wb_account_id)
-        style['learned_from_edits'] = shared_counters(db, 'learned_edit_preferences:')
-        style['owner_feedback'] = shared_counters(db, 'reply_feedback:')
+        style = shared_reply_style(db)
         examples = previous_answer_examples(db, review, product)
         comparison_texts = ([initial_draft.text] if initial_draft else []) + [example.get('answer', '') for example in examples]
         web_sources = []
