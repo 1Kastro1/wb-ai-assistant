@@ -20,6 +20,7 @@ from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
 from .owner_reply_rules import matching_owner_rules, owner_business_facts, apply_owner_preferences
 from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply
+from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
 
@@ -33,7 +34,7 @@ QUALITY_EVALUATOR_VERSION = '3.0'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
-def trusted_product_facts(db, product):
+def local_product_facts(db, product):
     """Only product-card facts and owner-approved manufacturer-domain facts reach the model."""
     official = str(setting(db, f'official_domain:{product.id}', '') or '').lower()
     result = []
@@ -54,6 +55,22 @@ def trusted_product_facts(db, product):
     from .steam_deo_guidance import reviewed_steam_facts
     result.extend(fact for fact in reviewed_steam_facts(product) if fact not in result)
     return prefer_manufacturer_instructions(result)
+
+
+def trusted_product_facts(db, product):
+    facts = local_product_facts(db, product)
+    # Share only approved usage instructions for an exact manufacturer identity.
+    # Store SKUs, package contents, prices and availability remain channel-specific.
+    seen = {(str(f.get('text','')), str(f.get('source',''))) for f in facts}
+    for counterpart in equivalent_products(db, product):
+        if counterpart.id == product.id:
+            continue
+        for fact in local_product_facts(db, counterpart):
+            key = (str(fact.get('text','')), str(fact.get('source','')))
+            if fact.get('kind') == 'instruction' and fact.get('source_type') in ('manufacturer', 'supplier') and key not in seen:
+                facts.append({**fact, 'shared_from_product': counterpart.id})
+                seen.add(key)
+    return prefer_manufacturer_instructions(facts)
 
 
 def draft_public(db, draft, actors=None):
@@ -115,12 +132,12 @@ def _addresses_review_topic(review_text, reply_text):
 
 
 def owner_style_profile(db, account_id='owner'):
-    answered = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == True, Review.existing_answer != '')) or 0
-    cache_key = 'learned_reply_style:' + account_id
+    answered = db.scalar(select(func.count()).select_from(Review).where(~Review.marketplace.like('%_question'), Review.is_answered == True, Review.existing_answer != '')) or 0
+    cache_key = 'learned_reply_style:all-marketplaces'
     cached = setting(db, cache_key)
     if cached and cached.get('answered_count') == answered:
         return cached
-    texts = list(db.scalars(select(Review.existing_answer).where(Review.wb_account_id == account_id, Review.is_answered == True, Review.existing_answer != '')))
+    texts = list(db.scalars(select(Review.existing_answer).where(~Review.marketplace.like('%_question'), Review.is_answered == True, Review.existing_answer != '').order_by(Review.created_at.desc(), Review.id).limit(2000)))
     greetings = Counter('Добрый день' if t.lower().startswith('добрый день') else 'Здравствуйте' if t.lower().startswith('здравствуйте') else 'другое' for t in texts)
     profile = {
         'answered_count': answered,
@@ -140,7 +157,7 @@ def previous_answer_examples(db, review, product, limit=5):
         select(Review).join(Product).where(
             Review.is_answered == True,
             Review.existing_answer != '',
-            Review.wb_account_id == review.wb_account_id,
+            ~Review.marketplace.like('%_question'),
             (Review.product_id == product.id) | (Product.brand == product.brand) | (Product.category == product.category),
         ).order_by(Review.created_at.desc()).limit(400)
     ))
@@ -511,7 +528,7 @@ def quality_report(db, days=30, account_id=''):
         'average_score': round(sum(scores) / len(scores), 1) if scores else 0,
         'edited': len(edited), 'edit_rate': round(len(edited) / len(drafts) * 100, 1) if drafts else 0,
         'fallbacks': sum('fallback' in d.model for d in drafts),
-        'learned_preferences': setting(db, 'learned_edit_preferences:' + (account_id or 'owner'), {}),
+        'learned_preferences': shared_counters(db, 'learned_edit_preferences:'),
     }
 
 
@@ -691,18 +708,19 @@ async def generate_question_draft(db, question, instruction=''):
         finally:
             web_seconds = time.monotonic() - web_started
     examples = []
-    previous = db.scalars(select(Review).where(Review.marketplace.like('%_question'), Review.product_id == question.product_id, Review.is_answered == True, Review.id != question.id).order_by(Review.created_at.desc()).limit(5))
+    equivalent_ids = [item.id for item in equivalent_products(db, product)]
+    previous = db.scalars(select(Review).where(Review.marketplace.like('%_question'), Review.product_id.in_(equivalent_ids), Review.is_answered == True, Review.id != question.id).order_by(Review.created_at.desc()).limit(5))
     for item in previous:
         if item.existing_answer:
             examples.append({'question': item.text, 'answer': item.existing_answer})
-    memories = [memory.text for memory in db.scalars(select(Memory).where(Memory.enabled == True)) if memory.scope in ('global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category)]
+    memories = matching_owner_rules(db, product)
     messages = [
         {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
-        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': memories, 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
+        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': memories, 'reply_style': owner_style_profile(db, question.wb_account_id), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
-    fitment = fitment_answer(db, question, product) if not assortment and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
-    if fitment and fitment['status']=='NEEDS_CATALOG' and setting(db,'internet-fitment-enabled:'+question.wb_account_id,False):
+    fitment = fitment_answer(db, question, product) if not assortment and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк|сошк|рулев|наконечник|шаров', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
+    if fitment and fitment['status']=='NEEDS_CATALOG' and internet_fitment_enabled(db, question.wb_account_id):
         from .internet_fitment import research_question
         web_started=time.monotonic()
         research=await research_question(db,question,product)
@@ -760,6 +778,7 @@ async def generate_question_draft(db, question, instruction=''):
     route = 'fallback' if model.startswith('question-safety') else 'model' if uses_model else 'rules'
     quality['timing'] = {'total_seconds': round(time.monotonic() - question_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     quality['candidates_evaluated'] = len(checked)
+    quality['policy_version'] = POLICY_VERSION
     quality['analysis_summary'] = f'Определён тип вопроса: {intent}. Ответ проверен на соответствие вопросу, подтверждённым фактам и правилам безопасности.'
     db.refresh(question)
     if question.is_answered:
@@ -853,8 +872,8 @@ async def generate_draft(db, review_id, instruction=''):
         model = MODEL
         facts = verified_facts
         style = owner_style_profile(db, review.wb_account_id)
-        style['learned_from_edits'] = setting(db, 'learned_edit_preferences:' + review.wb_account_id, {})
-        style['owner_feedback'] = setting(db, 'reply_feedback:' + review.wb_account_id, {})
+        style['learned_from_edits'] = shared_counters(db, 'learned_edit_preferences:')
+        style['owner_feedback'] = shared_counters(db, 'reply_feedback:')
         examples = previous_answer_examples(db, review, product)
         comparison_texts = ([initial_draft.text] if initial_draft else []) + [example.get('answer', '') for example in examples]
         web_sources = []
@@ -951,6 +970,7 @@ async def generate_draft(db, review_id, instruction=''):
     quality['selection_note'] = selection_note
     quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы. Правил магазина в контексте: {len(memories)}.'
     quality['sources'] = [{'text': f.get('text', ''), 'source': f.get('source', ''), 'verification_status': 'VERIFIED'} for f in verified_facts]
+    quality['policy_version'] = POLICY_VERSION
     quality['unverified_sources_count'] = len(web_sources)
     route = 'fallback' if model.startswith('safety-fallback') else 'model' if model.split(' · ')[0] == MODEL else 'rules'
     quality['timing'] = {'total_seconds': round(time.monotonic() - generation_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
@@ -1099,4 +1119,5 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
     action.result = {'items': results, 'test_mode': test, 'confirmed_by': actor_id, 'confirmed_at': now()}
     db.commit()
     return public(action)
+
 

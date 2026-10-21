@@ -8,14 +8,16 @@ import secrets
 import zipfile
 from uuid import uuid4
 from sqlalchemy import select
+from .shared_marketplaces import row_product_id, resolve_listing, listing_owned, product_reference
 from .db import FitmentImport, StoreListing, Product, Review, setting, set_setting, now
 
 FIELDS = ('brand','part_number','wb_nm_id','oe_number','category','make','model','year_from','year_to','body','engine_code','vin','fit','stock','cross_brand','cross_number','engine','drive','axle','position','pr_code','market','generation','production_date_from','production_date_to','notes','vin_range')
-FIELDS += ('oe_brand',)
+FIELDS += ('oe_brand', 'product_id')
 ALIASES = {'бренд':'brand','артикул производителя':'part_number','артикул детали':'part_number','артикул wb':'wb_nm_id','артикул wildberries':'wb_nm_id','код wb':'wb_nm_id','oem':'oe_number','oe':'oe_number','категория':'category','марка':'make','модель':'model','год с':'year_from','год по':'year_to','кузов':'body','двигатель':'engine_code','подходит':'fit','остаток':'stock','бренд аналога':'cross_brand','артикул аналога':'cross_number'}
 from .vehicle_identifiers import VIN, FRAME, vehicle_identifiers, valid_vehicle_identifier, identifier_key
 ALIASES.update({'артикул':'part_number','производитель':'brand','марка автомобиля':'make','модель автомобиля':'model','ограничения':'notes','примечание':'notes','ось':'axle','сторона':'position','привод':'drive','код двигателя':'engine_code','pr код':'pr_code','part number':'part_number','article':'part_number','wb id':'wb_nm_id'})
 ALIASES.update({'frame':'vin','фрейм':'vin','номер кузова':'vin','vin/frame':'vin'})
+ALIASES.update({'id товара':'product_id', 'товар магазина':'product_id', 'артикул ozon':'product_id', 'sku яндекс маркета':'product_id'})
 ALIASES.update({'оригинальный номер':'oe_number','номер oem':'oe_number','номер оем':'oe_number','бренд oem':'oe_brand','марка oem':'oe_brand'})
 
 
@@ -107,6 +109,7 @@ def clean_catalog_rows(rows,mapping=None):
                 if item[key]<0 or (key!='stock' and not 1886<=item[key]<=2100):raise ValueError(f'Строка {i}: неверное значение {key}')
         if item.get('year_from',0)>item.get('year_to',2100):raise ValueError(f'Строка {i}: неверный диапазон годов')
         if item.get('wb_nm_id') and not re.fullmatch(r'[1-9][0-9]{0,11}',item['wb_nm_id']):raise ValueError(f'Строка {i}: неверный артикул Wildberries')
+        if item.get('product_id') and (len(item['product_id']) > 200 or re.search(r'[\s<>]', item['product_id'])):raise ValueError(f'Строка {i}: неверный идентификатор товара магазина')
         if item.get('vin') and not valid_vehicle_identifier(item['vin']):raise ValueError(f'Строка {i}: укажите полный VIN (17 символов) или Frame, например AGH30-0430241')
         if item.get('fit','да').casefold() not in ('да','нет','true','false','1','0','yes','no'):raise ValueError(f'Строка {i}: подходит — да или нет')
         item['fit']=item.get('fit','да').casefold() in ('да','true','1','yes')
@@ -121,6 +124,12 @@ def import_cross_catalog(db,raw,filename,store,source,verified=False,complete=Fa
     old=db.scalar(select(FitmentImport).where(FitmentImport.store_id==store,FitmentImport.digest==digest,FitmentImport.active==True))
     if old:return {'id':old.id,'rows':len(old.rows),'duplicate':True}
     for i,row in enumerate(rows,2):
+        if row.get('product_id'):
+            product=resolve_listing(db,store,row['product_id'])
+            if not product:raise ValueError(f'Строка {i}: товар не найден в каталоге этого магазина')
+            row['product_id']=product.id
+            if product.brand and norm(product.brand)!=norm(row['brand']):raise ValueError(f'Строка {i}: бренд не совпадает с карточкой товара')
+            if product.part_number and norm(product.part_number)!=norm(row['part_number']):raise ValueError(f'Строка {i}: артикул производителя не совпадает с карточкой товара')
         if row.get('wb_nm_id'):
             product=db.get(Product,row['wb_nm_id'])
             if not product or product.marketplace!='wb':raise ValueError(f'Строка {i}: артикул WB не найден среди загруженных товаров')
@@ -129,7 +138,7 @@ def import_cross_catalog(db,raw,filename,store,source,verified=False,complete=Fa
         if row.get('vin'):row['vin_hash']=vin_key(db,store,row.pop('vin'))
     item=FitmentImport(id=str(uuid4()),store_id=store,source=source,verified=verified,complete=complete,rows=rows,digest=digest)
     db.add(item);db.commit()
-    return {'id':item.id,'rows':len(rows),'duplicate':False,'duplicates':duplicates,'unmapped':sum(not row.get('wb_nm_id') for row in rows)}
+    return {'id':item.id,'rows':len(rows),'duplicate':False,'duplicates':duplicates,'unmapped':sum(not row_product_id(row) for row in rows)}
 
 def catalog_summary(db,store):
     return [{'id':x.id,'source':x.source,'verified':x.verified,'complete':x.complete,'active':x.active,'rows':len(x.rows),'created_at':x.created_at} for x in db.scalars(select(FitmentImport).where(FitmentImport.store_id==store).order_by(FitmentImport.created_at.desc()))]
@@ -162,9 +171,10 @@ def save_question_evidence(db,question,product,body):
     if oe and (not re.fullmatch(r'[A-Z0-9][A-Z0-9./-]{3,39}',oe) or not any(c.isdigit() for c in oe) or valid_vehicle_identifier(oe)):
         raise ValueError('Укажите один оригинальный OEM-номер детали')
     if oe and oems and norm(oe) not in oems:raise ValueError('OEM не совпадает с номером в вопросе покупателя')
-    if reuse and (len(vins)!=1 or not oe or not oe_brand or not body.get('wb_nm_id') or not body.get('fit')):
-        raise ValueError('Для повторного использования подтвердите VIN или Frame, оригинальный OEM и подходящий товар WB')
+    if reuse and (len(vins)!=1 or not oe or not oe_brand or not (body.get('product_id') or body.get('wb_nm_id')) or not body.get('fit')):
+        raise ValueError('Для повторного использования подтвердите VIN или Frame, оригинальный OEM и подходящий товар магазина')
     row={'brand':body['brand'].strip(),'part_number':body['part_number'].strip(),'wb_nm_id':body.get('wb_nm_id',''),'category':product.category,'fit':body['fit']}
+    if body.get('product_id'):row['product_id']=body['product_id']
     if not row['brand'] or not row['part_number']:raise ValueError('Нужны бренд и артикул детали')
     if vins:row['vin_hash']=vin_key(db,question.wb_account_id,next(iter(vins)))
     if oe or oems:row['oe_number']=oe or next(iter(oems))
@@ -180,7 +190,7 @@ def save_question_evidence(db,question,product,body):
     old=db.scalar(select(FitmentImport).where(FitmentImport.store_id==question.wb_account_id,FitmentImport.digest==digest,FitmentImport.active==True))
     if not old:db.add(FitmentImport(id=str(uuid4()),store_id=question.wb_account_id,source=source,digest=digest,verified=True,complete=False,rows=rows))
     if reuse:
-        linked=db.get(Product,row['wb_nm_id'])
+        linked=db.get(Product,row_product_id(row))
         if linked and not linked.part_number:linked.part_number=row['part_number']
     db.commit()
     return {'duplicate':bool(old),'reusable_cross':reuse,'fitment':fitment_answer(db,question,product)}
@@ -192,7 +202,7 @@ def fitment_answer(db,question,product):
     catalogs=list(db.scalars(select(FitmentImport).where(FitmentImport.store_id==store,FitmentImport.active==True,FitmentImport.verified==True)))
     rows=[(row,c) for c in catalogs for row in c.rows]
     category=norm(product.category)
-    direct=lambda row: row.get('wb_nm_id')==product.id or (product.part_number and norm(row.get('brand'))==norm(product.brand) and norm(row.get('part_number'))==norm(product.part_number))
+    direct=lambda row: row_product_id(row)==product.id or (product.part_number and norm(row.get('brand'))==norm(product.brand) and norm(row.get('part_number'))==norm(product.part_number))
     direct_rows=[row for row,_ in rows if direct(row)]
     if not category:
         categories={norm(row.get('category')) for row in direct_rows if row.get('category')}
@@ -229,20 +239,22 @@ def fitment_answer(db,question,product):
     if current and len({r['fit'] for r,_ in current})>1:
         return result('CONFLICT','Уточняем совместимость детали по каталогу.')
     # A cross-number without the manufacturer's brand or exact vehicle application is not proof.
-    positives=[(r,c) for r,c in matches if r['fit'] and r.get('wb_nm_id') and r['wb_nm_id']!=product.id]
+    positives=[(r,c) for r,c in matches if r['fit'] and row_product_id(r) and row_product_id(r)!=product.id]
     alternatives=[]
     for row,catalog in positives:
-        candidate=db.get(Product,row['wb_nm_id'])
-        listing=db.get(StoreListing,(store,row['wb_nm_id']))
-        conflicting=any(other.get('wb_nm_id')==row['wb_nm_id'] and not other['fit'] for other,_ in matches)
-        if candidate and candidate.marketplace=='wb' and listing and not conflicting and row.get('stock',1)>0:
+        candidate=resolve_listing(db,store,row_product_id(row))
+        conflicting=any(row_product_id(other)==row_product_id(row) and not other['fit'] for other,_ in matches)
+        if candidate and not conflicting and row.get('stock',1)>0:
             alternatives.append(row)
     if alternatives:
-        candidate=sorted(alternatives,key=lambda r:r['wb_nm_id'])[0]
-        return result('ALTERNATIVE','Добрый день! '+('Этот товар не подходит. ' if current else '')+context+' Вам подойдет деталь '+candidate['brand']+' '+candidate['part_number']+', артикул Wildberries '+candidate['wb_nm_id']+'.',product_id=candidate['wb_nm_id'])
+        candidate=sorted(alternatives,key=row_product_id)[0]
+        linked=resolve_listing(db,store,row_product_id(candidate))
+        reference=product_reference(linked)[0]
+        return result('ALTERNATIVE','Добрый день! '+('Этот товар не подходит. ' if current else '')+context+' Вам подойдет деталь '+candidate['brand']+' '+candidate['part_number']+', '+reference+'.',product_id=linked.id)
     # Only an explicitly complete catalog can establish absence. Missing evidence is never no stock.
     if current and {r['fit'] for r,_ in current}=={False} and any(c.complete for _,c in current):
         return result('UNAVAILABLE','Для данного автомобиля нет товара в наличии.')
-    if requested_oem:return result('NEEDS_CATALOG','Уточняем аналог по указанному оригинальному OEM-номеру. Для точного подбора пришлите, пожалуйста, VIN или Frame автомобиля.')
+    if requested_oem and not vins:return result('NEEDS_CATALOG','Уточняем аналог по указанному оригинальному OEM-номеру. Для точного подбора пришлите, пожалуйста, VIN или Frame автомобиля.')
     if not vins:return result('NEEDS_VIN','Пришлите, пожалуйста, VIN или Frame автомобиля для точного подбора детали.')
-    return result('NEEDS_CATALOG','Для точного подбора необходимо подтвердить оригинальный OEM-номер детали по VIN или Frame Вашего автомобиля.')
+    return result('NEEDS_CATALOG','Добрый день! '+context+' пока нет подтверждённого подбора этой детали. Требуется проверка оригинального OEM-номера и ограничений применяемости по каталогу; повторно присылать номер автомобиля не нужно.')
+
