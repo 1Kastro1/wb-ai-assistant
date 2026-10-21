@@ -102,9 +102,13 @@ class ToolRegistry:
             query = str(arguments.get('q', ''))[:200]
             return [public(m) for m in db.scalars(select(Memory).where(Memory.enabled == True, Memory.text.contains(query, autoescape=True)).limit(20))]
         if name == 'memory.propose':
+            from .owner_reply_rules import proposed_rule_kind
             value = str(arguments.get('text', '')).strip()
             if not 2 <= len(value) <= 2000: raise ValueError('Укажите текст правила')
-            action = Action(id=str(uuid4()), kind='memory', payload={'text':mask_vin(value),'scope':'global','kind':'GLOBAL_RULE'})
+            kind = arguments.get('kind')
+            if kind not in ('REVIEW_RULE', 'QUESTION_RULE'):
+                kind = proposed_rule_kind(value)
+            action = Action(id=str(uuid4()), kind='memory', payload={'text':mask_vin(value),'scope':'global','kind':kind})
             db.add(action); db.commit()
             return public(action)
         if name == 'compatibility.decode_vin':
@@ -168,8 +172,9 @@ class AssistantService:
         tool = 'system.status'
         try:
             if 'запомни' in lower:
+                from .owner_reply_rules import proposed_rule_kind
                 rule = text.split(':', 1)[-1].strip()
-                action = Action(id=str(uuid4()), kind='memory', payload={'text': mask_vin(rule), 'kind': 'GLOBAL_RULE', 'scope': 'global'})
+                action = Action(id=str(uuid4()), kind='memory', payload={'text': mask_vin(rule), 'kind': proposed_rule_kind(text), 'scope': 'global'})
                 db.add(action)
                 db.commit()
                 data = public(action)
