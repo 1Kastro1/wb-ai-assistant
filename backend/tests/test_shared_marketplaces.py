@@ -209,4 +209,23 @@ class SharedMarketplaceTests(unittest.TestCase):
         self.assertIn('arm sub-assy, pitman', internet.PARTS['pitman_arm'][2])
         self.assertNotIn('tie rod end', internet.PARTS['pitman_arm'][2])
 
+    def test_legacy_wb_reference_never_becomes_another_marketplace_sku(self):
+        from app.db import FitmentImport
+        from app.fitment_catalog import vin_key
+        self.seed_channels('Фильтр масляный', 'NITTO', '00123', 'Масляные фильтры')
+        for provider in ('ozon', 'yandex'):
+            store = 'shop-' + provider
+            with self.factory() as db:
+                q = db.get(Review, 'question-' + provider)
+                q.text = FRAME
+                product = db.get(Product, q.product_id)
+                # The legacy WB ID collides numerically with this store's real SKU.
+                rows = [{'brand':'TOYOTA','part_number':'16510-82703','category':product.category,'fit':True,'vin_hash':vin_key(db,store,FRAME)},
+                        {'brand':'NITTO','part_number':'OTHER','wb_nm_id':'900001','oe_number':'16510-82703','oe_brand':'TOYOTA','category':product.category,'fit':True}]
+                db.add(FitmentImport(id='legacy-'+provider,store_id=store,source='https://uniqom.ru/original-catalogs',digest='legacy-'+provider,verified=True,complete=False,rows=rows))
+                db.commit()
+                self.assertEqual(fitment_answer(db,q,product)['status'], 'NEEDS_CATALOG')
+                self.assertEqual(internet.own_candidates(db,{'store':store,'category':product.category},{'1651082703'}), [])
+
+
 
