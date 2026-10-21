@@ -5,6 +5,7 @@ from .reply_policy import analyze_customer_message
 HELLA = 'https://www.hella.com/partnerworld/us/Product-range/Lighting/Bulbs-3277/'
 BREMBO = 'https://asia.bremboparts.com/america/en/support/car/maintenance/noises-and-vibrations-113941'
 MOOG = 'https://www.moogparts.com/technical/bulletins/tech-tips/using-proper-stud-fasteners-for-ball-joint-tie-rod-end-repairs.html'
+DENSO_WIPERS = 'https://www.denso-am.eu/news/wiper-blade-troubleshooting-from-denso-aftermarket'
 
 
 def specific_review_case(review, product):
@@ -29,6 +30,19 @@ def specific_review_case(review, product):
 
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
+    # A date complaint must not fall through to cleaner usage advice. The owner
+    # supplied the Korean YY.MM.DD convention; require the package to confirm it.
+    if getattr(product, 'brand', '').strip().upper() == 'KANGAROO' and re.search(r'просроч|годност|дата.*изготов|изготовлено', text):
+        explanation = 'У Kangaroo встречается маркировка даты в порядке «год–месяц–день», то есть в обратном порядке к привычному «день–месяц–год». '
+        if '26.07.21' in text:
+            explanation += 'Если на Вашей упаковке указан формат ГГ.ММ.ДД, запись 26.07.21 означает 21 июля 2026 года, а не 26 июля 2021 года. '
+        return result('kangaroo_date', 'Извините, что маркировка даты вызвала сомнения. '+explanation+'Сверьте обозначение формата и срок годности на этикетке. Если формат не указан или маркировка вызывает вопросы, пришлите фото даты и этикетки для проверки конкретной партии.')
+    if re.search(r'щетк\w*\s+стеклоочист|стеклоочистител|дворник', name) and re.search(r'полос|развод|маж[еу]т|мажет', text) and not re.search(r'не\s+(?:полос|маж)|без\s+(?:полос|развод)', text):
+        return result('wiper_streaks', 'Извините, что щётка начала оставлять полосы. Очистите лобовое стекло средством для автомобильных стёкол, а резиновую кромку аккуратно протрите мягкой тканью с тёплой водой; при необходимости используйте немного мягкого моющего средства и смойте его. Проверьте фиксацию щётки в креплении. Не включайте дворники по сухому или обледеневшему стеклу. Если после очистки полосы остаются, проверьте состояние кромки и установку: при повреждении резины щётку следует заменить. При ухудшении обзора сначала устраните проблему.', DENSO_WIPERS, 'Общие рекомендации DENSO по уходу: очистить стекло и резиновую кромку тёплой водой с небольшим количеством мягкого моющего средства; если полосы сохраняются, заменить щётку. Это не диагноз дефекта Double Force.')
+    if re.search(r'вместо\s+(?:двух|2|трех|3|четырех|4)[^.!?]{0,35}(?:один|одну|1)|(?:пришел|пришла|прислали|отправили|получил\w*)[^.!?]{0,20}(?:один|одну|1)[^.!?]{0,20}(?:вместо|а не)\s+(?:двух|два|две|2)', text):
+        return result('quantity_shortage', 'Приносим извинения, что Вы получили меньше единиц товара, чем ожидали. Сверьте количество в заказе и комплектность в карточке товара. При проверке заказа в ПВЗ, если количество или комплектность не соответствуют заказу, Вы можете отказаться от получения. Если заказ уже получен, обратитесь в поддержку маркетплейса с фотографиями комплекта и упаковки для проверки ситуации.')
+    if set(analysis['complaints']) == {'AUTHENTICITY'} and getattr(product, 'brand', '').strip().upper() != 'EIKOSHA':
+        return result('authenticity_pickup', 'Сожалеем, что подлинность товара вызвала у Вас сомнения. По одному отзыву проверить конкретный экземпляр невозможно. При проверке в ПВЗ сверяйте товар, маркировку и комплектность с заказом: если обнаружите несоответствие, Вы можете отказаться от получения. Если товар уже получен, для проверки можно передать фотографии маркировки, упаковки и номера партии в поддержку маркетплейса.')
     can_fragrance = getattr(product,'brand','').upper()=='EIKOSHA' and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+',name)) and not re.search(r'держател|giga|стерж|\bv-?\d+',name)
     if can_fragrance and re.search(r'(?:прислал\w*|пришел|пришла|получил\w*)[^.!?]{0,45}держател',text):
         gift = ' Особенно жаль, что ароматизатор предназначался в подарок и эта ситуация испортила впечатление от покупки.' if 'подар' in text and not re.search(r'не\s+(?:в\s+)?подар',text) else ''

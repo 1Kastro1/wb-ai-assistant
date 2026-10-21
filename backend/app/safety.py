@@ -91,6 +91,8 @@ def classify(text, category=''):
 
 
 def validate_reply(text):
+    from .plain_text import plain_text
+    text = plain_text(text)
     if not 2 <= len(text.strip()) <= 5000:
         raise ValueError('Ответ должен содержать от 2 до 5000 символов')
     if VIN.search(text):
@@ -204,6 +206,9 @@ def rule_reply(review, product, revision=0, facts=None):
 
 
 def safe_fallback_reply(review, product, revision=0, facts=None):
+    specific = specific_review_case(review, product)
+    if specific:
+        return specific['answer']
     if getattr(review,'risk','NORMAL') in ('HIGH', 'CAUTION'):
         return rule_reply(review, product, revision, facts)
     guidance = product_usage_reply(review, product, facts if facts is not None else (getattr(product, 'facts', None) or []), revision)

@@ -1,5 +1,6 @@
 """Product-specific advice from the same trusted facts used by generation."""
 import re
+from .plain_text import plain_text
 
 
 def is_cleaner(product):
@@ -65,11 +66,11 @@ def usage_excerpt(facts):
     for fact in facts:
         if fact.get('verification_status') != 'VERIFIED':
             continue
-        text = str(fact.get('text', '')).strip()
+        text = plain_text(fact.get('text', ''))
         heading = re.search(r'(?:способ применения|инструкция по применению|применение)\s*:', text, re.I)
         if heading:
             text = text[heading.end():]
-            text = re.split(r'\n\s*(?:состав|хранение|характеристики|артикул)\s*:', text, flags=re.I)[0]
+            text = re.split(r'\n\s*(?:состав|хранение|характеристики|артикул|меры предосторожности)\s*:', text, flags=re.I)[0]
         for sentence in re.split(r'(?<=[.!?])\s+|\n+', text):
             sentence = sentence.strip(' •-\t')
             if not sentence:
@@ -190,7 +191,7 @@ def product_usage_reply(review, product, facts, revision=0):
                 if holder:
                     parts.append('Попробуйте разместить баночку на дефлекторе с помощью совместимого держателя — '+holder.get('article_label', 'артикул Wildberries '+holder['wb_nm_id'])+': поток воздуха поможет аромату равномернее распространяться по салону. Перед выбором держателя сверьте форму ламелей дефлектора с его инструкцией.')
                 else:
-                    parts.append('Разместите баночку в подходящем подстаканнике или кармане двери согласно её инструкции, оставив доступ воздуха; не ставьте её свободно на торпеду или под сиденье водителя.')
+                    parts.append(eikosha_placement(product, facts).replace('Меловая основа отдаёт аромат постепенно, создавая тонкий, ненавязчивый запах. ', ''))
             else:
                 parts.append('Попробуйте расположить ароматизатор ближе к потоку воздуха согласно его инструкции; сменные стержни GIGA устанавливаются в предназначенный для них корпус.')
         if 'ODOR_COMPLAINT' in complaints:
@@ -228,4 +229,3 @@ def product_usage_reply(review, product, facts, revision=0):
         if instruction:
             return intro + ' ' + ('Сожалеем, что Вы не получили ожидаемого результата. ' if complaints else '') + 'По инструкции к этому товару: ' + instruction
     return None
-

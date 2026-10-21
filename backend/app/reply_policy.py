@@ -21,6 +21,8 @@ def weak_cleaning_result(text):
 def authenticity_concern(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
     if re.search(r'(?<!\w)не\s*оригинал|контрафакт|фальсификат|пален', value): return True
+    if any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'(?:жалк\w*\s+)?пародия\s+на\b', value)):
+        return True
     return any(not re.search(r'(?<!\w)(?:не|нет)\s*$', value[:match.start()])
                for match in re.finditer(r'поддел\w*', value))
 
@@ -44,6 +46,8 @@ def yellow_light_complaint(text):
 
 def subtle_scent_complaint(text):
     value = ' '.join((text or '').lower().replace('ё','е').split())
+    if re.search(r'(?:пахн\w*|(?:запах|аромат)\w*)[^.!?;]{0,20}кое[\s-]*как', value):
+        return True
     return bool(re.search(r'(?:пахн\w*|(?:запах|аромат)\w*)\s*(?:совсем\s+|очень\s+|лишь\s+|только\s+)*(?:чуть[\s-]*чуть|еле|едва|слабоват\w*)|слабоват\w*\s+(?:запах|аромат)', value))
 
 COMPLAINT_PATTERNS = {
