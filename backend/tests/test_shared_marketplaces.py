@@ -278,6 +278,28 @@ class SharedMarketplaceTests(unittest.TestCase):
                 result = asyncio.run(services.generate_draft(db, 'review-wb'))
                 self.assertNotIn(signature, result['text'])
 
+    def test_explicit_rule_audiences_apply_to_both_generators_on_every_provider(self):
+        self.seed_channels('Аккумулятор автомобильный 12 В', 'DOMEI', '80D26L', 'Аккумуляторы')
+        signature = 'С уважением ГК Юником.'
+        with self.factory() as db:
+            db.add(Memory(id='only-reviews', kind='REVIEW_RULE', text='В конце каждого ответа на отзыв добавляй подпись «' + signature + '».'))
+            db.add(Memory(id='only-questions', kind='QUESTION_RULE', text='Каждый ответ начинай с «Добрый день!».'))
+            for provider in PROVIDERS:
+                db.get(Review, 'review-' + provider).text = 'Хороший товар'
+                db.get(Review, 'review-' + provider).rating = 5
+                db.get(Review, 'question-' + provider).text = 'Какое напряжение на клеммах должно быть в вольтах?'
+            db.commit()
+        with patch('app.services.ollama.reply_variants', new=AsyncMock()), patch('app.services.web_research.search_instructions', new=AsyncMock(return_value=[])):
+            for provider in PROVIDERS:
+                with self.factory() as db:
+                    review = asyncio.run(services.generate_draft(db, 'review-' + provider))
+                    question = asyncio.run(services.generate_question_draft(db, db.get(Review, 'question-' + provider)))
+                    self.assertTrue(review['text'].endswith(signature))
+                    self.assertTrue(question['text'].startswith('Добрый день!'))
+                    self.assertNotIn(signature, question['text'])
+                    self.assertEqual(review['quality']['owner_rules']['matched'], 1)
+                    self.assertEqual(question['quality']['owner_rules']['matched'], 1)
+
 
 
 

@@ -2123,7 +2123,7 @@ def cancel(aid: str, request: Request, auth: AUTH, db: DB):
 
 class MemoryInput(Payload):
     text: str = Field(min_length=2, max_length=2000)
-    kind: str = 'GLOBAL_RULE'
+    kind: Literal['GLOBAL_RULE', 'REVIEW_RULE', 'QUESTION_RULE'] = 'REVIEW_RULE'
     scope: str = 'global'
 
 
@@ -2156,6 +2156,25 @@ class MemoryEnabled(Payload):
     enabled: bool
 
 
+class MemoryKind(Payload):
+    kind: Literal['REVIEW_RULE', 'QUESTION_RULE']
+
+
+@app.patch('/memory/{mid}/kind')
+def memory_kind(mid: str, body: MemoryKind, request: Request, auth: OWNER, db: DB):
+    item = db.get(Memory, mid)
+    if not item:
+        raise HTTPException(404, 'Правило не найдено')
+    item.kind = body.kind
+    meta = setting(db, 'memory-meta:' + mid, {})
+    actor = db.get(User, auth['user_id'])
+    set_setting(db, 'memory-meta:' + mid, {**meta, 'updated_at': now(),
+                'updated_by_name': actor.display_name if actor else auth.get('username', '')})
+    db.commit()
+    request.state.activity_details = rule_details(public(item), 'rule_updated')
+    return {**public(item), **setting(db, 'memory-meta:' + mid, {})}
+
+
 @app.patch('/memory/{mid}/enabled')
 def memory_enabled(mid: str, body: MemoryEnabled, request: Request, auth: OWNER, db: DB):
     item=db.get(Memory,mid)
@@ -2174,11 +2193,12 @@ class RulePreviewInput(Payload):
     example: str = Field(min_length=1,max_length=5000)
     rating: int = Field(ge=1,le=5,default=3)
     product_id: str = ''
+    kind: Literal['REVIEW_RULE', 'QUESTION_RULE'] = 'REVIEW_RULE'
 
 
 @app.post('/memory/preview')
 async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
-    from .owner_reply_rules import apply_review_signature
+    from .owner_reply_rules import apply_review_signature, apply_owner_preferences, matching_owner_rules, owner_business_facts
     from .safety import rule_reply,safe_fallback_reply,validate_reply,classify
     from .reply_policy import customer_reply_policy
     from .services import trusted_product_facts,assess_reply
@@ -2186,26 +2206,27 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
     if not product:raise HTTPException(404,'Товар не найден')
     if body.product_id and not product_owned(db,db.get(StoreProfile,active_store(db,auth)),product):raise HTTPException(404,'Товар не найден в выбранном магазине')
     facts=trusted_product_facts(db,product) if body.product_id else []
+    for_questions = body.kind == 'QUESTION_RULE'
+    rules = matching_owner_rules(db, product, for_questions=for_questions) + [body.text]
+    if for_questions:
+        from .rule_preview import preview_question
+        return await preview_question(db, product, body.example, rules, facts, active_store(db, auth))
+    facts += owner_business_facts(product, rules)
     review=Review(id='preview',product_id=product.id,rating=body.rating,text=body.example,risk=classify(body.example,product.name+' '+product.category)['risk'])
     reply=rule_reply(review,product,facts=facts)
     note='Предварительный ответ. Правило и ответ не сохраняются.'
-    rules=[m.text for m in db.scalars(select(Memory).where(Memory.enabled==True)) if m.scope in ('global','product:'+product.id,'brand:'+product.brand,'category:'+product.category)]+[body.text]
     if review.risk=='NORMAL':
         try:
             reply=await asyncio.wait_for(ollama.chat([{'role':'system','content':customer_reply_policy()+'\nПравила владельца: '+json.dumps(rules,ensure_ascii=False)},{'role':'user','content':json.dumps({'review_data':body.example,'rating':body.rating,'product':product.name,'verified_facts':facts},ensure_ascii=False)}]),timeout=12)
         except Exception:
             reply=reply or safe_fallback_reply(review,product,facts=facts)
             note='Показан ответ по проверенным сценариям. Свободную формулировку правила сейчас не удалось проверить; ограничения на слова применены.'
-    for rule in rules:
-        if any(x in rule.lower() for x in ('не использ','не пиши')):
-            for word in re.findall('[«“\"]([^»”\"]+)[»”\"]',rule):reply=re.sub(re.escape(word),'',reply,flags=re.I)
+    reply, _ = apply_owner_preferences(reply, review, rules)
     reply=apply_review_signature(reply,rules)
     try:reply=validate_reply(mask_vin(reply))
     except ValueError:
         reply=safe_fallback_reply(review,product,facts=facts)
-        for rule in rules:
-            if any(x in rule.lower() for x in ('не использ','не пиши')):
-                for word in re.findall('[«“\"]([^»”\"]+)[»”\"]',rule):reply=re.sub(re.escape(word),'',reply,flags=re.I)
+        reply, _ = apply_owner_preferences(reply, review, rules)
         reply=apply_review_signature(reply,rules)
         try:reply=validate_reply(mask_vin(reply))
         except ValueError:raise HTTPException(422,'Правило не позволяет составить корректный пример. Уточните ограничения.') from None

@@ -31,7 +31,21 @@ def matching_owner_rules(db, product, for_questions=False):
     scopes = {value.strip().casefold() for value in scopes}
     return [row.text for row in db.scalars(select(Memory).where(Memory.enabled == True))
             if row.scope.strip().casefold() in scopes
+            and rule_applies_to(row.kind, for_questions)
             and not (for_questions and review_signature(row.text))]
+
+
+def rule_applies_to(kind, for_questions=False):
+    """Keep old common rules compatible; explicit kinds isolate both pipelines."""
+    if kind == 'QUESTION_RULE':
+        return for_questions
+    if kind == 'REVIEW_RULE':
+        return not for_questions
+    return True
+
+
+def proposed_rule_kind(text):
+    return 'QUESTION_RULE' if re.search(r'для\s+(?:ответов\s+на\s+)?вопрос|ответ\w*\s+на\s+вопрос|при\s+вопрос', text, re.I) else 'REVIEW_RULE'
 
 
 def owner_business_facts(product, rules):
