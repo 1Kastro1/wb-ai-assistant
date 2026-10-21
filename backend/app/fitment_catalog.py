@@ -186,7 +186,7 @@ def save_question_evidence(db,question,product,body):
         rows.append({k:v for k,v in row.items() if k!='vin_hash'})
     parsed=urlsplit(body['source'])
     # Full VINs belong only to the original question, never to source URLs.
-    source=urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode([(k,v) for k,v in parse_qsl(parsed.query) if not vehicle_identifiers(v) and k.lower() not in ('vin','frame','identstring')]),''))
+    source=urlunsplit((parsed.scheme,parsed.netloc,parsed.path,urlencode([(k,v) for k,v in parse_qsl(parsed.query) if not vehicle_identifiers(v) and k.lower() not in ('vin','frame','identstring','ssd','criteria','carid','vehicleid')]),''))
     digest=hashlib.sha256(json.dumps([question.wb_account_id,source,rows],sort_keys=True).encode()).hexdigest()
     old=db.scalar(select(FitmentImport).where(FitmentImport.store_id==question.wb_account_id,FitmentImport.digest==digest,FitmentImport.active==True))
     if not old:db.add(FitmentImport(id=str(uuid4()),store_id=question.wb_account_id,source=source,digest=digest,verified=True,complete=False,rows=rows))

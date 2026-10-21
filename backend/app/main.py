@@ -2381,7 +2381,8 @@ def fitment_pending_questions(auth: AUTH, db: DB):
 
 @app.get('/fitment/internet/settings')
 def internet_fitment_settings(auth: AUTH,db: DB):
-    return {'enabled':internet_fitment_enabled(db, active_store(db,auth)),'providers':['PartSouq — публичный каталог OEM','NHTSA vPIC — сведения об автомобиле'],'timeout_seconds':18}
+    from .fitment_categories import CATALOG_SYSTEMS
+    return {'enabled':internet_fitment_enabled(db, active_store(db,auth)),'providers':['Uniqom — оригинальные каталоги через вход в браузере','PartSouq — публичный каталог OEM','NHTSA vPIC — сведения об автомобиле'],'timeout_seconds':18,'all_categories':True,'uniqom_mode':'browser','systems':[{'id':key,'label':label} for key,label,_ in CATALOG_SYSTEMS]}
 
 
 class InternetFitmentSettings(Payload):
@@ -2402,9 +2403,13 @@ def fitment_research_question(qid,auth,db):
 
 @app.get('/fitment/questions/{qid}/research')
 def fitment_last_research(qid: str,auth: AUTH,db: DB):
-    from .internet_fitment import last_research
+    from .internet_fitment import last_research, target_part
+    from .fitment_categories import category_plan
+    from .verified_instructions import manufacturer_articles
     q,p=fitment_research_question(qid,auth,db)
-    return {**last_research(db,q,p),'saved_fitment':fitment_answer(db,q,p),'product':{'id':p.id,'brand':p.brand,'part_number':p.part_number,'name':p.name},'can_confirm':auth['role']=='owner'}
+    articles={re.sub(r'[^A-ZА-ЯЁ0-9]','',article.upper()):article for article in manufacturer_articles(p)}
+    article=p.part_number or (next(iter(articles.values())) if len(articles)==1 else '')
+    return {**last_research(db,q,p),'coverage':category_plan(p,target_part(p)),'saved_fitment':fitment_answer(db,q,p),'product':{'id':p.id,'brand':p.brand,'part_number':article,'name':p.name,'category':p.category},'can_confirm':auth['role']=='owner'}
 
 
 class FitmentResearchInput(Payload):

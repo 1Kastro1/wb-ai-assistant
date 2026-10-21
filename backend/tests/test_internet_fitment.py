@@ -100,10 +100,14 @@ class InternetFitmentTests(unittest.TestCase):
             with self.factory() as db:
                 draft=asyncio.run(generate_question_draft(db,db.get(Review,'fit-q')));self.assertFalse(draft['quality']['passed']);self.assertEqual(draft['quality']['fitment']['internet']['status'],'UNAVAILABLE');model.assert_not_called()
 
-    def test_unsupported_category_skips_external_requests(self):
+    def test_any_category_has_uniqom_selection_without_unsupported_or_external_guess(self):
         with self.factory() as db:db.get(Product,'100001').name='Коврик';db.get(Product,'100001').category='Коврики';db.commit()
         with patch.object(internet.catalog,'lookup',new=AsyncMock()) as lookup:
-            self.assertEqual(self.research()['status'],'UNSUPPORTED');lookup.assert_not_called()
+            result=self.research()
+            self.assertEqual(result['status'],'CATALOG_SELECTION')
+            self.assertTrue(result['coverage']['all_categories'])
+            self.assertEqual(result['provider'],'uniqom_browser')
+            lookup.assert_not_called()
 
     def test_settings_are_owner_only_and_research_is_store_scoped(self):
         self.auth['role']='manager';self.assertEqual(self.client.post('/fitment/internet/settings',json={'enabled':True}).status_code,403)
