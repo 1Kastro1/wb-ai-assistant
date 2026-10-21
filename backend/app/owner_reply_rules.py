@@ -28,13 +28,15 @@ def owner_business_facts(product, rules):
              'verification_status': 'VERIFIED', 'policy': 'eikosha_distributor'}]
 
 
-def apply_owner_preferences(reply, review, rules):
+def apply_owner_preferences(reply, review, rules, style_only=False):
     applied = []
     for rule in rules:
         lowered = rule.lower().replace('ё', 'е')
         if 'добрый день' in lowered and any(word in lowered for word in ('начин', 'приветств', 'отвеч', 'пиши')):
             reply = re.sub(r'^\s*(?:здравствуйте|добрый день)[!.,]?\s*', 'Добрый день! ', reply, flags=re.I)
             applied.append('приветствие')
+        if style_only:
+            continue
         if review.text.strip() and ('уже опис' in lowered or 'уже указ' in lowered) and any(word in lowered for word in ('не спраш', 'не уточн', 'не прос')):
             reply = re.sub(r'[^.!?]*(?:уточните|расскажите)[^.!?]*(?:что именно[^.!?]*не устроило|какие свойства[^.!?]*не устроили|в ч[её]м проявилась проблема)[^.!?]*[.!?]?', '', reply, flags=re.I)
             applied.append('не переспрашивать описанную проблему')

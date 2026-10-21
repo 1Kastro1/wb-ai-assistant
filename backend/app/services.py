@@ -781,6 +781,14 @@ async def generate_question_draft(db, question, instruction=''):
         quality = assess_question_answer(question, product, reply, sources)
         quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
         model = 'question-safety-1.0'
+    adjusted, applied_rules = apply_owner_preferences(reply, question, memories, style_only=bool(fitment))
+    if adjusted != reply:
+        reply = validate_reply(mask_vin(adjusted))
+        if not fitment:
+            rechecked = assess_question_answer(question, product, reply, sources)
+            rechecked['passed'] = bool(quality['passed'] and rechecked['passed'])
+            quality.update(rechecked)
+    quality['owner_rules'] = {'matched': len(memories), 'applied_preferences': applied_rules}
     route = 'fallback' if model.startswith('question-safety') else 'model' if uses_model else 'rules'
     quality['timing'] = {'total_seconds': round(time.monotonic() - question_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     quality['candidates_evaluated'] = len(checked)
