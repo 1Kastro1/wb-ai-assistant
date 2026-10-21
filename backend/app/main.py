@@ -29,6 +29,7 @@ from .db import *
 from .config import ORIGIN, ORIGINS, DATA, DATABASE, DATABASE_URL, MODEL, REAL_PUBLISH, SQLITE_STARTUP_HEALTH
 from .security import digest, encrypt_secret, decrypt_secret, guard
 from .integrations import ollama, wb, ozon, yandex, wb_token, provider_for, web_research
+from .shared_marketplaces import internet_fitment_enabled, resolve_listing
 from .product_search import product_search_condition
 from .services import reviews_search, reviews_page, review_filter_counts, review_facets, analytics, quality_report, generate_draft, edit_draft, propose_publish, confirm_action, question_intent, remember_web_instruction_sources, draft_public, review_items
 from .assistant import assistant
@@ -2369,7 +2370,7 @@ def fitment_catalog_enabled(catalog_id: str, body: CatalogEnabled, auth: OWNER, 
 
 @app.get('/fitment/template')
 def fitment_template(auth: AUTH):
-    return Response('\ufeffbrand;part_number;wb_nm_id;oe_number;oe_brand;category;make;model;year_from;year_to;body;engine_code;vin;fit;stock;cross_brand;cross_number\r\n',media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="cross-catalog-template.csv"'})
+    return Response('\ufeffbrand;part_number;product_id;wb_nm_id;oe_number;oe_brand;category;make;model;year_from;year_to;body;engine_code;vin;fit;stock;cross_brand;cross_number\r\n',media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="cross-catalog-template.csv"'})
 
 
 @app.get('/fitment/questions')
@@ -2380,7 +2381,7 @@ def fitment_pending_questions(auth: AUTH, db: DB):
 
 @app.get('/fitment/internet/settings')
 def internet_fitment_settings(auth: AUTH,db: DB):
-    return {'enabled':bool(setting(db,'internet-fitment-enabled:'+active_store(db,auth),False)),'providers':['PartSouq — публичный каталог OEM','NHTSA vPIC — сведения об автомобиле'],'timeout_seconds':18}
+    return {'enabled':internet_fitment_enabled(db, active_store(db,auth)),'providers':['PartSouq — публичный каталог OEM','NHTSA vPIC — сведения об автомобиле'],'timeout_seconds':18}
 
 
 class InternetFitmentSettings(Payload):
@@ -2389,7 +2390,7 @@ class InternetFitmentSettings(Payload):
 
 @app.post('/fitment/internet/settings')
 def internet_fitment_settings_update(body: InternetFitmentSettings,auth: OWNER,db: DB):
-    set_setting(db,'internet-fitment-enabled:'+active_store(db,auth),body.enabled);db.commit()
+    set_setting(db,'internet-fitment-enabled:shared',body.enabled);db.commit()
     return {'enabled':body.enabled}
 
 
@@ -2415,7 +2416,7 @@ async def fitment_research(qid: str,body: FitmentResearchInput,auth: MARKET_OPER
     from .internet_fitment import research_question
     q,p=fitment_research_question(qid,auth,db)
     can_operate_store(auth,db.get(StoreProfile,q.wb_account_id))
-    if not setting(db,'internet-fitment-enabled:'+q.wb_account_id,False):raise ValueError('Владелец может включить интернет-подбор в разделе Товары')
+    if not internet_fitment_enabled(db, q.wb_account_id):raise ValueError('Владелец может включить интернет-подбор в разделе Товары')
     return await research_question(db,q,p,body.refresh)
 
 
@@ -2423,6 +2424,7 @@ class FitmentEvidenceInput(Payload):
     brand: str=Field(min_length=1,max_length=100)
     part_number: str=Field(min_length=1,max_length=100)
     wb_nm_id: str=Field(default='',max_length=12)
+    product_id: str=Field(default='',max_length=200)
     source: str=Field(min_length=8,max_length=1000)
     fit: bool=True
     oe_brand: str=Field(default='',max_length=100)
@@ -2440,15 +2442,17 @@ def fitment_question_evidence(question_id: str, body: FitmentEvidenceInput, auth
     p=db.get(Product,q.product_id)
     host=(urlsplit(body.source).hostname or '').lower();official=str(setting(db,'official_domain:'+p.id,'')).lower()
     if not body.source.startswith('https://') or not (host in ('uniqom.ru','partsouq.com') or host.endswith('.uniqom.ru') or (official and (host==official or host.endswith('.'+official)))):raise ValueError('Используйте ссылку UNIQOM, PartSouq или официальный домен производителя из карточки товара')
-    if body.wb_nm_id and not re.fullmatch(r'[1-9][0-9]{0,11}',body.wb_nm_id):raise ValueError('Неверный артикул Wildberries')
-    if body.wb_nm_id:
-        linked=db.get(Product,body.wb_nm_id)
-        listed=body.wb_nm_id==q.product_id or db.get(StoreListing,(store,body.wb_nm_id))
+    reference=body.product_id or body.wb_nm_id
+    values=body.model_dump()
+    if reference:
+        linked=resolve_listing(db,store,reference,q.product_id)
         from .fitment_catalog import norm
-        if not linked or linked.marketplace!='wb' or not listed:raise ValueError('Нужен артикул WB из ассортимента этого магазина')
-        if linked.brand and norm(linked.brand)!=norm(body.brand):raise ValueError('Бренд не совпадает с карточкой WB')
-        if linked.part_number and norm(linked.part_number)!=norm(body.part_number):raise ValueError('Артикул производителя не совпадает с карточкой WB')
-    result=save_question_evidence(db,q,p,body.model_dump())
+        if not linked:raise ValueError('Нужен товар из ассортимента выбранного магазина')
+        if linked.brand and norm(linked.brand)!=norm(body.brand):raise ValueError('Бренд не совпадает с карточкой товара')
+        if linked.part_number and norm(linked.part_number)!=norm(body.part_number):raise ValueError('Артикул производителя не совпадает с карточкой товара')
+        values['product_id']=linked.id
+        if linked.marketplace!='wb':values['wb_nm_id']=''
+    result=save_question_evidence(db,q,p,values)
     return {'ok':True,**result,'message':'Результат подбора сохранён. Подготовьте новый вариант ответа на вопрос.'}
 
 
@@ -2640,3 +2644,4 @@ async def portable_import(auth: OWNER, password: str = Form(...), file: UploadFi
 def export_reviews(auth: AUTH, db: DB):
     # Explicit allowlist; never export ORM internals, accounts, settings or sessions.
     return [{'id': r.id, 'rating': r.rating, 'text': mask_vin(r.text), 'status': r.status} for r in db.scalars(select(Review))]
+

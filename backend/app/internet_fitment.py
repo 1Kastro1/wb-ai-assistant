@@ -9,9 +9,12 @@ import httpx
 from sqlalchemy import select
 from .db import Audit, Session, Product, StoreListing, FitmentImport, now, setting, set_setting
 from .vehicle_identifiers import mask_frames
+from .shared_marketplaces import row_product_id, resolve_listing, product_reference
 from .fitment_catalog import VIN, vehicle_identifiers, norm, vin_key, fitment_answer, oe_numbers
 
 PARTS = {
+    'pitman_arm': (r'сошк|pitman', ('Steering', 'Steering system', 'Steering gear'), ('arm, pitman','pitman arm','arm, steering pitman','steering pitman arm','arm sub-assy, pitman','arm assy, pitman')),
+    'tie_rod_end': (r'наконечник.*рулев|рулев.*наконечник|tie rod end', ('Steering', 'Steering system', 'Steering gear'), ('tie rod end','end sub-assy, tie rod','end sub-assy, tie rod, rh','end sub-assy, tie rod, lh')),
     'oil_filter': (r'фильтр.*маслян|маслян.*фильтр', 'Filters', ('engine oil filter','oil filter')),
     'cabin_filter': (r'фильтр.*салон|салон.*фильтр', 'Filters', ('interior air filter','cabin air filter','cabin filter')),
     'air_filter': (r'фильтр.*воздуш|воздуш.*фильтр', 'Filters', ('air filter','engine air filter')),
@@ -137,7 +140,9 @@ class PublicCatalog:
         # A search box containing the VIN is not a verified vehicle summary.
         summaries=root.find('table','part-catalog-vehicle-details')
         if len(summaries)!=1 or vin not in summaries[0].text().upper():return {**result,'status':'NEEDS_REVIEW'}
-        category=PARTS[part][1];links=[a for a in root.find('a') if a.text().strip()==category]
+        category=PARTS[part][1]
+        categories=(category,) if isinstance(category,str) else category
+        links=[a for a in root.find('a') if a.text().strip() in categories]
         if len(links)!=1:return {**result,'status':'NEEDS_REVIEW'}
         group_url=context_url(urljoin(vehicle['url'],links[0].attrs['href']),vin,car_id);root=await self.read(group_url)
         if any(a.text().strip().lower()=='next' for a in root.find('a')):return {**result,'status':'NEEDS_REVIEW'}
@@ -175,7 +180,7 @@ catalog = PublicCatalog()
 def cache_key(db,question,product):
     vins=set(vehicle_identifiers(question.text))
     fingerprint=vin_key(db,question.wb_account_id,next(iter(vins))) if len(vins)==1 else hashlib.sha256(question.text.encode()).hexdigest()
-    return 'internet-fitment:'+question.wb_account_id+':'+hashlib.sha256((fingerprint+product.id+norm(product.category)+'v1').encode()).hexdigest()
+    return 'internet-fitment:'+question.wb_account_id+':'+hashlib.sha256((fingerprint+product.id+norm(product.category)+'v2').encode()).hexdigest()
 
 
 def last_research(db,question,product):
@@ -186,12 +191,12 @@ def own_candidates(db,product,oems):
     choices={}
     for item in db.scalars(select(FitmentImport).where(FitmentImport.store_id==product['store'],FitmentImport.active==True,FitmentImport.verified==True)):
         for row in item.rows:
-            pid=row.get('wb_nm_id')
+            pid=row_product_id(row)
             if not pid or not row['fit'] or not oems & oe_numbers(row) or norm(row.get('category'))!=norm(product['category']) or row.get('stock',1)<=0:continue
-            if not db.get(StoreListing,(product['store'],pid)):continue
-            listed=db.get(Product,pid)
-            if not listed or listed.marketplace!='wb' or norm(listed.brand)!=norm(row['brand']):continue
-            choices[pid]={'wb_nm_id':pid,'brand':row['brand'],'part_number':row['part_number'],'source':item.source,'requires_review':True}
+            listed=resolve_listing(db,product['store'],pid)
+            if not listed or norm(listed.brand)!=norm(row['brand']):continue
+            reference,url=product_reference(listed)
+            choices[listed.id]={'product_id':listed.id,'wb_nm_id':listed.id if listed.marketplace=='wb' else '', 'brand':row['brand'],'part_number':row['part_number'],'name':listed.name,'image_url':listed.image_url,'article_label':reference,'url':url,'source':item.source,'requires_review':True}
     return list(choices.values())[:10]
 
 
@@ -237,3 +242,4 @@ async def research_question(db,question,product,force=False):
     result=json.loads(mask_frames(json.dumps(result,ensure_ascii=False).replace(vin,'[VIN / Frame скрыт]')))
     set_setting(db,key,{'at':time.time(),'result':result});db.commit()
     return result
+

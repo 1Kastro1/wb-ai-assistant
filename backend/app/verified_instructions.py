@@ -14,7 +14,7 @@ def instruction_catalog():
 def manufacturer_articles(product):
     result = {str(getattr(product, 'part_number', '') or '').strip().upper()}
     for fact in getattr(product, 'facts', None) or []:
-        if fact.get('verification_status') == 'VERIFIED' and str(fact.get('source', '')).startswith('Карточка WB:'):
+        if fact.get('verification_status') == 'VERIFIED' and (str(fact.get('source', '')).startswith('Карточка WB:') or (fact.get('source') == 'Карточка товара' and fact.get('source_type') == 'marketplace')):
             for match in re.finditer(r'(?:^|\n)Артикул производителя\s*:\s*([^\n]+)', str(fact.get('text', '')), re.I):
                 result.add(match.group(1).strip().upper())
     return result - {''}

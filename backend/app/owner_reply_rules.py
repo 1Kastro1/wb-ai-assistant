@@ -5,7 +5,11 @@ from .db import Memory
 
 
 def matching_owner_rules(db, product):
-    scopes = {'global', 'product:' + product.id, 'brand:' + product.brand, 'category:' + product.category}
+    from .shared_marketplaces import equivalent_products
+    counterparts = equivalent_products(db, product)
+    scopes = {'global', 'brand:' + product.brand, 'category:' + product.category}
+    scopes.update('product:' + item.id for item in counterparts)
+    scopes.update('category:' + item.category for item in counterparts if item.category)
     scopes = {value.strip().casefold() for value in scopes}
     return [row.text for row in db.scalars(select(Memory).where(Memory.enabled == True))
             if row.scope.strip().casefold() in scopes]
@@ -39,3 +43,4 @@ def apply_owner_preferences(reply, review, rules):
                 reply = re.sub(re.escape(word), '', reply, flags=re.I)
                 applied.append('запрет слова: ' + word)
     return re.sub(r'[ \t]{2,}', ' ', reply).strip(), list(dict.fromkeys(applied))
+
