@@ -75,6 +75,8 @@ def usage_excerpt(facts):
             sentence = sentence.strip(' •-\t')
             if not sentence:
                 continue
+            if not heading and fact.get('kind') != 'instruction' and re.match(r'(?:особенности|форма выпуска|назначение средства|объем|объём|вес|упаковка|прочие характеристики)\s*:', sentence, re.I):
+                continue
             action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
             if (heading or action or fact.get('kind') == 'instruction') and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
                 result.append(sentence)

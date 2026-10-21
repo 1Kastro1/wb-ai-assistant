@@ -20,7 +20,10 @@ class ReviewPlainTextTests(unittest.TestCase):
             validate_reply('<br/><div></div>')
 
     def test_usage_does_not_dump_html_precautions_or_volume(self):
-        facts = [{'text':'Особенности: Не требует смывания. Способ применения: Распылите средство.<br/>Оставьте на 30 секунд и промойте водой.<br/><br/>Меры предосторожности:<br/>Не вдыхайте испарения. 600 мл.', 'verification_status':'VERIFIED'}]
+        facts = [
+            {'text':'Форма выпуска: жидкость\nОсобенности: Не требует смывания водой\nОбъём: 600 мл', 'kind':'feature', 'verification_status':'VERIFIED'},
+            {'text':'Особенности: Не требует смывания. Способ применения: Распылите средство.<br/>Оставьте на 30 секунд и промойте водой.<br/><br/>Меры предосторожности:<br/>Не вдыхайте испарения. 600 мл.', 'kind':'feature', 'verification_status':'VERIFIED'},
+        ]
         value = usage_excerpt(facts)
         self.assertIn('30 секунд', value)
         for token in ('<', 'Особенности', 'Не требует', '600', 'Меры предосторожности'):
