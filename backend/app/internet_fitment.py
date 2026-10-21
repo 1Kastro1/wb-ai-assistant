@@ -194,6 +194,7 @@ def own_candidates(db,product,oems):
             pid=row_product_id(row)
             if not pid or not row['fit'] or not oems & oe_numbers(row) or norm(row.get('category'))!=norm(product['category']) or row.get('stock',1)<=0:continue
             listed=resolve_listing(db,product['store'],pid)
+            if listed and not row.get('product_id') and listed.marketplace!='wb':continue
             if not listed or norm(listed.brand)!=norm(row['brand']):continue
             reference,url=product_reference(listed)
             choices[listed.id]={'product_id':listed.id,'wb_nm_id':listed.id if listed.marketplace=='wb' else '', 'brand':row['brand'],'part_number':row['part_number'],'name':listed.name,'image_url':listed.image_url,'article_label':reference,'url':url,'source':item.source,'requires_review':True}

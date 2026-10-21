@@ -244,6 +244,7 @@ def fitment_answer(db,question,product):
     alternatives=[]
     for row,catalog in positives:
         candidate=resolve_listing(db,store,row_product_id(row))
+        if candidate and not row.get('product_id') and candidate.marketplace!='wb':continue
         conflicting=any(row_product_id(other)==row_product_id(row) and not other['fit'] for other,_ in matches)
         if candidate and not conflicting and row.get('stock',1)>0:
             alternatives.append(row)

@@ -209,4 +209,47 @@ class SharedMarketplaceTests(unittest.TestCase):
         self.assertIn('arm sub-assy, pitman', internet.PARTS['pitman_arm'][2])
         self.assertNotIn('tie rod end', internet.PARTS['pitman_arm'][2])
 
+    def test_legacy_wb_reference_never_becomes_another_marketplace_sku(self):
+        from app.db import FitmentImport
+        from app.fitment_catalog import vin_key
+        self.seed_channels('Фильтр масляный', 'NITTO', '00123', 'Масляные фильтры')
+        for provider in ('ozon', 'yandex'):
+            store = 'shop-' + provider
+            with self.factory() as db:
+                q = db.get(Review, 'question-' + provider)
+                q.text = FRAME
+                product = db.get(Product, q.product_id)
+                # The legacy WB ID collides numerically with this store's real SKU.
+                rows = [{'brand':'TOYOTA','part_number':'16510-82703','category':product.category,'fit':True,'vin_hash':vin_key(db,store,FRAME)},
+                        {'brand':'NITTO','part_number':'OTHER','wb_nm_id':'900001','oe_number':'16510-82703','oe_brand':'TOYOTA','category':product.category,'fit':True}]
+                db.add(FitmentImport(id='legacy-'+provider,store_id=store,source='https://uniqom.ru/original-catalogs',digest='legacy-'+provider,verified=True,complete=False,rows=rows))
+                db.commit()
+                self.assertEqual(fitment_answer(db,q,product)['status'], 'NEEDS_CATALOG')
+                self.assertEqual(internet.own_candidates(db,{'store':store,'category':product.category},{'1651082703'}), [])
+
+    def test_owner_greeting_applies_to_deterministic_questions_on_each_market(self):
+        self.seed_channels('Аккумулятор автомобильный 12 В', 'DOMEI', '80D26L', 'Аккумуляторы')
+        with self.factory() as db:
+            db.add(Memory(id='common-greeting',scope='global',text='Каждый ответ начинай с «Добрый день!».',enabled=True))
+            for provider in PROVIDERS:
+                db.get(Review,'question-'+provider).text='Какое напряжение на клеммах должно быть в вольтах?'
+            db.commit()
+        with patch('app.services.ollama.reply_variants',new=AsyncMock()) as model:
+            for provider in PROVIDERS:
+                with self.factory() as db:
+                    result=asyncio.run(services.generate_question_draft(db,db.get(Review,'question-'+provider)))
+                    self.assertTrue(result['text'].startswith('Добрый день!'))
+                    self.assertIn('12,6–12,8',result['text'])
+                    self.assertIn('приветствие',result['quality']['owner_rules']['applied_preferences'])
+            model.assert_not_called()
+
+    def test_owner_style_cannot_remove_negation_from_confirmed_fitment(self):
+        from app.owner_reply_rules import apply_owner_preferences
+        text='Добрый день! Этот товар не подходит.'
+        review=Review(text='Подойдёт?',rating=0)
+        adjusted,_=apply_owner_preferences(text,review,['Не используй слово «не».'],style_only=True)
+        self.assertEqual(adjusted,text)
+
+
+
 
