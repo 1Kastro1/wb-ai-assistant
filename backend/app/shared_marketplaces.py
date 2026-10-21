@@ -14,7 +14,7 @@ def article_key(value):
 def product_identity(product):
     if not product or not str(product.brand or '').strip():
         return None
-    if re.search(r'набор|комплект|ассорти', product.name or '', re.I):
+    if re.search(r'набор|комплект|ассорти', getattr(product, 'name', '') or '', re.I):
         return None
     articles = {article_key(value) for value in manufacturer_articles(product)} - {''}
     if len(articles) != 1:
@@ -27,7 +27,10 @@ def equivalent_products(db, product):
     if not identity:
         return [product] if product else []
     raw_articles = manufacturer_articles(product)
-    predicates = [func.upper(func.replace(func.replace(Product.part_number, '-', ''), ' ', '')) == identity[1]]
+    normalized = Product.part_number
+    for separator in ('-', ' ', '.', '/', '_'):
+        normalized = func.replace(normalized, separator, '')
+    predicates = [func.upper(normalized) == identity[1]]
     for article in {*raw_articles, identity[1]}:
         predicates.append(and_(Product.part_number == '', Product.facts.cast(String).contains(article)))
     candidates = db.scalars(select(Product).where(

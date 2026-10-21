@@ -13,7 +13,7 @@ from .shared_marketplaces import row_product_id, resolve_listing, product_refere
 from .fitment_catalog import VIN, vehicle_identifiers, norm, vin_key, fitment_answer, oe_numbers
 
 PARTS = {
-    'pitman_arm': (r'сошк|pitman', ('Steering', 'Steering system', 'Steering gear'), ('arm, pitman','pitman arm','arm, steering pitman','steering pitman arm')),
+    'pitman_arm': (r'сошк|pitman', ('Steering', 'Steering system', 'Steering gear'), ('arm, pitman','pitman arm','arm, steering pitman','steering pitman arm','arm sub-assy, pitman','arm assy, pitman')),
     'tie_rod_end': (r'наконечник.*рулев|рулев.*наконечник|tie rod end', ('Steering', 'Steering system', 'Steering gear'), ('tie rod end','end sub-assy, tie rod','end sub-assy, tie rod, rh','end sub-assy, tie rod, lh')),
     'oil_filter': (r'фильтр.*маслян|маслян.*фильтр', 'Filters', ('engine oil filter','oil filter')),
     'cabin_filter': (r'фильтр.*салон|салон.*фильтр', 'Filters', ('interior air filter','cabin air filter','cabin filter')),

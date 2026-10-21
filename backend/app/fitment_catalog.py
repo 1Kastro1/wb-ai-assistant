@@ -131,6 +131,7 @@ def import_cross_catalog(db,raw,filename,store,source,verified=False,complete=Fa
             if product.brand and norm(product.brand)!=norm(row['brand']):raise ValueError(f'Строка {i}: бренд не совпадает с карточкой товара')
             if product.part_number and norm(product.part_number)!=norm(row['part_number']):raise ValueError(f'Строка {i}: артикул производителя не совпадает с карточкой товара')
         if row.get('wb_nm_id'):
+            if row.get('product_id') and row['product_id']!=row['wb_nm_id']:raise ValueError(f'Строка {i}: указаны разные товары магазина и WB')
             product=db.get(Product,row['wb_nm_id'])
             if not product or product.marketplace!='wb':raise ValueError(f'Строка {i}: артикул WB не найден среди загруженных товаров')
             if product.brand and norm(product.brand)!=norm(row['brand']):raise ValueError(f'Строка {i}: бренд не совпадает с карточкой WB')

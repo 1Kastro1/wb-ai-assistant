@@ -44,7 +44,7 @@ class SharedMarketplaceTests(unittest.TestCase):
             for provider in PROVIDERS:
                 with self.factory() as db:
                     reply = asyncio.run(services.generate_draft(db, 'review-' + provider))
-                    self.assertIn('дефлектор', reply['text'])
+                    self.assertIn('тонкий, ненавязчивый', reply['text'])
                     self.assertNotIn('Уточните', reply['text'])
                     self.assertEqual(reply['quality']['policy_version'], POLICY_VERSION)
                     replies.append(reply['text'])
@@ -174,4 +174,39 @@ class SharedMarketplaceTests(unittest.TestCase):
         for source, extra in [('Карточка WB: характеристики', {}), ('Карточка товара', {'source_type':'marketplace'})]:
             p = Product(id='fact-article', name='Товар', facts=[{'source':source, 'verification_status':'VERIFIED', 'text':'Артикул производителя: SP2720', **extra}])
             self.assertEqual(manufacturer_articles(p), {'SP2720'})
+
+    def test_owner_confirmation_and_common_setting_endpoints_for_each_market(self):
+        self.seed_channels('Рулевая сошка SP2720', '555', 'SP2720', 'Рулевые сошки')
+        for provider in PROVIDERS:
+            with self.factory() as db:
+                q = db.get(Review, 'question-' + provider)
+                q.text = FRAME
+                pid = q.product_id
+                set_setting(db, 'active_store:actor', 'shop-' + provider)
+                db.commit()
+            result = self.client.post('/fitment/questions/question-' + provider + '/evidence', json={
+                'brand':'555','part_number':'SP2720','product_id':pid,'fit':True,
+                'oe_brand':'TOYOTA','oe_number':'45401-35230','remember_cross':True,
+                'source':'https://partsouq.com/en/search/all?q=4540135230'})
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json()['fitment']['status'], 'FIT')
+        with self.factory() as db:
+            set_setting(db, 'active_store:actor', 'shop-wb')
+            db.commit()
+        response = self.client.post('/fitment/internet/settings', json={'enabled':True})
+        self.assertEqual(response.status_code, 200, response.text)
+        for provider in PROVIDERS:
+            with self.factory() as db:
+                set_setting(db, 'active_store:actor', 'shop-' + provider)
+                db.commit()
+            response = self.client.get('/fitment/internet/settings')
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()['enabled'])
+
+    def test_pitman_catalog_label_is_distinct_from_other_steering_parts(self):
+        self.assertEqual(internet.target_part(Product(name='Рулевая сошка правая', category='Рулевое управление')), 'pitman_arm')
+        self.assertEqual(internet.target_part(Product(name='Наконечник рулевой тяги левый', category='Рулевое управление')), 'tie_rod_end')
+        self.assertIn('arm sub-assy, pitman', internet.PARTS['pitman_arm'][2])
+        self.assertNotIn('tie rod end', internet.PARTS['pitman_arm'][2])
+
 
