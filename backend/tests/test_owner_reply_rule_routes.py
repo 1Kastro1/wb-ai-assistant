@@ -3,13 +3,26 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import pytest
 from app.db import Session, Product, Review, Memory
-from app.owner_reply_rules import apply_owner_preferences, matching_owner_rules, owner_business_facts
+from app.owner_reply_rules import apply_owner_preferences, matching_owner_rules, owner_business_facts, apply_review_signature
 from app.services import generate_draft
 from app.safety import rule_reply, safe_fallback_reply, review_intent
 from app.reply_policy import analyze_customer_message
 
 GENERAL = 'Каждый ответ начинай с «Добрый день!». Если покупатель уже описал проблему, не спрашивай, что именно его не устроило.'
 DISTRIBUTOR = 'При сомнениях в оригинальности сообщай: мы являемся официальным дистрибьютором EIKOSHA.'
+
+
+def test_signature_is_idempotent_and_preserves_length_validation():
+    from app.safety import validate_reply
+    signature = 'С уважением ГК Юником.'
+    rules = ['В конце каждого ответа на отзыв добавляй подпись «' + signature + '».']
+    for suffix in ('', '\n\n' + signature, '\n' + signature + '\n' + signature):
+        assert apply_review_signature('Спасибо!' + suffix, rules) == 'Спасибо!\n\n' + signature
+    assert apply_review_signature('Спасибо!', []) == 'Спасибо!'
+    body = 'А' * (5000 - len(signature) - 2)
+    assert len(validate_reply(apply_review_signature(body, rules))) == 5000
+    with pytest.raises(ValueError):
+        validate_reply(apply_review_signature(body + 'А', rules))
 
 
 @pytest.mark.parametrize('text', ['Слабо смывает жир', 'Плохо отмывает', 'Не удаляет жир'])

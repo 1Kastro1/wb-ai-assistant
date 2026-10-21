@@ -250,6 +250,34 @@ class SharedMarketplaceTests(unittest.TestCase):
         adjusted,_=apply_owner_preferences(text,review,['Не используй слово «не».'],style_only=True)
         self.assertEqual(adjusted,text)
 
+    def test_review_signature_is_shared_and_regenerated_but_not_used_for_questions(self):
+        self.seed_channels('Аккумулятор автомобильный 12 В', 'DOMEI', '80D26L', 'Аккумуляторы')
+        signature = 'С уважением ГК Юником.'
+        rule = 'В конце каждого ответа на отзыв добавляй подпись «' + signature + '».'
+        with self.factory() as db:
+            db.add(Memory(id='review-signature', scope='global', text=rule))
+            for provider in PROVIDERS:
+                db.get(Review, 'review-' + provider).text = 'Хороший товар'
+                db.get(Review, 'review-' + provider).rating = 5
+                db.get(Review, 'question-' + provider).text = 'Какое напряжение на клеммах должно быть в вольтах?'
+            db.commit()
+        with patch('app.services.ollama.reply_variants', new=AsyncMock()), patch('app.services.web_research.search_instructions', new=AsyncMock(return_value=[])):
+            for provider in PROVIDERS:
+                with self.factory() as db:
+                    for _ in range(2):
+                        result = asyncio.run(services.generate_draft(db, 'review-' + provider))
+                        self.assertTrue(result['text'].endswith('\n\n' + signature))
+                        self.assertEqual(result['text'].count(signature), 1)
+                    question = asyncio.run(services.generate_question_draft(db, db.get(Review, 'question-' + provider)))
+                    self.assertNotIn(signature, question['text'])
+                    product = db.get(Product, db.get(Review, 'review-' + provider).product_id)
+                    self.assertNotIn(rule, matching_owner_rules(db, product, for_questions=True))
+            with self.factory() as db:
+                db.get(Memory, 'review-signature').enabled = False
+                db.commit()
+                result = asyncio.run(services.generate_draft(db, 'review-wb'))
+                self.assertNotIn(signature, result['text'])
+
 
 
 
