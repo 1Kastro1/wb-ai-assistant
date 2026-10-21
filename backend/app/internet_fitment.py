@@ -11,6 +11,7 @@ from .db import Audit, Session, Product, StoreListing, FitmentImport, now, setti
 from .vehicle_identifiers import mask_frames
 from .shared_marketplaces import row_product_id, resolve_listing, product_reference
 from .fitment_catalog import VIN, vehicle_identifiers, norm, vin_key, fitment_answer, oe_numbers
+from .fitment_categories import EXTRA_PARTS, category_plan
 
 PARTS = {
     'pitman_arm': (r'сошк|pitman', ('Steering', 'Steering system', 'Steering gear'), ('arm, pitman','pitman arm','arm, steering pitman','steering pitman arm','arm sub-assy, pitman','arm assy, pitman')),
@@ -23,14 +24,16 @@ PARTS = {
     'brake_pad': (r'колодк.*тормоз|тормоз.*колодк', 'Brake system', ('brake pad set','brake pad','disc brake pad')),
     'brake_disc': (r'диск.*тормоз|тормоз.*диск', 'Brake system', ('brake disc','brake rotor')),
 }
+PARTS = {**EXTRA_PARTS, **PARTS}
 STATUSES = {
     'FOUND':'Оригинальный OEM найден в каталоге по VIN или Frame.',
     'MULTIPLE_VEHICLES':'Каталог вернул несколько вариантов автомобиля. Нужна проверка модификации.',
     'NEEDS_REVIEW':'Найдены сведения, но применяемость требует проверки.',
-    'ACCESS_REQUIRED':'Каталог ограничил доступ с сервера. Откройте его в браузере.',
+    'ACCESS_REQUIRED':'PartSouq ограничил доступ с сервера. Проверьте подбор в Uniqom через браузер.',
     'NOT_FOUND':'Каталог не вернул подходящих данных. Это не означает отсутствие товара.',
-    'UNAVAILABLE':'Каталог временно недоступен. Сохранённый ответ и данные не потеряны.',
+    'UNAVAILABLE':'Автоматическая проверка в PartSouq сейчас недоступна. Подбор через Uniqom в браузере доступен отдельно.',
     'UNSUPPORTED':'Для этой категории нужен ручной выбор детали в каталоге.',
+    'CATALOG_SELECTION':'Откройте автомобиль в Uniqom, выберите нужный узел и сохраните проверенный OEM и аналог. Подбор доступен для любой категории.',
     'NEEDS_VIN':'Для поиска нужен один полный VIN или Frame автомобиля.',
 }
 LOOKUP_LIMIT = asyncio.Semaphore(2)
@@ -165,7 +168,10 @@ class PublicCatalog:
                 if len(labels)!=1 or labels[0].text().strip().lower() not in PARTS[part][2] or len(parts)!=1:continue
                 oe=parts[0].attrs.get('data-part-number','')
                 if norm(oe)!=norm(parts[0].text()) or not re.fullmatch(r'[A-Z0-9][A-Z0-9./-]{3,29}',oe,re.I):continue
-                if re.search(r'\b(?:from|until|except|only|vin|pr[- ]code|left|right|front|rear)\b',article.text(),re.I):uncertain=True
+                details=article.text()
+                if part.endswith(('_front','_rear')):
+                    details=details.replace(labels[0].text(),'')
+                if re.search(r'\b(?:from|until|except|only|vin|pr[- ]code|left|right|front|rear)\b',details,re.I):uncertain=True
                 found.append(norm(oe));result['oem_candidates'].append({'oe_number':oe,'oe_brand':vehicle['make'],'description':labels[0].text().strip(),'source':source_url(diagram)})
             if not found:uncertain=True
             numbers.extend(found)
@@ -180,7 +186,7 @@ catalog = PublicCatalog()
 def cache_key(db,question,product):
     vins=set(vehicle_identifiers(question.text))
     fingerprint=vin_key(db,question.wb_account_id,next(iter(vins))) if len(vins)==1 else hashlib.sha256(question.text.encode()).hexdigest()
-    return 'internet-fitment:'+question.wb_account_id+':'+hashlib.sha256((fingerprint+product.id+norm(product.category)+'v2').encode()).hexdigest()
+    return 'internet-fitment:'+question.wb_account_id+':'+hashlib.sha256((fingerprint+product.id+norm(product.category)+(target_part(product) or 'all-categories')+'v3').encode()).hexdigest()
 
 
 def last_research(db,question,product):
@@ -205,15 +211,16 @@ async def research_question(db,question,product,force=False):
     original=(question.text,question.product_id)
     vins=set(vehicle_identifiers(question.text));part=target_part(product)
     if len(vins)!=1:return {'status':'NEEDS_VIN','message':STATUSES['NEEDS_VIN'],'checked_at':now()}
-    if not part:return {'status':'UNSUPPORTED','message':STATUSES['UNSUPPORTED'],'checked_at':now()}
     key=cache_key(db,question,product);previous=setting(db,key,{})
     ttl=7*86400 if previous.get('result',{}).get('status')=='FOUND' else 300
     if previous and time.time()-previous.get('at',0)<(60 if force else ttl):return {**previous['result'],'cached':True}
-    vin=next(iter(vins));result={'status':'UNAVAILABLE','sources':[],'oem_candidates':[],'vehicles':[]}
+    vin=next(iter(vins));result={'status':'UNAVAILABLE','provider':'partsouq' if part else 'uniqom_browser','sources':[],'oem_candidates':[],'vehicles':[],'coverage':category_plan(product,part)}
     async def decode():
+        if not part:return {}
         try:return await catalog.decode(vin) if VIN.fullmatch(vin) else {}
         except (ValueError,TypeError,KeyError):return {}
     async def lookup():
+        if not part:return {**result,'status':'CATALOG_SELECTION'}
         try:return await catalog.lookup(vin,part)
         except (ValueError,TypeError,KeyError) as error:return {**result,'status':str(error) if str(error) in STATUSES else 'UNAVAILABLE'}
     try:

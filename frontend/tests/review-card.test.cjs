@@ -6,7 +6,7 @@ const ts=require('typescript');
 const React=require('react');
 const {renderToStaticMarkup}=require('react-dom/server');
 function loadComponent(file,source=fs.readFileSync(file,'utf8')){
- const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
+ const compiled=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  const moduleObject={exports:{}};
  const localRequire=name=>{if(name.endsWith('.css'))return {};if(!name.startsWith('.'))return require(name);const target=path.resolve(path.dirname(file),name);return loadComponent([target,target+'.tsx',target+'.ts',target+'.mjs'].find(file=>fs.existsSync(file))||target)};
  new Function('require','module','exports',compiled)(localRequire,moduleObject,moduleObject.exports);
@@ -43,6 +43,27 @@ test('recoverable waiting failure retains text and offers continuation',()=>{con
 test('terminal failure has a retry action',()=>{assert(render({generationError:'Не удалось завершить подготовку.'}).includes('Повторить попытку'))});
 test('published review offers no regeneration or save',()=>{const html=render({review:{is_answered:true,existing_answer:'Опубликованный ответ'}});assert(html.includes('Отправлено'));assert(!html.includes('Новый вариант'));assert(!html.includes('Сохранить</button>'))});
 exports.Card=Card;
+
+const UniqomFitment=loadComponent(path.join(__dirname,'../app/UniqomFitment.tsx')).default;
+const uniqomLinks=loadComponent(path.join(__dirname,'../app/uniqomCatalog.ts'));
+test('Uniqom opens one exact Frame and never embeds an ambiguous vehicle choice',()=>{
+ assert.equal(uniqomLinks.uniqomVehicleUrl('Подойдёт ZRT260-0000001?'),'https://uniqom.ru/original-catalogs?identString=ZRT260-0000001');
+ assert.equal(uniqomLinks.uniqomVehicleUrl('ZRT260-0000001 или GB3-0000001'),'https://uniqom.ru/original-catalogs');
+ assert(uniqomLinks.uniqomOemUrl('04465-02220').includes('term=04465-02220'));
+ assert.equal(uniqomLinks.uniqomOemUrl('javascript:alert(1)'),'https://uniqom.ru/original-catalogs');
+});
+test('all-category Uniqom workflow remains visible without automatic provider access',()=>{
+ const html=renderToStaticMarkup(React.createElement(UniqomFitment,{question:{id:'q',text:'ZRT260-0000001'},product:{brand:'ADVICS',part_number:'SN138',category:'Колодки'},coverage:{automatic_supported:false,group_id:'brakes',systems:[{id:'brakes',label:'Тормозная система'},{id:'other',label:'Другая категория'}]}}));
+ assert(html.includes('Все категории'));
+ assert(html.includes('Открыть автомобиль в Uniqom'));
+ assert(html.includes('Тормозная система'));
+ assert(html.includes('SN138'));
+ assert(html.includes('переднюю или заднюю ось'));
+ assert(html.includes('Сохраните проверенный подбор'));
+ assert(!html.includes('disabled'));
+ assert(!html.includes('совместимость подтверждена'));
+});
+
 
 test('product photos load lazily with an accessible name',()=>{const html=render({review:{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp'}}});assert(html.includes('src="https://example.com/card.webp"'));assert(html.includes('loading="lazy"'));assert(html.includes('alt="Очиститель"'))});
 test('missing or unsafe photo URLs retain a product placeholder',()=>{for(const image_url of ['', 'javascript:alert(1)']){const html=render({review:{product:{name:'Очиститель',image_url}}});assert(html.includes('Фото товара отсутствует'));assert(!html.includes('<img'))}});
@@ -99,3 +120,4 @@ test('sync operations remain disabled for a viewer',()=>{const html=syncCard({ca
 test('question recovery continues the saved job instead of suggesting a new generation',()=>{const html=renderQuestion({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));});
 
 test('catalog progress displays committed count instead of an invented percentage',()=>{const html=syncCard({productSync:{tone:'working',state:'running',progress:95,processed:14300,phase:'archived'}});assert(html.includes('14'));assert(html.includes('300'));assert(html.includes('Загружаем архивные товары'));assert(!html.includes('95%'));assert(!html.includes('aria-valuenow="95"'));});
+
