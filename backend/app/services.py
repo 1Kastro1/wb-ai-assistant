@@ -19,7 +19,7 @@ from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
-from .owner_reply_rules import matching_owner_rules, owner_business_facts, apply_owner_preferences
+from .owner_reply_rules import matching_owner_rules, owner_business_facts, apply_owner_preferences, apply_review_signature
 from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply
 from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
@@ -721,7 +721,7 @@ async def generate_question_draft(db, question, instruction=''):
     for item in previous:
         if item.existing_answer:
             examples.append({'question': item.text, 'answer': item.existing_answer})
-    memories = matching_owner_rules(db, product)
+    memories = matching_owner_rules(db, product, for_questions=True)
     messages = [
         {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
         {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': memories, 'reply_style': shared_reply_style(db), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
@@ -970,12 +970,14 @@ async def generate_draft(db, review_id, instruction=''):
         if initial_draft and reply.strip() == initial_draft.text.strip() and not review.text.strip() and review.rating >= 4:
             reply = f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали {product.name}. Надеемся, товар будет радовать вас при использовании. Будем рады видеть вас снова!'
     reply, applied_rules = apply_owner_preferences(reply, review, memories)
+    reply = apply_review_signature(reply, memories)
     try:
         reply = validate_reply(mask_vin(reply))
     except ValueError:
         # A local-model answer may be useful but still violate a hard safety rule.
         # Preserve the safety boundary while always giving the owner a reviewable draft.
         reply, applied_rules = apply_owner_preferences(safe_fallback_reply(review, product, generation_revision, verified_facts), review, memories)
+        reply = apply_review_signature(reply, memories)
         reply = validate_reply(mask_vin(reply))
         model = 'safety-fallback-1.2'
     if web_search_failed:

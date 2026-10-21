@@ -2178,6 +2178,7 @@ class RulePreviewInput(Payload):
 
 @app.post('/memory/preview')
 async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
+    from .owner_reply_rules import apply_review_signature
     from .safety import rule_reply,safe_fallback_reply,validate_reply,classify
     from .reply_policy import customer_reply_policy
     from .services import trusted_product_facts,assess_reply
@@ -2198,12 +2199,14 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
     for rule in rules:
         if any(x in rule.lower() for x in ('не использ','не пиши')):
             for word in re.findall('[«“\"]([^»”\"]+)[»”\"]',rule):reply=re.sub(re.escape(word),'',reply,flags=re.I)
+    reply=apply_review_signature(reply,rules)
     try:reply=validate_reply(mask_vin(reply))
     except ValueError:
         reply=safe_fallback_reply(review,product,facts=facts)
         for rule in rules:
             if any(x in rule.lower() for x in ('не использ','не пиши')):
                 for word in re.findall('[«“\"]([^»”\"]+)[»”\"]',rule):reply=re.sub(re.escape(word),'',reply,flags=re.I)
+        reply=apply_review_signature(reply,rules)
         try:reply=validate_reply(mask_vin(reply))
         except ValueError:raise HTTPException(422,'Правило не позволяет составить корректный пример. Уточните ограничения.') from None
         note='Показан безопасный сценарий. Пример с новым правилом требует дополнительной проверки.'

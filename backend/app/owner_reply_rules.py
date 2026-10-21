@@ -2,9 +2,27 @@
 import re
 from sqlalchemy import select
 from .db import Memory
+from .plain_text import plain_text
 
 
-def matching_owner_rules(db, product):
+def review_signature(rule):
+    """Read an explicit, quoted review signature from an owner rule."""
+    if not re.search(r'отзыв', rule, re.I):
+        return ''
+    match = re.search(r'подпись\s*:?\s*[«“"]([^»”"\n]{1,200})[»”"]', rule, re.I)
+    return match.group(1).strip() if match else ''
+
+
+def apply_review_signature(reply, rules):
+    signature = next((value for rule in reversed(rules) if (value := review_signature(rule))), '')
+    if not signature:
+        return reply
+    # Models may already include the closing line, including after regeneration.
+    body = re.sub(r'(?:\s*' + re.escape(signature) + r')+\s*$', '', plain_text(reply), flags=re.I).rstrip()
+    return body + '\n' + signature if body else signature
+
+
+def matching_owner_rules(db, product, for_questions=False):
     from .shared_marketplaces import equivalent_products
     counterparts = equivalent_products(db, product)
     scopes = {'global', 'brand:' + product.brand, 'category:' + product.category}
@@ -12,7 +30,8 @@ def matching_owner_rules(db, product):
     scopes.update('category:' + item.category for item in counterparts if item.category)
     scopes = {value.strip().casefold() for value in scopes}
     return [row.text for row in db.scalars(select(Memory).where(Memory.enabled == True))
-            if row.scope.strip().casefold() in scopes]
+            if row.scope.strip().casefold() in scopes
+            and not (for_questions and review_signature(row.text))]
 
 
 def owner_business_facts(product, rules):
