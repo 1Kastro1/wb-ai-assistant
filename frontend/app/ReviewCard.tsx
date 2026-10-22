@@ -28,6 +28,7 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
       {hasText&&<div className="customer-review"><small>ОТЗЫВ ПОКУПАТЕЛЯ</small><p className="review-text">{r.text}</p></div>}
       {r.is_answered?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<div className="draft">
         {r.draft?<DraftEditor draft={r.draft} disabled={generating||!canManage} storageKey={storageKey||'draft-edit:'+r.draft.id} onSave={save} onDirty={value=>{setDirty(value);onPending?.(value)}} onRegister={register}/>:<p className="muted">Подготовьте ответ на этот отзыв.</p>}
+        {q.owner_rules?.matched>0&&<p className={q.owner_rules.passed?'muted':'orange'} role="status">{q.owner_rules.passed?'Правила магазина выполнены':'Правила магазина требуют проверки'} · {q.owner_rules.matched}</p>}
         {operationError&&<div className="save-error" role="alert">{operationError}</div>}
         {generationError&&<div className="generation-notice" role="status"><b>{generationError}</b>{r.draft&&<small>Предыдущий ответ сохранён. Вы можете продолжить работу с ним.</small>}</div>}
         

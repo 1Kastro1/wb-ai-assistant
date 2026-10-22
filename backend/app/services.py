@@ -19,7 +19,8 @@ from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
-from .owner_reply_rules import matching_owner_rules, owner_business_facts, apply_owner_preferences, apply_review_signature
+from .owner_reply_rules import matching_owner_rules, owner_business_facts
+from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
 from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply
 from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
@@ -74,11 +75,20 @@ def trusted_product_facts(db, product):
     return prefer_manufacturer_instructions(facts)
 
 
-def draft_public(db, draft, actors=None):
+def draft_public(db, draft, actors=None, rules=None):
     if not draft:
         return None
     item = public(draft)
     item['text'] = plain_text(item.get('text', ''))
+    review = db.get(Review, draft.review_id)
+    product = db.get(Product, review.product_id) if review else None
+    if product:
+        if rules is None:
+            rules = matching_owner_rules(db, product, for_questions=review.marketplace.endswith('_question'))
+        quality = dict(item.get('quality') or {})
+        rule_quality = saved_rule_quality(item['text'], rules, quality.get('owner_rules'))
+        if rules or quality.get('owner_rules'):
+            item['quality'] = attach_rule_quality(quality, rule_quality)
     for key in ('created_by', 'updated_by'):
         actor = (actors.get(item[key]) if actors is not None else db.get(User, item[key])) if item[key] else None
         item[key + '_name'] = actor.display_name if actor else ('Автоматизация' if not item[key] else 'Бывший сотрудник')
@@ -327,11 +337,16 @@ def review_items(db, rows):
     actor_ids = {actor for d in drafts.values() for actor in (d.created_by, d.updated_by) if actor}
     actor_ids.update(edit.get('by') for d in drafts.values() for edit in d.edits or [] if edit.get('by') not in (None, '', 'automation'))
     actors = {u.id: u for u in db.scalars(select(User).where(User.id.in_(actor_ids)))} if actor_ids else {}
+    rule_rows = list(db.scalars(select(Memory).where(Memory.enabled == True).order_by(Memory.id))) if drafts else []
+    rule_cache = {}
     result = []
     for row in rows:
         item = public(row)
         item['product'] = public(products.get(row.product_id))
-        item['draft'] = draft_public(db, drafts.get(row.id), actors)
+        key = (row.product_id, row.marketplace.endswith('_question'))
+        if key not in rule_cache:
+            rule_cache[key] = matching_owner_rules(db, products[row.product_id], for_questions=key[1], rule_rows=rule_rows)
+        item['draft'] = draft_public(db, drafts.get(row.id), actors, rule_cache[key])
         result.append(item)
     return result
 
@@ -643,7 +658,7 @@ def safe_question_fallback(question, product, intent):
             'для точного ответа, поэтому не хотим вводить вас в заблуждение.')
 
 
-def assess_question_answer(question, product, answer, sources=None):
+def assess_question_answer(question, product, answer, sources=None, owner_rules=()):
     question_words = set(WORDS.findall(question.text.lower()))
     answer_words = set(WORDS.findall(answer.lower()))
     overlap = len(question_words & answer_words)
@@ -659,7 +674,8 @@ def assess_question_answer(question, product, answer, sources=None):
         score += 15; breakdown['clarity']['score'] = 15
     else:
         issues.append('ответ должен быть содержательным и без лишней длины')
-    if answer.lower().startswith(('здравствуйте', 'добрый день')):
+    greeting = constraints(owner_rules)['greeting']
+    if answer.lower().startswith(('здравствуйте', 'добрый день')) or (greeting and answer.startswith(greeting)):
         score += 10; breakdown['courtesy']['score'] = 10
     else:
         issues.append('добавить дружелюбное приветствие')
@@ -696,7 +712,9 @@ async def generate_question_draft(db, question, instruction=''):
     product = db.get(Product, question.product_id)
     existing = db.scalar(select(Draft).where(Draft.review_id == question.id))
     expected_revision = existing.revision if existing else None
+    memories = matching_owner_rules(db, product, for_questions=True)
     verified_facts = trusted_product_facts(db, product)
+    verified_facts += owner_business_facts(product, memories)
     sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
     analysis = analyze_customer_message(question.text)
     intent = question_intent(question.text)
@@ -721,7 +739,6 @@ async def generate_question_draft(db, question, instruction=''):
     for item in previous:
         if item.existing_answer:
             examples.append({'question': item.text, 'answer': item.existing_answer})
-    memories = matching_owner_rules(db, product, for_questions=True)
     messages = [
         {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
         {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': memories, 'reply_style': shared_reply_style(db), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
@@ -754,7 +771,7 @@ async def generate_question_draft(db, question, instruction=''):
         try:
             value = validate_reply(mask_vin(candidate))
             if not existing or value.strip() != existing.text.strip():
-                checked.append((value, {'score':100 if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else 0,'passed':fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN'),'issues':[] if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else ['Нужно подтверждение применяемости по каталогу'],'sources':fitment['sources'],'intent_label':intent,'fitment':fitment} if fitment else assess_question_answer(question, product, value, sources)))
+                checked.append((value, {'score':100 if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else 0,'passed':fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN'),'issues':[] if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else ['Нужно подтверждение применяемости по каталогу'],'sources':fitment['sources'],'intent_label':intent,'fitment':fitment} if fitment else assess_question_answer(question, product, value, sources, owner_rules=memories)))
         except ValueError:
             continue
     passed_candidates = [item for item in checked if item[1]['passed']]
@@ -764,7 +781,7 @@ async def generate_question_draft(db, question, instruction=''):
         model = 'catalog-fitment-1.1'
     elif assortment and not analysis['buyer_asks_about_money']:
         reply = validate_reply(mask_vin(assortment['answer']))
-        quality = assess_question_answer(question, product, reply, sources)
+        quality = assess_question_answer(question, product, reply, sources, owner_rules=memories)
         # Exact catalog matches establish relevance even when Russian inflections differ.
         if assortment['product_ids'] and 'ответить именно на заданный вопрос' in quality['issues']:
             quality['issues'].remove('ответить именно на заданный вопрос')
@@ -780,17 +797,20 @@ async def generate_question_draft(db, question, instruction=''):
         quality['selection_note'] = f'Выбран лучший из {len(passed_candidates)} проверенных вариантов'
     else:
         reply = validate_reply(safe_question_fallback(question, product, intent))
-        quality = assess_question_answer(question, product, reply, sources)
+        quality = assess_question_answer(question, product, reply, sources, owner_rules=memories)
         quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
         model = 'question-safety-1.0'
-    adjusted, applied_rules = apply_owner_preferences(reply, question, memories, style_only=bool(fitment))
+    adjusted, rule_quality = await enforce_owner_rules(
+        reply, question, product, memories, verified_facts,
+        lambda value: assess_question_answer(question, product, value, sources, owner_rules=memories),
+        protected=bool(fitment))
     if adjusted != reply:
         reply = validate_reply(mask_vin(adjusted))
         if not fitment:
-            rechecked = assess_question_answer(question, product, reply, sources)
+            rechecked = assess_question_answer(question, product, reply, sources, owner_rules=memories)
             rechecked['passed'] = bool(quality['passed'] and rechecked['passed'])
             quality.update(rechecked)
-    quality['owner_rules'] = {'matched': len(memories), 'applied_preferences': applied_rules}
+    attach_rule_quality(quality, rule_quality)
     route = 'fallback' if model.startswith('question-safety') else 'model' if uses_model else 'rules'
     quality['timing'] = {'total_seconds': round(time.monotonic() - question_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     quality['candidates_evaluated'] = len(checked)
@@ -969,21 +989,20 @@ async def generate_draft(db, review_id, instruction=''):
             selection_note = f'Выбран лучший из {max(1, len(valid_candidates))} безопасных вариантов'
         if initial_draft and reply.strip() == initial_draft.text.strip() and not review.text.strip() and review.rating >= 4:
             reply = f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали {product.name}. Надеемся, товар будет радовать вас при использовании. Будем рады видеть вас снова!'
-    reply, applied_rules = apply_owner_preferences(reply, review, memories)
-    reply = apply_review_signature(reply, memories)
     try:
         reply = validate_reply(mask_vin(reply))
     except ValueError:
         # A local-model answer may be useful but still violate a hard safety rule.
         # Preserve the safety boundary while always giving the owner a reviewable draft.
-        reply, applied_rules = apply_owner_preferences(safe_fallback_reply(review, product, generation_revision, verified_facts), review, memories)
-        reply = apply_review_signature(reply, memories)
-        reply = validate_reply(mask_vin(reply))
+        reply = validate_reply(mask_vin(safe_fallback_reply(review, product, generation_revision, verified_facts)))
         model = 'safety-fallback-1.2'
     if web_search_failed:
         model += ' · без интернет-источников'
-    quality = assess_reply(review, product, reply, verified_facts)
-    quality['owner_rules'] = {'matched': len(memories), 'applied_preferences': applied_rules}
+    reply, rule_quality = await enforce_owner_rules(
+        reply, review, product, memories, verified_facts,
+        lambda value: assess_reply(review, product, value, verified_facts),
+        protected=review.risk != 'NORMAL')
+    quality = attach_rule_quality(assess_reply(review, product, reply, verified_facts), rule_quality)
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
     quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы. Правил магазина в контексте: {len(memories)}.'
@@ -1030,13 +1049,17 @@ def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=Tru
         draft.updated_by = actor_id
     product = db.get(Product, review.product_id)
     generation_timing = (draft.quality or {}).get('timing')
+    previous_rule_quality = (draft.quality or {}).get('owner_rules')
+    rules = matching_owner_rules(db, product, for_questions=review.marketplace.endswith('_question'))
     if review.marketplace.endswith('_question'):
         sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in trusted_product_facts(db, product)]
-        draft.quality = assess_question_answer(review, product, value, sources)
+        draft.quality = assess_question_answer(review, product, value, sources, owner_rules=rules)
     else:
         draft.quality = assess_reply(review, product, value, trusted_product_facts(db, product))
     if generation_timing:
         draft.quality = {**draft.quality, 'timing': generation_timing}
+    draft.quality = attach_rule_quality(draft.quality, saved_rule_quality(
+        value, rules, previous_rule_quality, changed=value != old))
     if learn_preferences:
         learn_from_edit(db, draft, old, value)
     review.status = 'manual_review' if review.manual or not draft.quality['passed'] else 'draft_ready'
@@ -1055,6 +1078,11 @@ def propose_publish(db, review_ids):
         if not review or not draft or review.is_answered or review.status == 'publishing':
             raise ValueError('Для каждого выбранного отзыва нужен доступный черновик')
         is_question = review.marketplace.endswith('_question')
+        product = db.get(Product, review.product_id)
+        rules = matching_owner_rules(db, product, for_questions=is_question)
+        rule_quality = saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'))
+        if not rule_quality['passed']:
+            raise ValueError('Перед публикацией проверьте правила магазина: ' + '; '.join(rule_quality['issues']))
         if is_question and (draft.quality or {}).get('fitment',{}).get('status') in ('NEEDS_CATALOG','CONFLICT'):
             raise ValueError('Сначала подтвердите подбор по каталогу в разделе Товары')
         if len(ids) > 1 and not is_question and (review.rating <= 3 or review.manual):
@@ -1107,6 +1135,9 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
         draft = db.scalar(select(Draft).where(Draft.id == item['draft_id']).with_for_update().execution_options(populate_existing=True))
         if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
+        rules = matching_owner_rules(db, db.get(Product, review.product_id), for_questions=review.marketplace.endswith('_question'))
+        if not saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'))['passed']:
+            raise ValueError('Правила магазина изменились или не выполнены. Подготовьте ответ и подтверждение заново.')
         if review.manual and not manual_ack:
             raise ValueError('Нужно отдельное подтверждение ручной проверки опасного отзыва')
         if validate_reply(draft.text) != draft.text:

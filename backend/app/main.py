@@ -2198,7 +2198,8 @@ class RulePreviewInput(Payload):
 
 @app.post('/memory/preview')
 async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
-    from .owner_reply_rules import apply_review_signature, apply_owner_preferences, matching_owner_rules, owner_business_facts
+    from .owner_reply_rules import matching_owner_rules, owner_business_facts
+    from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     from .safety import rule_reply,safe_fallback_reply,validate_reply,classify
     from .reply_policy import customer_reply_policy
     from .services import trusted_product_facts,assess_reply
@@ -2208,10 +2209,10 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
     facts=trusted_product_facts(db,product) if body.product_id else []
     for_questions = body.kind == 'QUESTION_RULE'
     rules = matching_owner_rules(db, product, for_questions=for_questions) + [body.text]
+    facts += owner_business_facts(product, rules)
     if for_questions:
         from .rule_preview import preview_question
         return await preview_question(db, product, body.example, rules, facts, active_store(db, auth))
-    facts += owner_business_facts(product, rules)
     review=Review(id='preview',product_id=product.id,rating=body.rating,text=body.example,risk=classify(body.example,product.name+' '+product.category)['risk'])
     reply=rule_reply(review,product,facts=facts)
     note='Предварительный ответ. Правило и ответ не сохраняются.'
@@ -2221,17 +2222,18 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
         except Exception:
             reply=reply or safe_fallback_reply(review,product,facts=facts)
             note='Показан ответ по проверенным сценариям. Свободную формулировку правила сейчас не удалось проверить; ограничения на слова применены.'
-    reply, _ = apply_owner_preferences(reply, review, rules)
-    reply=apply_review_signature(reply,rules)
     try:reply=validate_reply(mask_vin(reply))
     except ValueError:
         reply=safe_fallback_reply(review,product,facts=facts)
-        reply, _ = apply_owner_preferences(reply, review, rules)
-        reply=apply_review_signature(reply,rules)
         try:reply=validate_reply(mask_vin(reply))
         except ValueError:raise HTTPException(422,'Правило не позволяет составить корректный пример. Уточните ограничения.') from None
         note='Показан безопасный сценарий. Пример с новым правилом требует дополнительной проверки.'
-    return {'text':reply,'quality':assess_reply(review,product,reply,facts),'note':note}
+    reply, rule_quality = await enforce_owner_rules(
+        reply, review, product, rules, facts,
+        lambda value: assess_reply(review,product,value,facts),
+        protected=review.risk != 'NORMAL', check_seconds=5)
+    quality = attach_rule_quality(assess_reply(review,product,reply,facts), rule_quality)
+    return {'text':reply,'quality':quality,'note':note}
 
 
 @app.delete('/memory/{mid}')

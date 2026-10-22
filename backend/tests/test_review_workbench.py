@@ -64,7 +64,7 @@ class WorkbenchTests(unittest.TestCase):
             with self.factory() as db:
                 result=reviews_page(db,account_id='owner',q='perf-product',limit=30)
                 self.assertEqual(result['total'],30)
-                self.assertLessEqual(len(statements),5)
+                self.assertLessEqual(len(statements),6)  # One shared query checks current owner rules.
                 for item in result['items']:
                     self.assertEqual(item['draft']['created_by_name'],'Камиль')
                     self.assertEqual(item['draft']['updated_by_name'],'Бывший сотрудник')

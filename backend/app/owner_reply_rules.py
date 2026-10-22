@@ -22,17 +22,28 @@ def apply_review_signature(reply, rules):
     return body + '\n' + signature if body else signature
 
 
-def matching_owner_rules(db, product, for_questions=False):
+def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None):
     from .shared_marketplaces import equivalent_products
-    counterparts = equivalent_products(db, product)
+    rule_rows = list(db.scalars(select(Memory).where(Memory.enabled == True).order_by(Memory.id))) if rule_rows is None else rule_rows
+    if not rule_rows:
+        return []
+    counterparts = equivalent_products(db, product) if any(_scope_key(row.scope).startswith(('product:', 'category:')) for row in rule_rows) else [product]
     scopes = {'global', 'brand:' + product.brand, 'category:' + product.category}
     scopes.update('product:' + item.id for item in counterparts)
     scopes.update('category:' + item.category for item in counterparts if item.category)
-    scopes = {value.strip().casefold() for value in scopes}
-    return [row.text for row in db.scalars(select(Memory).where(Memory.enabled == True))
-            if row.scope.strip().casefold() in scopes
+    scopes = {_scope_key(value) for value in scopes}
+    rows = [row for row in rule_rows
+            if _scope_key(row.scope) in scopes
             and rule_applies_to(row.kind, for_questions)
             and not (for_questions and review_signature(row.text))]
+    # General defaults precede narrower policies. Avoid database-dependent order.
+    priority = {'global': 0, 'brand': 1, 'category': 1, 'product': 2}
+    return [row.text for row in sorted(rows, key=lambda row: priority.get(_scope_key(row.scope).split(':')[0], 0))]
+
+
+def _scope_key(value):
+    kind, separator, target = (value or 'global').partition(':')
+    return kind.strip().casefold() + (':' + target.strip().casefold() if separator else '')
 
 
 def rule_applies_to(kind, for_questions=False):
@@ -62,20 +73,8 @@ def owner_business_facts(product, rules):
 
 
 def apply_owner_preferences(reply, review, rules, style_only=False):
-    applied = []
-    for rule in rules:
-        lowered = rule.lower().replace('ё', 'е')
-        if 'добрый день' in lowered and any(word in lowered for word in ('начин', 'приветств', 'отвеч', 'пиши')):
-            reply = re.sub(r'^\s*(?:здравствуйте|добрый день)[!.,]?\s*', 'Добрый день! ', reply, flags=re.I)
-            applied.append('приветствие')
-        if style_only:
-            continue
-        if review.text.strip() and ('уже опис' in lowered or 'уже указ' in lowered) and any(word in lowered for word in ('не спраш', 'не уточн', 'не прос')):
-            reply = re.sub(r'[^.!?]*(?:уточните|расскажите)[^.!?]*(?:что именно[^.!?]*не устроило|какие свойства[^.!?]*не устроили|в ч[её]м проявилась проблема)[^.!?]*[.!?]?', '', reply, flags=re.I)
-            applied.append('не переспрашивать описанную проблему')
-        if any(word in lowered for word in ('не использ', 'не пиши')):
-            for word in re.findall('[«“"]([^»”"]+)[»”"]', rule):
-                reply = re.sub(re.escape(word), '', reply, flags=re.I)
-                applied.append('запрет слова: ' + word)
-    return re.sub(r'[ \t]{2,}', ' ', reply).strip(), list(dict.fromkeys(applied))
+    # All callers, including template/fallback answers, use the same parser.
+    # Import lazily: the policy also uses matching_owner_rules for previews.
+    from .owner_reply_policy import apply_local_preferences
+    return apply_local_preferences(reply, review, rules, style_only=style_only)
 
