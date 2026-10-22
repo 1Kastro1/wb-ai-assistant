@@ -5,7 +5,7 @@ from pathlib import Path
 from .db import Review
 from .fitment_catalog import fitment_answer, vehicle_identifiers, oem_numbers
 from .integrations import ollama
-from .owner_reply_rules import apply_owner_preferences
+from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
 from .reply_policy import analyze_customer_message, official_support_reply
 from .safety import validate_reply, mask_vin
 
@@ -39,21 +39,26 @@ async def preview_question(db, product, example, rules, facts, store):
         try:
             reply = await asyncio.wait_for(ollama.chat(messages), timeout=12)
             reply = validate_reply(mask_vin(reply))
-            if not assess_question_answer(question, product, reply, facts)['passed']:
+            if not assess_question_answer(question, product, reply, facts, owner_rules=rules)['passed']:
                 reply = fallback
         except Exception:
             reply = fallback
             note = 'Показан безопасный пример ответа на вопрос. Модель сейчас недоступна; подбор в Uniqom не выполнялся.'
-    reply, _ = apply_owner_preferences(reply, question, rules, style_only=bool(catalog))
     try:
         reply = validate_reply(mask_vin(reply))
     except ValueError:
-        reply, _ = apply_owner_preferences(fallback, question, rules, style_only=bool(catalog))
-        reply = validate_reply(mask_vin(reply))
-    quality = assess_question_answer(question, product, reply, catalog['sources'] if catalog else facts)
+        reply = validate_reply(mask_vin(fallback))
+    quality = assess_question_answer(question, product, reply, catalog['sources'] if catalog else facts, owner_rules=rules)
     if catalog:
         quality['fitment'] = catalog
         quality['passed'] = catalog['status'] in ('FIT', 'ALTERNATIVE', 'UNAVAILABLE', 'NEEDS_VIN')
         if not quality['passed']:
             quality['issues'] = ['Нужно проверить оригинальный OEM и аналог в каталоге Uniqom.']
+    reply, rule_quality = await enforce_owner_rules(
+        reply, question, product, rules, facts,
+        lambda value: assess_question_answer(question, product, value, facts, owner_rules=rules),
+        protected=bool(catalog), check_seconds=5)
+    if not catalog:
+        quality = assess_question_answer(question, product, reply, facts, owner_rules=rules)
+    attach_rule_quality(quality, rule_quality)
     return {'text': reply, 'quality': quality, 'note': note, 'kind': 'QUESTION_RULE'}

@@ -4,9 +4,8 @@ from collections import Counter
 from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy import select
-from .db import Draft, Review, Product
-from .safety import rule_reply, safe_fallback_reply, validate_reply, mask_vin, fresh_reply_variants
-from .services import trusted_product_facts, assess_reply, edit_draft, generate_draft
+from .db import Draft, Review
+from .services import generate_draft
 
 
 async def refresh_unsent_drafts(db, include_questions=True):
@@ -33,29 +32,12 @@ async def refresh_unsent_drafts(db, include_questions=True):
                 await generate_draft(db, review.id)
                 counts['questions_updated'] += 1
                 continue
-            product = db.get(Product, review.product_id)
-            facts = trusted_product_facts(db, product)
-            candidates = [rule_reply(review, product, draft.revision + offset, facts) for offset in range(3)]
-            candidates = [validate_reply(mask_vin(candidate)) for candidate in candidates if candidate]
-            if not candidates:
-                candidates = [validate_reply(mask_vin(safe_fallback_reply(review, product, draft.revision, facts)))]
-            if draft.text in candidates:
-                draft.quality = assess_reply(review, product, draft.text, facts)
-                review.status = 'manual_review' if review.manual or not draft.quality.get('passed') else 'draft_ready'
-                db.commit()
-                counts['already_correct'] += 1
-                continue
-            candidates = fresh_reply_variants(candidates, draft.text)
-            answer = max(candidates, key=lambda value: assess_reply(review, product, value, facts)['score'])
-            if answer == draft.text:
-                counts['already_correct'] += 1
-                continue
-            edit_draft(db, draft.id, answer, draft.revision, learn_preferences=False)
-            draft.model, draft.updated_by = 'owner-policy-2026-10-13', 'automation'
+            # Refresh must not bypass the same scoped rules and verification used
+            # by interactive generation and previews.
+            refreshed = await generate_draft(db, review.id)
             counts['updated'] += 1
-            if not draft.quality.get('passed'):
+            if not refreshed['quality'].get('passed'):
                 counts['needs_review'] += 1
-            db.commit()
         except Exception as error:
             db.rollback()
             failures.append({'draft_id': did, 'error': str(error)})

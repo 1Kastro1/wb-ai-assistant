@@ -21,14 +21,14 @@ class OllamaProvider:
     async def list_models(self):
         return (await self.health_check()).get('models', [])
 
-    async def chat(self, messages, schema=None):
+    async def chat(self, messages, schema=None, *, task=None):
         from .model_router import ModelRouter
         messages = [dict(message) for message in messages]
         if messages and messages[-1].get('role') == 'user':
             # Qwen 3 understands this template command even when an older Ollama build
             # ignores the API-level `think: false` flag.
             messages[-1]['content'] = messages[-1].get('content', '') + '\n/no_think'
-        body = {**ModelRouter().choose('FAST' if schema else 'STANDARD'), 'messages': messages, 'stream': False, 'think': False}
+        body = {**ModelRouter().choose(task or ('FAST' if schema else 'STANDARD')), 'messages': messages, 'stream': False, 'think': False}
         if schema:
             body['format'] = schema
         result = await guard.request('ollama', 'chat', body=body)
@@ -40,8 +40,8 @@ class OllamaProvider:
             raise ValueError('Локальная модель не завершила ответ. Повторите запрос.')
         return content.strip()
 
-    async def structured(self, messages, schema):
-        return json.loads(await self.chat(messages, schema))
+    async def structured(self, messages, schema, *, task=None):
+        return json.loads(await self.chat(messages, schema, task=task) if task else await self.chat(messages, schema))
 
     async def reply_variants(self, messages, count=3):
         """Request several customer-facing variants in one model call."""

@@ -42,6 +42,13 @@ test('generation retains text and disables editor',()=>{const html=render({gener
 test('recoverable waiting failure retains text and offers continuation',()=>{const html=render({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));assert(html.includes('Спасибо за оценку!'));assert(html.includes('Предыдущий ответ сохранён'))});
 test('terminal failure has a retry action',()=>{assert(render({generationError:'Не удалось завершить подготовку.'}).includes('Повторить попытку'))});
 test('published review offers no regeneration or save',()=>{const html=render({review:{is_answered:true,existing_answer:'Опубликованный ответ'}});assert(html.includes('Отправлено'));assert(!html.includes('Новый вариант'));assert(!html.includes('Сохранить</button>'))});
+test('rule verification status distinguishes checked and unverified answers',()=>{
+ for(const passed of [true,false]){
+  const html=render({generationError:'Откройте ответ',review:{draft:{text:'Добрый день! Спасибо за отзыв.',revision:2,quality:{passed,owner_rules:{matched:3,passed}},edits:[]}}});
+  assert(html.includes(passed?'Правила магазина выполнены':'Правила магазина требуют проверки'));
+  assert(!html.includes(passed?'Правила магазина требуют проверки':'Правила магазина выполнены'));
+ }
+});
 exports.Card=Card;
 
 const UniqomFitment=loadComponent(path.join(__dirname,'../app/UniqomFitment.tsx')).default;
