@@ -7,6 +7,23 @@ from app.db import Session, Review, Job
 PASSWORD='portable-backup-password-123'
 
 
+def test_older_backup_restores_queue_tables_before_restart(client, seeded):
+    from app.maintenance import backup, restore
+    from app.config import DATA
+    from app.db import engine, GenerationClaim, GenerationOutcome
+    name = backup()
+    with sqlite3.connect(DATA / 'backups' / name) as copy:
+        copy.execute('DROP TABLE generation_claims')
+        copy.execute('DROP TABLE generation_outcomes')
+        copy.execute("UPDATE alembic_version SET version_num='0012'")
+        copy.commit()
+    engine.dispose()
+    restore(name)
+    with Session() as db:
+        assert db.scalar(select(func.count()).select_from(GenerationClaim)) == 0
+        assert db.scalar(select(func.count()).select_from(GenerationOutcome)) == 0
+
+
 def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requests(client,seeded,tmp_path):
     from app.db import RegistrationRequest,TeamInvite,GenerationClaim,GenerationOutcome
     from app.maintenance import _decrypt_portable,_check_backup_database

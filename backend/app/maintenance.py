@@ -12,7 +12,7 @@ from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.exceptions import InvalidTag
 from .config import DATA, DATABASE, DATABASE_URL
-from .db import Session, Setting, setting, set_setting, IS_SQLITE
+from .db import Session, Setting, setting, set_setting, IS_SQLITE, engine, GenerationClaim, GenerationOutcome
 
 
 PORTABLE_MAGIC = b'WBAIPORT1'
@@ -20,6 +20,14 @@ PORTABLE_HEADER = len(PORTABLE_MAGIC) + 16 + 12
 
 SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,14))
 AUTH_TABLES=('wb_accounts','sessions','users','registration_requests','team_invites')
+
+
+def _ensure_queue_tables():
+    # Older supported copies predate these additive runtime tables. They are
+    # needed immediately after restore, before the next application restart.
+    with engine.begin() as connection:
+        GenerationClaim.__table__.create(connection, checkfirst=True)
+        GenerationOutcome.__table__.create(connection, checkfirst=True)
 
 
 def _table_exists(connection,table):
@@ -164,6 +172,7 @@ def portable_restore(source_path, password):
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('test_mode','true')")
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('safe_mode','true')")
             target.commit()
+        _ensure_queue_tables()
         return {'ok': True, 'secrets_restored': False, 'safe_mode': True, 'test_mode': True}
     finally:
         temp_path.unlink(missing_ok=True)
@@ -216,6 +225,9 @@ def restore(name):
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('test_mode','true')")
             target.execute("INSERT OR REPLACE INTO app_settings(key,value) VALUES('safe_mode','true')")
             target.commit()
+
+
+    _ensure_queue_tables()
 
 
 def setup():
