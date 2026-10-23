@@ -97,3 +97,46 @@ def test_http_process_leaves_durable_jobs_for_worker(client, monkeypatch):
     asyncio.run(main.run_job_queue())
     with Session() as db:
         assert db.get(Job, 'durable').status == 'queued'
+
+
+def test_model_context_keeps_long_cyrillic_rules(monkeypatch):
+    from app.integrations import ollama, guard
+    from app.model_router import ModelRouter
+    monkeypatch.setattr(ModelRouter, 'choose', lambda self, task: {'model': 'test', 'options': {'num_ctx': 8192, 'num_predict': 1024}})
+    request = AsyncMock(return_value={'message': {'content': '{"compliant":true}'}})
+    monkeypatch.setattr(guard, 'request', request)
+    message = 'я' * 10000
+    asyncio.run(ollama.chat([{'role': 'user', 'content': message}], task='OWNER_RULES'))
+    body = request.call_args.kwargs['body']
+    assert 12000 <= body['options']['num_ctx'] <= 16384
+    assert body['messages'][0]['content'].startswith(message)
+    import pytest
+    with pytest.raises(ValueError, match='слишком длинные'):
+        asyncio.run(ollama.chat([{'role': 'user', 'content': 'я' * 20000}], task='OWNER_RULES'))
+    assert request.await_count == 1
+
+
+def test_maintenance_lock_waits_and_cancellation_releases_descriptor():
+    import os
+    if os.name != 'posix':
+        return
+    from app.process_lock import ProcessLock
+    async def run():
+        first, second = ProcessLock('test-maintenance'), ProcessLock('test-maintenance')
+        entered = asyncio.Event()
+        async def wait():
+            async with second:
+                entered.set()
+        async with first:
+            task = asyncio.create_task(wait())
+            await asyncio.sleep(.01)
+            assert not entered.is_set()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert second.file is None
+        async with second:
+            pass
+    asyncio.run(run())

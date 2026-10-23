@@ -4,6 +4,12 @@ import ProductThumbnail from './ProductThumbnail';
 import DraftEditor from './DraftEditor';
 type Row=Record<string,any>;
 
+export function OwnerRuleStatus({quality}:{quality:Row}){
+ const rules=quality.owner_rules;
+ if(!rules?.matched)return null;
+ return <div className={rules.passed?'muted':'orange'} role="status"><p>{rules.passed?'Правила магазина выполнены':rules.checked===false?'Проверка правил не завершена':'Найдены замечания по правилам'} · Правил: {rules.matched}</p>{!rules.passed&&<ul>{(rules.issues?.length?rules.issues:['Выполнение правил не подтверждено. Подготовьте ответ заново.']).map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul>}</div>;
+}
+
 export function GenerationProgress({phase='running'}:{phase?:string}={}){
   const [seconds,setSeconds]=useState(0);
   useEffect(()=>{const start=Date.now();const timer=setInterval(()=>setSeconds(Math.floor((Date.now()-start)/1000)),1000);return()=>clearInterval(timer)},[]);
@@ -28,7 +34,7 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
       {hasText&&<div className="customer-review"><small>ОТЗЫВ ПОКУПАТЕЛЯ</small><p className="review-text">{r.text}</p></div>}
       {r.is_answered?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<div className="draft">
         {r.draft?<DraftEditor draft={r.draft} disabled={generating||!canManage} storageKey={storageKey||'draft-edit:'+r.draft.id} onSave={save} onDirty={value=>{setDirty(value);onPending?.(value)}} onRegister={register}/>:<p className="muted">Подготовьте ответ на этот отзыв.</p>}
-        {q.owner_rules?.matched>0&&<div className={q.owner_rules.passed?'muted':'orange'} role="status"><p>{q.owner_rules.passed?'Правила магазина выполнены':q.owner_rules.checked===false?'Проверка правил не завершена':'Найдены замечания по правилам'} · Правил: {q.owner_rules.matched}</p>{!q.owner_rules.passed&&<ul>{(q.owner_rules.issues?.length?q.owner_rules.issues:['Выполнение правил не подтверждено. Подготовьте ответ заново.']).map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul>}</div>}
+        <OwnerRuleStatus quality={q}/>
         {operationError&&<div className="save-error" role="alert">{operationError}</div>}
         {generationError&&<div className="generation-notice" role="status"><b>{generationError}</b>{r.draft&&<small>Предыдущий ответ сохранён. Вы можете продолжить работу с ним.</small>}</div>}
         
