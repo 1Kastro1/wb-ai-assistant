@@ -75,7 +75,14 @@ def test_restart_preserves_unstarted_single_answer_but_does_not_replay_running_a
         return {'id':draft.id}
     monkeypatch.setattr(main, 'generate_draft', generate)
     with TestClient(main.app) as app_client:
-        app_client.portal.call(asyncio.sleep, 0)
+        async def wait_for_answer():
+            for _ in range(200):
+                with Session() as db:
+                    if db.get(Job, 'waiting-answer').status == 'completed':
+                        return
+                await asyncio.sleep(.01)
+            raise AssertionError('Recovered answer did not finish')
+        app_client.portal.call(wait_for_answer)
         with Session() as db:
             assert db.get(Job, 'waiting-answer').status == 'completed'
             assert db.get(Job, 'running-answer').status == 'interrupted'

@@ -60,7 +60,7 @@ def test_compact_jobs_omit_large_snapshots_and_support_conditional_refresh(clien
         db.commit()
     first = client.get('/jobs?compact=true')
     assert first.status_code == 200
-    assert first.json()[0]['result'] == {'account_id': 'owner', 'processed': 1}
+    assert first.json()[0]['result'] == {'account_id': 'owner', 'processed': 1, 'selected_ids': ['private-selection']}
     assert len(first.content) < 1000
     assert client.get('/jobs?compact=true', headers={'If-None-Match': first.headers['etag']}).status_code == 304
     with Session() as db:

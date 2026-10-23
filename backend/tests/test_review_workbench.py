@@ -159,7 +159,9 @@ class WorkbenchTests(unittest.TestCase):
             return await self.generate(db,rid,instruction)
         result=self.run_job(self.submit(),partial)
         self.assertEqual(result['result']['total'],2);self.assertEqual(result['result']['processed'],1)
-        self.assertEqual(result['result']['failed'],1)
+        self.assertEqual(result['result']['failed'],0)
+        self.assertEqual(result['result']['manual_errors'],1)
+        self.assertEqual(result['result']['attention'],1)
         self.assertEqual(result['result']['failures'][0]['review_id'],'r2')
 
     def test_cancel_keeps_already_prepared_draft(self):

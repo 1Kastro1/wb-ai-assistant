@@ -41,6 +41,8 @@ from .activity_history import activity_page, rule_details
 from .generation_monitor import generation_metrics
 from .read_cache import cached_read, clear_reads
 from .process_lock import ProcessLock
+from .batch_processing import cancellable_batch
+from .automation_schedule import normalize_schedule, enqueue_due_jobs, enqueue_generation
 from .reviewed_knowledge import product_scope,product_owned,knowledge_report,refresh_reviewed_knowledge
 from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vehicle_identifiers, vin_key, oem_numbers, fitment_answer, save_question_evidence
 
@@ -85,6 +87,8 @@ async def lifespan(app):
                 job.status = 'queued'
                 message = 'Продолжение синхронизации после перезапуска' if resumable_import else 'Подготовка ответов продолжится на сервере'
                 job.result = {**(job.result or {}), 'message': message}
+            elif job.cancel_requested:
+                job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'current_reviews': []}
             else:
                 job.status, job.result = 'interrupted', {**(job.result or {}), 'message':'Приложение перезапущено; повторите задание'}
         for job in db.scalars(select(Job).where(Job.status == 'completed', Job.progress < 100)):
@@ -709,6 +713,9 @@ def assistant_toggle(body: AssistantEnabled, auth: OWNER, db: DB):
     if not body.enabled:
         schedule = setting(db, 'automation_schedule', {})
         schedule['drafts_enabled'] = False
+        schedule['question_drafts_enabled'] = False
+        schedule['generation_enabled'] = False
+        schedule['enabled'] = bool(schedule.get('sync_enabled', schedule.get('enabled', False)))
         set_setting(db, 'automation_schedule', schedule)
         for job in db.scalars(select(Job).where(Job.kind.in_(['drafts','question_drafts','single_draft','single_question_draft']), Job.status.in_(['queued', 'running']))):
             job.cancel_requested = True
@@ -757,6 +764,9 @@ class StoreConnection(Payload):
 
 
 class ScheduleInput(Payload):
+    sync_hours: int | None = Field(default=None, ge=1, le=168)
+    sync_enabled: bool | None = None
+    generation_enabled: bool | None = None
     enabled: bool = False
     reviews_hours: int = Field(default=3, ge=1, le=168)
     products_hours: int = Field(default=24, ge=1, le=720)
@@ -916,18 +926,51 @@ async def test_store(store_id: str, auth: AUTH, db: DB):
 
 @app.get('/settings/schedule')
 def schedule_get(auth: AUTH, db: DB):
-    defaults = {'enabled': False, 'reviews_hours': 3, 'questions_hours': 3, 'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False, 'question_drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False, 'min_quality': 96, 'max_proposals': 100, 'drafts_days': 7}
-    return {**defaults, **setting(db, 'automation_schedule', {})}
+    return normalize_schedule(setting(db, 'automation_schedule', {}))
 
 
 @app.patch('/settings/schedule')
-def schedule_set(body: ScheduleInput, auth: OWNER, db: DB):
-    current = setting(db, 'automation_schedule', {})
-    value = {**current, **body.model_dump()}
+def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: BackgroundTasks):
+    row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update())
+    current = normalize_schedule(row.value if row else {})
+    updates = {key: value for key, value in body.model_dump(exclude_unset=True).items() if value is not None}
+    value = {**current, **updates}
+    if 'sync_hours' in updates or 'reviews_hours' in updates or 'questions_hours' in updates:
+        hours = updates.get('sync_hours', updates.get('reviews_hours', updates.get('questions_hours')))
+        value.update(sync_hours=hours, reviews_hours=hours, questions_hours=hours)
+    if 'generation_enabled' in updates:
+        value['drafts_enabled'] = value['question_drafts_enabled'] = updates['generation_enabled']
+    if 'sync_enabled' in updates or 'generation_enabled' in updates:
+        value['enabled'] = bool(value['sync_enabled'] or value['generation_enabled'])
+    elif 'enabled' in updates:
+        value['sync_enabled'] = value['enabled']
+    value = normalize_schedule(value)
+    if value.get('generation_enabled') and not setting(db, 'assistant_enabled', True):
+        raise ValueError('Сначала включите ассистента для подготовки ответов')
+    # Start newly enabled tasks promptly; changing an interval keeps its last run.
+    reset_kinds = []
+    if value.get('sync_enabled') and not current.get('sync_enabled'):
+        reset_kinds.extend(('reviews', 'questions'))
+    if value.get('generation_enabled') and not current.get('generation_enabled'):
+        reset_kinds.extend(('drafts', 'question_drafts'))
+    for key in list(value):
+        if any(key == 'last_' + kind or key.startswith('last_' + kind + ':') for kind in reset_kinds):
+            value.pop(key)
     if value.get('drafts_enabled'):
         value['drafts_since'] = (datetime.now(timezone.utc) - timedelta(days=int(value.get('drafts_days', 7)))).isoformat()
+    value = normalize_schedule(value)
+    if current.get('generation_enabled') and not value.get('generation_enabled'):
+        for job in db.scalars(select(Job).where(
+            Job.kind.in_(('drafts', 'question_drafts')), Job.status.in_(('queued', 'running')),
+            Job.result['manual_batch'].as_boolean().is_not(True))):
+            job.cancel_requested = True
+            if job.status == 'queued':
+                job.status = 'cancelled'
+            job.result = {**(job.result or {}), 'message': 'Генерация по расписанию выключена'}
+    enqueue_due_jobs(db, value, time.time())
     set_setting(db, 'automation_schedule', value)
     db.commit()
+    background.add_task(run_job_queue)
     return value
 
 
@@ -943,7 +986,7 @@ def auto_replies_status(db,auth=None):
     last_job = db.scalar(select(Job).where(automated_draft_scope(account_id), Job.status.not_in(['queued', 'running'])).order_by(Job.created_at.desc()))
     next_run_at = None
     if enabled:
-        last_run = float(schedule.get('last_drafts', time.time()))
+        last_run = float(schedule.get(f'last_drafts:{account_id}', schedule.get('last_drafts', time.time())))
         next_run_at = int((last_run + max(1, int(schedule.get('drafts_hours', 6))) * 3600) * 1000)
     return {
         'enabled': enabled,
@@ -969,7 +1012,10 @@ async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR,
     can_operate_store(auth, store)
     schedule = schedule_get(auth, db)
     since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
-    schedule.update({'enabled': True, 'drafts_enabled': True, 'last_drafts': time.time(), 'drafts_since': since})
+    current = time.time()
+    schedule.update({'enabled': True, 'drafts_enabled': True, 'question_drafts_enabled': True,
+                     'generation_enabled': True, 'last_drafts': current, f'last_drafts:{store.id}': current, 'drafts_since': since})
+    enqueue_generation(db, schedule, store, 'question_drafts', current)
     set_setting(db, 'automation_schedule', schedule)
     job = db.scalar(select(Job).where(automated_draft_scope(active_store(db,auth)), Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
     if not job:
@@ -990,14 +1036,20 @@ def pause_auto_replies(auth: MARKET_OPERATOR, db: DB):
     can_operate_store(auth, store)
     schedule = schedule_get(auth, db)
     schedule['drafts_enabled'] = False
+    schedule['question_drafts_enabled'] = False
+    schedule['generation_enabled'] = False
+    schedule['enabled'] = bool(schedule.get('sync_enabled', True))
     set_setting(db, 'automation_schedule', schedule)
-    for job in db.scalars(select(Job).where(automated_draft_scope(active_store(db,auth)), Job.status.in_(['queued', 'running']))):
+    for job in db.scalars(select(Job).where(
+        Job.kind.in_(('drafts', 'question_drafts')), Job.result['manual_batch'].as_boolean().is_not(True),
+        func.coalesce(Job.result['account_id'].as_string(), 'owner') == active_store(db,auth),
+        Job.status.in_(['queued', 'running']))):
         job.cancel_requested = True
         if job.status == 'queued':
             job.status = 'cancelled'
             job.result = {**(job.result or {}), 'message': 'Автоответы поставлены на паузу'}
     db.commit()
-    return auto_replies_status(db)
+    return auto_replies_status(db,auth)
 
 
 @app.get('/ollama')
@@ -1020,7 +1072,7 @@ async def run_sync_job(job_id):
         await execute_job(job_id)
 
 
-async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft')):
+async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft', 'question_drafts')):
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
@@ -1050,8 +1102,10 @@ async def execute_job(job_id):
         job = db.get(Job, job_id)
         if not job or job.cancel_requested:
             if job:
-                job.status, job.result = 'cancelled', {'message': 'Задание отменено'}
+                job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'current_reviews': []}
                 db.commit()
+            return
+        if job.status != 'queued':
             return
         started_clock = time.monotonic()
         queue_seconds = max(0, time.time() - datetime.fromisoformat(job.created_at).timestamp())
@@ -1081,61 +1135,16 @@ async def execute_job(job_id):
                 since = (job.result or {}).get('since', '')
                 is_questions = kind in ('question_drafts', 'single_question_draft')
                 is_single = kind in ('single_draft', 'single_question_draft')
-                conditions = [
-                    Review.wb_account_id == account_id,
-                    Review.is_answered == False,
-                    Review.status != 'publishing',
-                    Review.marketplace.like('%_question') if is_questions else ~Review.marketplace.like('%_question'),
-                ]
-                if not is_single:
-                    conditions.append(Draft.id.is_(None))
-                selected_ids = list((job.result or {}).get('selected_ids') or [])
-                if selected_ids:
-                    conditions.append(Review.id.in_(selected_ids))
-                if since:
-                    conditions.append(Review.created_at >= since)
-                failed_ids = list((job.result or {}).get('failed_ids') or [item['review_id'] for item in (job.result or {}).get('failures', [])]) if not is_single else []
-                if failed_ids:
-                    conditions.append(Review.id.not_in(failed_ids))
-                ids = list(db.scalars(
-                    select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(
-                        *conditions,
-                    ).order_by(Review.created_at.desc(), Review.id)
-                ))
-                processed = 0 if is_single else int((job.result or {}).get('processed', 0))
-                failed = 0 if is_single else int((job.result or {}).get('failed', 0))
-                failures = [] if is_single else list((job.result or {}).get('failures', []))
-                completed_before = processed + failed
-                total = completed_before + len(ids)
-                single_draft = None
-                job.result = {**job.result, 'total': total, 'processed': processed, 'failed': failed}
+                # The batch runner owns short checkpoint sessions and one session per lane.
+                # Keep the outer job fresh after concurrent fast/model completions.
+                job.result = {**(job.result or {}), 'account_id': account_id}
                 db.commit()
-                for index, review_id in enumerate(ids, 1):
-                    if cancelled():
-                        raise asyncio.CancelledError
-                    try:
-                        single_draft = await generate_draft(db, review_id, (job.result or {}).get('instruction', '') if is_single else '')
-                        if requested_by:
-                            stored_draft = db.get(Draft, single_draft['id'])
-                            if not stored_draft.created_by:
-                                stored_draft.created_by = requested_by
-                            stored_draft.updated_by = requested_by
-                            db.commit()
-                            single_draft = draft_public(db, stored_draft)
-                        processed += 1
-                    except Exception as error:
-                        db.rollback()
-                        if is_single:
-                            raise
-                        failed += 1
-                        failed_ids.append(review_id)
-                        if len(failures) < 20:
-                            failures.append({'review_id': review_id, 'reason': (str(error) or type(error).__name__)[:300]})
-                    job.result = {**(job.result or {}), 'processed': processed, 'failed': failed, 'total': total, 'failures': failures, 'failed_ids': failed_ids}
-                    db.flush()
-                    update_progress(round((completed_before + index) / max(1, total) * 100))
-                    if not is_single:
-                        await run_waiting_sync()
+                batch_result, single_draft = await cancellable_batch(job_id, generate_draft, run_waiting_sync, Session)
+                db.refresh(job)
+                processed, failed, total = (batch_result.get(key, 0) for key in ('processed', 'failed', 'total'))
+                selected_ids = list(batch_result.get('selected_ids') or [])
+                failures = batch_result.get('failures', [])
+                failed_ids = batch_result.get('failed_ids', [])
                 schedule = setting(db, 'automation_schedule', {})
                 proposal_id = None
                 if schedule.get('auto_propose') and not is_questions and not is_single and not manual_batch:
@@ -1158,6 +1167,7 @@ async def execute_job(job_id):
                     raise ValueError('Отзыв или вопрос изменился. Обновите страницу')
                 job.status, job.progress = 'completed', 100
                 job.result = {
+                    **batch_result,
                     'processed': processed,
                     'failed': failed,
                     'total': total,
@@ -1199,19 +1209,15 @@ async def execute_job(job_id):
                     negative = db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == account_id, Review.is_answered == False, Review.rating <= 2)) or 0
                     if negative:
                         add_notification(db, 'negative_reviews', 'Негативные отзывы требуют внимания', f'Без ответа осталось отзывов с оценкой 1–2★: {negative}.', 'warning', account_id)
-                schedule = setting(db, 'automation_schedule', {})
-                if kind == 'reviews' and schedule.get('enabled') and schedule.get('drafts_enabled') and not db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']))):
-                    db.add(Job(id=str(uuid4()), kind='drafts', priority=250, result={'account_id': account_id, 'since': schedule.get('drafts_since', ''), 'scheduled': True, 'message': 'Подготовка ответов после получения новых отзывов'}))
-                    schedule['last_drafts'] = time.time()
-                    set_setting(db, 'automation_schedule', schedule)
-                if kind == 'questions' and schedule.get('enabled') and schedule.get('question_drafts_enabled') and setting(db, 'assistant_enabled', True) and not db.scalar(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued', 'running']))):
-                    db.add(Job(id=str(uuid4()), kind='question_drafts', priority=250, result={'account_id': account_id, 'scheduled': True, 'message': 'Подготовка ответов после получения новых вопросов'}))
-                    schedule['last_question_drafts'] = time.time()
+                schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
+                if kind in ('reviews', 'questions'):
+                    enqueue_generation(db, schedule, store, 'drafts' if kind == 'reviews' else 'question_drafts', time.time())
                     set_setting(db, 'automation_schedule', schedule)
         except asyncio.CancelledError:
             db.rollback()
+            db.expire_all()
             job = db.get(Job, job_id)
-            if asyncio.current_task().cancelling():
+            if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
                 job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts') else 'interrupted'
@@ -1222,6 +1228,7 @@ async def execute_job(job_id):
             job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'account_id': account_id}
         except Exception as error:
             db.rollback()
+            db.expire_all()
             job = db.get(Job, job_id)
             if job.attempts < job.max_attempts and not job.cancel_requested:
                 job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
@@ -1256,98 +1263,103 @@ async def run_job_queue():
                     await asyncio.sleep(2)
 
 
-async def scheduler_loop():
-    while True:
-        await asyncio.sleep(30)
-        try:
-            with Session() as db:
-                schedule = setting(db, 'automation_schedule', {'enabled': False})
-                current = time.time()
-                # Database protection must keep running even when business
-                # automation is paused. Otherwise a paused shop receives no
-                # integrity checks and no private recovery snapshots.
-                if current - float(schedule.get('last_database_check', 0)) >= 3600:
-                    health = await asyncio.to_thread(database_health)
-                    schedule['last_database_check'] = current
-                    if health.get('status') != 'ok':
-                        add_notification(db, 'database', 'Проверка базы не пройдена', str(health), 'error')
-                if DATABASE_URL.startswith('sqlite:') and current - float(schedule.get('last_recovery_snapshot', 0)) >= 6 * 3600:
-                    async with maintenance_lock:
-                        await asyncio.to_thread(recovery_snapshot, 10)
-                    schedule['last_recovery_snapshot'] = current
-                if not schedule.get('enabled'):
-                    set_setting(db, 'scheduler_status', {'state': 'ok', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': ''})
-                    set_setting(db, 'automation_schedule', schedule)
-                    db.commit()
-                    continue
-                connected_stores = [store for store in db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)) if db.get(Account, store.id)]
-                for kind, hours in (('products', int(schedule.get('products_hours', 24))), ('reviews', int(schedule.get('reviews_hours', 3))), ('questions', int(schedule.get('questions_hours', 3)))):
-                    if db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
-                        continue
-                    for store in connected_stores:
-                        if kind == 'products' and store.provider not in ('wb', 'yandex', 'ozon'):
-                            continue
-                        last_key = f'last_{kind}:{store.id}'
-                        last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
-                        if current - last >= max(1, hours) * 3600:
-                            db.add(Job(id=str(uuid4()), kind=kind, priority=200, result={'account_id': store.id, 'scheduled': True}))
-                            schedule[last_key] = current
-                            break
-                for kind, enabled in (('drafts', schedule.get('drafts_enabled')), ('question_drafts', schedule.get('question_drafts_enabled'))):
-                    if not enabled or not setting(db, 'assistant_enabled', True):
-                        continue
-                    if db.scalar(select(Job).where(Job.kind == kind, Job.status.in_(['queued', 'running']))):
-                        continue
-                    hours = max(1, int(schedule.get('drafts_hours', 6)))
-                    for store in connected_stores:
-                        last_key = f'last_{kind}:{store.id}'
-                        last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
-                        if current - last >= hours * 3600:
-                            result = {'account_id': store.id, 'scheduled': True, 'message': 'Плановая подготовка ответов на вопросы' if kind == 'question_drafts' else 'Плановая подготовка автоответов'}
-                            if kind == 'drafts': result['since'] = schedule.get('drafts_since', '')
-                            db.add(Job(id=str(uuid4()), kind=kind, priority=250, result=result))
-                            schedule[last_key] = current
-                            break
-                if current - float(schedule.get('last_backup', 0)) >= max(1, int(schedule.get('backup_hours', 24))) * 3600:
-                    async with maintenance_lock:
-                        await asyncio.to_thread(backup)
-                        if DATABASE_URL.startswith('sqlite:'): await asyncio.to_thread(recovery_snapshot)
-                    schedule['last_backup'] = current
-                portable_sync = setting(db, 'portable_sync', {'enabled': False})
-                sync_account = db.get(Account, 'portable:sync')
-                if portable_sync.get('enabled') and sync_account and current - float(portable_sync.get('last_sync', 0)) >= max(1, int(portable_sync.get('hours', 24))) * 3600:
-                    destination = Path(str(portable_sync.get('directory', ''))).expanduser().resolve()
-                    if not destination.is_dir():
-                        raise ValueError('Папка синхронизации недоступна')
-                    async with maintenance_lock:
-                        password = decrypt_secret(sync_account.encrypted_token)
-                        export = await asyncio.to_thread(portable_backup, password)
-                        copied = await asyncio.to_thread(shutil.copy2, export, destination / export.name)
-                        verified = await asyncio.to_thread(portable_verify, copied, password)
-                    for obsolete in sorted(destination.glob('wb-assistant-*.wbai'), key=lambda path:path.stat().st_mtime, reverse=True)[10:]:
-                        obsolete.unlink(missing_ok=True)
-                    portable_sync.update(last_sync=current,last_verified=current,last_verified_counts={'reviews':verified['reviews'],'drafts':verified['drafts']},last_file=Path(copied).name,last_error='')
-                    set_setting(db, 'portable_sync', portable_sync)
-                set_setting(db, 'scheduler_status', {'state': 'ok', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': ''})
-                set_setting(db, 'automation_schedule', schedule)
-                db.commit()
-                pending_notifications = list(db.scalars(select(Notification).where(Notification.telegram_sent == False, Notification.severity.in_(['warning','error'])).order_by(Notification.created_at).limit(10)))
-                for notification in pending_notifications:
-                    try:
-                        if await send_telegram(db, f'{notification.title}\n{notification.message}'):
-                            notification.telegram_sent = True
-                            db.commit()
-                    except ValueError:
-                        break
-            asyncio.create_task(run_job_queue())
-        except Exception as error:
-            # Keep the scheduler alive and expose a safe diagnostic in the interface.
-            try:
+def update_schedule_times(changes):
+    with Session() as db:
+        row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update())
+        value = {**(row.value if row else {}), **changes}
+        set_setting(db, 'automation_schedule', value)
+        db.commit()
+
+
+def queue_scheduled_jobs(current=None):
+    # No network awaits inside the settings transaction. Changing a setting in
+    # the API cannot be overwritten later by a stale scheduler snapshot.
+    with Session() as db:
+        row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update())
+        value = normalize_schedule(row.value if row else {})
+        enqueue_due_jobs(db, value, time.time() if current is None else current)
+        set_setting(db, 'automation_schedule', value)
+        db.commit()
+
+
+async def scheduler_maintenance():
+    try:
+        with Session() as db:
+            schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
+        current = time.time()
+        if current - float(schedule.get('last_database_check', 0)) >= 3600:
+            health = await asyncio.to_thread(database_health)
+            update_schedule_times({'last_database_check': current})
+            if health.get('status') != 'ok':
                 with Session() as db:
-                    set_setting(db, 'scheduler_status', {'state': 'error', 'checked_at': datetime.now(timezone.utc).isoformat(), 'last_error': type(error).__name__})
+                    add_notification(db, 'database', 'Проверка базы не пройдена', str(health), 'error')
                     db.commit()
-            except Exception:
-                pass
+        if DATABASE_URL.startswith('sqlite:') and current - float(schedule.get('last_recovery_snapshot', 0)) >= 6 * 3600:
+            async with maintenance_lock:
+                await asyncio.to_thread(recovery_snapshot, 10)
+            update_schedule_times({'last_recovery_snapshot': current})
+        if schedule.get('enabled') and current - float(schedule.get('last_backup', 0)) >= max(1, int(schedule.get('backup_hours', 24))) * 3600:
+            async with maintenance_lock:
+                await asyncio.to_thread(backup)
+                if DATABASE_URL.startswith('sqlite:'):
+                    await asyncio.to_thread(recovery_snapshot)
+            update_schedule_times({'last_backup': current})
+        with Session() as db:
+            portable_sync = setting(db, 'portable_sync', {'enabled': False})
+            sync_account = db.get(Account, 'portable:sync')
+            password = decrypt_secret(sync_account.encrypted_token) if portable_sync.get('enabled') and sync_account else None
+        if password and current - float(portable_sync.get('last_sync', 0)) >= max(1, int(portable_sync.get('hours', 24))) * 3600:
+            destination = Path(str(portable_sync.get('directory', ''))).expanduser().resolve()
+            if not destination.is_dir():
+                raise ValueError('Папка синхронизации недоступна')
+            async with maintenance_lock:
+                export = await asyncio.to_thread(portable_backup, password)
+                copied = await asyncio.to_thread(shutil.copy2, export, destination / export.name)
+                verified = await asyncio.to_thread(portable_verify, copied, password)
+            for obsolete in sorted(destination.glob('wb-assistant-*.wbai'), key=lambda path:path.stat().st_mtime, reverse=True)[10:]:
+                obsolete.unlink(missing_ok=True)
+            with Session() as db:
+                latest = setting(db, 'portable_sync', {})
+                latest.update(last_sync=current,last_verified=current,last_verified_counts={'reviews':verified['reviews'],'drafts':verified['drafts']},last_file=Path(copied).name,last_error='')
+                set_setting(db, 'portable_sync', latest)
+                db.commit()
+        with Session() as db:
+            pending_notifications = list(db.scalars(select(Notification).where(Notification.telegram_sent == False, Notification.severity.in_(['warning','error'])).order_by(Notification.created_at).limit(10)))
+            for notification in pending_notifications:
+                if await send_telegram(db, f'{notification.title}\n{notification.message}'):
+                    notification.telegram_sent = True
+                    db.commit()
+            set_setting(db, 'scheduler_status', {'state': 'ok', 'checked_at': now(), 'last_error': ''})
+            db.commit()
+    except Exception as error:
+        with Session() as db:
+            set_setting(db, 'scheduler_status', {'state': 'error', 'checked_at': now(), 'last_error': type(error).__name__})
+            db.commit()
+
+
+async def scheduler_loop():
+    maintenance_task = None
+    try:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                queue_scheduled_jobs()
+                # Backups may wait for the batch lock for a long time. Their
+                # separate task must not prevent the next scheduled sync tick.
+                if maintenance_task is None or maintenance_task.done():
+                    if maintenance_task:
+                        maintenance_task.result()
+                    maintenance_task = asyncio.create_task(scheduler_maintenance())
+                if not job_dispatch_lock.locked():
+                    asyncio.create_task(run_job_queue())
+            except Exception as error:
+                with Session() as db:
+                    set_setting(db, 'scheduler_status', {'state': 'error', 'checked_at': now(), 'last_error': type(error).__name__})
+                    db.commit()
+    finally:
+        if maintenance_task:
+            maintenance_task.cancel()
+            await asyncio.gather(maintenance_task, return_exceptions=True)
 
 
 @app.post('/jobs/sync/{kind}')
@@ -1441,8 +1453,20 @@ async def schedule_selected_drafts(body: SelectedDraftsInput, background: Backgr
                 if sorted((previous.result or {}).get('operation_requested_ids') or []) != sorted(ids):
                     raise HTTPException(409, 'Этот запрос уже использован для другой подборки')
                 return public(previous)
+        pending = list(db.scalars(select(Job).where(
+            Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.cancel_requested == False,
+            Job.result['account_id'].as_string() == active,
+        ).order_by(Job.created_at.asc())))
+        covering = next((job for job in pending if not (job.result or {}).get('selected_ids') and not (job.result or {}).get('since')), None)
+        if covering:
+            return public(covering)
         existing_ids = set(db.scalars(select(Draft.review_id).where(Draft.review_id.in_(ids))))
         eligible = sorted(row.id for row in rows if not row.is_answered and row.status != 'publishing' and row.id not in existing_ids)
+        covered_ids = {rid for job in pending for rid in (job.result or {}).get('selected_ids', [])}
+        uncovered = [rid for rid in eligible if rid not in covered_ids]
+        if eligible and not uncovered:
+            return public(next(job for job in pending if set((job.result or {}).get('selected_ids') or []) & set(eligible)))
+        eligible = uncovered
         for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.result['account_id'].as_string() == active)):
             if (job.result or {}).get('manual_batch') and sorted((job.result or {}).get('selected_ids') or []) == eligible:
                 return public(job)
@@ -1486,7 +1510,8 @@ def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
     active_first = case((Job.status.in_(['queued', 'running']), 0), else_=1)
     if compact:
         fields = ('account_id', 'requested_by', 'manual_batch', 'operation_key', 'total', 'processed', 'failed',
-                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since')
+                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since',
+                  'skipped', 'attention', 'manual_errors', 'remaining', 'retrying', 'current_reviews', 'queue_version')
         columns = [column for column in Job.__table__.columns if column.name != 'result']
         query = select(*columns, *(Job.result[key].label('r_' + key) for key in fields))
         if auth['role'] != 'owner':
@@ -1521,6 +1546,7 @@ def cancel_job(jid: str, auth: MARKET_OPERATOR, db: DB):
     job.cancel_requested = True
     if job.status == 'queued':
         job.status = 'cancelled'
+    job.result = {**(job.result or {}), 'message': 'Остановка подготовки ответов' if job.status == 'running' else 'Задание отменено'}
     db.commit()
     return public(job)
 

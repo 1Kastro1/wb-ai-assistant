@@ -7,13 +7,32 @@ from app.db import Session, Review, Job
 PASSWORD='portable-backup-password-123'
 
 
+def test_older_backup_restores_queue_tables_before_restart(client, seeded):
+    from app.maintenance import backup, restore
+    from app.config import DATA
+    from app.db import engine, GenerationClaim, GenerationOutcome
+    name = backup()
+    with sqlite3.connect(DATA / 'backups' / name) as copy:
+        copy.execute('DROP TABLE generation_claims')
+        copy.execute('DROP TABLE generation_outcomes')
+        copy.execute("UPDATE alembic_version SET version_num='0012'")
+        copy.commit()
+    engine.dispose()
+    restore(name)
+    with Session() as db:
+        assert db.scalar(select(func.count()).select_from(GenerationClaim)) == 0
+        assert db.scalar(select(func.count()).select_from(GenerationOutcome)) == 0
+
+
 def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requests(client,seeded,tmp_path):
-    from app.db import RegistrationRequest,TeamInvite
+    from app.db import RegistrationRequest,TeamInvite,GenerationClaim,GenerationOutcome
     from app.maintenance import _decrypt_portable,_check_backup_database
     import pytest
     with Session() as db:
         db.add(RegistrationRequest(id='pending-local',username='pending.local',password_hash='private-registration-hash',receipt_hash='private-receipt'))
         db.add(TeamInvite(token_hash='private-invite',position='operator',store_ids=['owner'],created_by='owner',expires=9999999999))
+        db.add(GenerationClaim(review_id='r1', token='old-worker', expires_at=9999999999))
+        db.add(GenerationOutcome(job_id='restored-job', review_id='r1', attention=True))
         db.commit()
     exported=client.post('/portable/export',json={'password':PASSWORD})
     assert exported.status_code==200,exported.text
@@ -21,7 +40,9 @@ def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requ
     encrypted.write_bytes(exported.content);_decrypt_portable(encrypted,decrypted,PASSWORD)
     _check_backup_database(decrypted)
     with sqlite3.connect(decrypted) as check:
-        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0012'
+        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0013'
+        assert check.execute('SELECT count(*) FROM generation_claims').fetchone()[0]==0
+        assert check.execute('SELECT count(*) FROM generation_outcomes').fetchone()[0]==1
         for table in ('users','sessions','registration_requests','team_invites'):
             assert check.execute('SELECT count(*) FROM '+table).fetchone()[0]==0
     restored=client.post('/portable/restore',data={'password':PASSWORD},files={'file':('shop.wbai',exported.content,'application/octet-stream')})
@@ -29,6 +50,8 @@ def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requ
     with Session() as db:
         assert db.get(RegistrationRequest,'pending-local').username=='pending.local'
         assert db.get(TeamInvite,'private-invite').created_by=='owner'
+        assert db.get(GenerationClaim, 'r1') is None
+        assert db.get(GenerationOutcome, ('restored-job', 'r1')).attention
     with sqlite3.connect(decrypted) as check:
         check.execute("INSERT INTO registration_requests(id,username,password_hash,receipt_hash,status,created_at,reviewed_at,reviewed_by) VALUES('leak','leak','secret','receipt','pending','test','','')")
         check.commit()

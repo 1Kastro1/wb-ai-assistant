@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import re
-from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint, Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from .config import DATABASE, DATABASE_URL
 
@@ -337,6 +337,20 @@ class CompatibilityCheck(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     result: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[str] = mapped_column(String, default=now)
+
+
+class GenerationClaim(Base):
+    __tablename__ = 'generation_claims'
+    review_id: Mapped[str] = mapped_column(String, primary_key=True)
+    token: Mapped[str] = mapped_column(String)
+    expires_at: Mapped[float] = mapped_column(Float)
+
+
+class GenerationOutcome(Base):
+    __tablename__ = 'generation_outcomes'
+    job_id: Mapped[str] = mapped_column(String, primary_key=True)
+    review_id: Mapped[str] = mapped_column(String, primary_key=True)
+    attention: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Job(Base):
