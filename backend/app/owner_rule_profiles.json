@@ -2,12 +2,18 @@
   "0365fd6e18b30a0310b21ec979ec992c89f3f990319875f5678860636a83edea": {
     "family": "chemicals",
     "label": "Применяй только если отзыв касается соответствующей категории товара. Автохимия ",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "0629ad64b4a49f28942f108174bd4aeb43278f630f4674c852d19125e71965ca": {
     "empty_inapplicable": true,
     "family": "parts",
     "label": "Щётки стеклоочистителя: полосы и разводы. Если покупатель жалуется, что щётка на",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "12663c9c280102f250241d51389f13d39ccd6eb52df1ee76cea088795a831c74": {
@@ -29,6 +35,9 @@
   "22393bef9c0c48c77c2b7de6f0ef4d90ed48eb457da057b32548e318f49cfa5d": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Ароматизаторы. При жалобе на слабый запах предложи пр",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "246cc61504a76a9887ab74bf519a94e29312d3ebd1d2b6ee9361833409a539c6": {
@@ -43,34 +52,55 @@
   "4d2838e6d26c532e8ffa792fca0c2ed3caa2629e5999e3f5c2cac622ff76c9cd": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Рулевые детали и подвеска. При люфте, стуке или несов",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "55aca2779dfc093e5698d82374396712e89b5eed6441dec64c4388b95506ba68": {
     "empty_inapplicable": true,
     "family": "fragrance",
     "label": "Если отзыв касается автомобильного ароматизатора: учитывай интенсивность, заявле",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "5af62c7d49915931c2c5f1e336afa461c5d9c4f8d687bc2d7ab5301651078f55": {
     "label": "Несоответствие, недокомплект, оригинальность и обращения. При жалобе извинись за",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "61d8698fb39ca921dc8b6dc0638f114d8e74bd6255976bf79d31d3227193d101": {
     "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.». Подпи",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "68fc2cc14cf403b0dd360abb76400fa09e6daf1e36576010e25ab377c0152109": {
     "family": "cosmetics",
     "label": "Применяй только если отзыв касается соответствующей категории товара. Автокосмет",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "6e5e9fcc70598b0b970a422a7fb47adea125fd788467400caefbe65cb3c39b5d": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Антифризы. При изменении цвета, осадке или жалобе пос",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "7c4316e7411936db274345270ab26b43ca0ccc156ecd396c7eb60dc765134c35": {
     "label": "Если покупатель доволен: Поблагодари за покупку и отзыв. Упомяни то преимущество",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "82b965bc807385a3d6717ac01af9b7a25c6a07bf7272f3aca8e9bba9bc45278c": {
@@ -80,53 +110,86 @@
   },
   "847ab126ca303701fdaaecc01d98e2250725c385a722cda5a5b2890a59538085": {
     "label": "Содержание ответа на отзыв. Каждый ответ начинай с «Добрый день!». Внимательно п",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "886aa13912ab2b57678550010fa5d66073161103081cc82da01689b3689b1774": {
     "empty_inapplicable": true,
     "label": "Упаковка, протечки и недостача в отзывах. Применяй только к соответствующей жало",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "9ddae636ece3b30f64db32f88a6c7db7c18eab4287fa2834f914b86fbcc5dda9": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Масляные, воздушные, салонные и топливные фильтры. Пр",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "ab5b7aef5355a1702713d742d27e056fa2f0f430ad32605e9643c1a12cfc9890": {
     "label": "Стиль ответа на отзыв. Пиши по-русски, уважительно на «Вы», спокойно, профессион",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "b33e9a7c876382dd966c92de2109d81070d5948de2c0da8e40bf7c7f3f612b64": {
     "label": "Формат ответа на отзыв. Выводи только готовый читаемый ответ покупателю без HTML",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "bc8672c223e095039d81e49d5354bec14c1f6d1fec896a7442cb1e2c44781edc": {
     "empty_inapplicable": true,
     "label": "Kangaroo: чтение даты на упаковке. Если отзыв касается даты изготовления или сро",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "bd883a00fa459444d8f0f59ddd2ee468ed55d8e072ba2483a5c76d01aaf7de18": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Ремни, ролики и натяжители. При несовпадении длины, ч",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "bf41d94b96b6770cd467544bb022e88df4f63835257639fee03071498678a28a": {
     "label": "Подготовка и публикация ответов на отзывы. Подготавливай и отправляй на подтверж",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true,
     "workflow": true
   },
   "c4da058656a8f0e3b6818027a94cd64bb61b0c957262222891adf498acd4f2fc": {
     "label": "Решение проблемы в отзыве: объяснение и следующий шаг. Когда покупатель описал п",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "c909684bc83a8c38b45c52384f9dc1daaf4a33a21dfb0f177cd0be279eb83132": {
     "empty_inapplicable": true,
     "label": "EIKOSHA. Мы являемся официальным дистрибьютором EIKOSHA; при сомнениях в оригина",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "ccd481eb7f9683dadd281b88aff45ade1f093250f93b34e1b044a2c6e98b05cb": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Лампы и автомобильная электрика. Если товар не работа",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "ccdb1a54deb82e1c8ce47a474d6992c6188f85b0d3d8235128dc523833cabae3": {
@@ -142,6 +205,9 @@
   "d155a08d2d05a650d73145e32cef18107d237278d9e2d22234e9fadcac302f56": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Тормозные колодки и диски. При скрипе, вибрации или с",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "d2d9b092cd84db9a0b92f42e9a73a19ffdbffce9081bacc1801773139fa575f1": {
@@ -151,16 +217,25 @@
   "d932fe1ad2c6c1b56df0905622c28c911a859dcc2836df846179db4e23fb5da3": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Средства для кузова, стёкол и защитные покрытия. При ",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "db052e76dc2bd692486dcbc2d0adec029fcd4d3bcac55f339562d973867e772d": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Очистители салона, пластика и ткани. При слабом резул",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "dec42ecea2244a08214ecfeaa977c8ae67b0ead76b73c4227df41441759a31d8": {
     "family": "parts",
     "label": "Применяй только если отзыв касается соответствующей категории товара. Автозапчас",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "dfdac76553660ebba86a2d338366aa6b0e6b18c612bfc7be3032614e9c95096a": {
@@ -170,6 +245,9 @@
   "ea0ef15c863f619c19a037dd43115ee1de341cd808958a0d386916006e28db91": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Щётки стеклоочистителя. В дополнение к правилу об очи",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "ebc481d32034545376d9d4b97dfe82de2e4dab0ea177fe46dc44dc96cf7ee06c": {
@@ -180,6 +258,9 @@
   "ebe2579adf8e2203a37811ac52e75d0a73891edc3cc28d9e72630176fe8fef6a": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Масла и технические жидкости. При расходе, шуме или и",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "eed2a3356e38b4402ff8711727e8ae581261cce77536e48d320a8ffcc99ef0f4": {
