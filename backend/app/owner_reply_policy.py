@@ -8,7 +8,7 @@ from time import monotonic
 from .plain_text import plain_text
 from .safety import mask_vin, validate_reply
 from .reply_policy import has_redundant_clarification, remove_redundant_clarification, analyze_customer_message, missing_complaints, COMPLAINT_LABELS
-from .rule_execution import select_rules, positive_template, verification_key, cached_verdict, remember_verdict
+from .rule_execution import select_rules, positive_template, audited_case_template, verification_key, cached_verdict, remember_verdict
 
 
 QUOTED = r'[«“"\u2018\u2019]([^»”"\u2018\u2019\n]{1,200})[»”"\u2018\u2019]'
@@ -184,6 +184,12 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     result.update(context_rules=len(context_rules), skipped_rules=skipped, cache_hit=False)
     semantic = semantic_rules(context_rules)
     key = None
+    if not instruction.strip() and not protected and not result['issues']:
+        expected = audited_case_template(review, product, rules)
+        if expected and adjusted == expected and assess(adjusted)['passed']:
+            result.update(verification_method='local_review_case', semantic_groups=0, verified_groups=0,
+                          verification_seconds=round(monotonic() - check_started, 4))
+            return adjusted, result
     # Only the exact no-claims templates and audited whole policies qualify.
     # Unknown/edited semantic rules must still reach the model, even on five stars.
     if allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
