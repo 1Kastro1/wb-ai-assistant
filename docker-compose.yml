@@ -6,12 +6,34 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
       DATABASE_URL: postgresql+psycopg://wb_assistant:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/wb_assistant
       WB_CONTAINER: "1"
+      WB_BACKGROUND_ROLE: api
       WB_ENABLE_REAL_PUBLISH: ${WB_ENABLE_REAL_PUBLISH:-}
       WB_PUBLIC_ORIGIN: ${WB_PUBLIC_ORIGIN:-https://assistant.blackmindworks.com}
     volumes: ["wb_data:/data"]
     secrets: [wb_key]
     depends_on:
       postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 20
+  worker:
+    image: wb-ai-assistant-backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+      DATABASE_URL: postgresql+psycopg://wb_assistant:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/wb_assistant
+      WB_CONTAINER: "1"
+      WB_BACKGROUND_ROLE: worker
+      WB_ENABLE_REAL_PUBLISH: ${WB_ENABLE_REAL_PUBLISH:-}
+      WB_PUBLIC_ORIGIN: ${WB_PUBLIC_ORIGIN:-https://assistant.blackmindworks.com}
+    volumes: ["wb_data:/data"]
+    secrets: [wb_key]
+    depends_on:
+      backend:
         condition: service_healthy
     restart: unless-stopped
   postgres:
@@ -36,6 +58,11 @@ services:
   ollama:
     image: ollama/ollama:0.11.10
     volumes: ["ollama_models:/root/.ollama"]
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_MAX_QUEUE: "8"
+      OLLAMA_KEEP_ALIVE: "15m"
     restart: unless-stopped
 secrets:
   wb_key:

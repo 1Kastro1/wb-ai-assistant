@@ -19,6 +19,7 @@ test('review section displays only review rules and a rated review example',()=>
  assert(html.includes('Проверить на примере отзыва'));
  assert(html.includes('Оценка'));
  assert(html.includes('role="tablist"'));
+ assert(html.includes('Создать правило'));
 });
 test('question section displays Uniqom rule and a question example without stars',()=>{
  const html=render('QUESTION_RULE');
@@ -36,4 +37,5 @@ test('legacy common rules remain visible during the migration and are explicitly
  assert(html.includes('Отзывы и вопросы (старое правило)'));
  assert(html.includes('EIKOSHA'));
  assert(html.includes('disabled'));
+ assert(html.includes('Предложить сохранение'));
 });

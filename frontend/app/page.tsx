@@ -238,7 +238,7 @@ export default function App() {
   useEffect(()=>{for(const job of jobs)if(!jobStatuses.current[job.id])jobStatuses.current[job.id]=job.status},[jobs]);
   useEffect(() => {
     if (!logged || !['Настройки','Отзывы','Вопросы'].includes(page)) return;
-    const poller=createBackgroundPoller({load:()=>Promise.all([api('/jobs'),api('/auto-replies/status')]),isVisible:()=>document.visibilityState==='visible',isActive:()=>activeJobs.current,onValue:async([items,status]:[Row[],Row])=>{
+    const poller=createBackgroundPoller({load:()=>Promise.all([api('/jobs?compact=true'),api('/auto-replies/status')]),isVisible:()=>document.visibilityState==='visible',isActive:()=>activeJobs.current,onValue:async([items,status]:[Row[],Row])=>{
       activeJobs.current=items.some((job:Row)=>['queued','running'].includes(job.status));
       setBatchJob(current=>current?(items as Row[]).find(item=>item.id===current.id)||current:(items as Row[]).find(item=>item.result?.manual_batch&&item.result?.account_id===stores.active&&item.result?.requested_by===currentUser.id&&['queued','running'].includes(item.status))||null);
       const finished=(items as Row[]).some(job=>['queued','running'].includes(jobStatuses.current[job.id])&&['completed','failed','interrupted','cancelled'].includes(job.status)&&['drafts','question_drafts'].includes(job.kind));

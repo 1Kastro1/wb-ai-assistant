@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import shutil
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import uuid4, uuid5, NAMESPACE_URL
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -39,8 +39,21 @@ from .maintenance import backup, portable_backup, portable_restore, portable_ver
 from . import voice
 from .activity_history import activity_page, rule_details
 from .generation_monitor import generation_metrics
+from .read_cache import cached_read, clear_reads
+from .process_lock import ProcessLock
 from .reviewed_knowledge import product_scope,product_owned,knowledge_report,refresh_reviewed_knowledge
 from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vehicle_identifiers, vin_key, oem_numbers, fitment_answer, save_question_evidence
+
+
+def recover_inflight_publications(db):
+    for action in db.scalars(select(Action).where(Action.status == 'executing')):
+        action.status = 'needs_review'
+        action.result = {'message': 'Работа была прервана. Сверьте результат с WB до дальнейших действий.'}
+    for publication in db.scalars(select(Publication).where(Publication.status == 'in_flight')):
+        publication.status = 'uncertain'
+        review = db.get(Review, publication.review_id)
+        if review:
+            review.status = 'manual_review'
 
 
 @asynccontextmanager
@@ -57,6 +70,13 @@ async def lifespan(app):
             db.add(User(id='owner', username='owner', display_name='Владелец', password_hash=legacy_hash, role='owner', position='Владелец', permissions=['*'], store_ids=['*'], enabled=True, must_change_password=False))
         if not setting(db, 'active_store'):
             set_setting(db, 'active_store', 'owner')
+        if os.environ.get('WB_BACKGROUND_ROLE') == 'api':
+            recover_inflight_publications(db)
+        db.commit()
+    if os.environ.get('WB_BACKGROUND_ROLE') == 'api':
+        yield
+        return
+    with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
@@ -68,13 +88,8 @@ async def lifespan(app):
                 job.status, job.result = 'interrupted', {**(job.result or {}), 'message':'Приложение перезапущено; повторите задание'}
         for job in db.scalars(select(Job).where(Job.status == 'completed', Job.progress < 100)):
             job.progress = 100
-        for action in db.scalars(select(Action).where(Action.status == 'executing')):
-            action.status = 'needs_review'
-            action.result = {'message':'Работа была прервана. Сверьте результат с WB до дальнейших действий.'}
-        for publication in db.scalars(select(Publication).where(Publication.status == 'in_flight')):
-            publication.status = 'uncertain'
-            review = db.get(Review,publication.review_id)
-            review.status = 'manual_review'
+        if os.environ.get('WB_BACKGROUND_ROLE') != 'worker':
+            recover_inflight_publications(db)
         db.commit()
     scheduler_task = asyncio.create_task(scheduler_loop())
     queue_task = asyncio.create_task(run_job_queue())
@@ -110,6 +125,8 @@ async def boundary(request, call_next):
         return JSONResponse({'detail': 'Нужен локальный Origin'}, 403)
     response = await call_next(request)
     actor = getattr(request.state, 'actor', None)
+    if request.method in ('POST', 'PATCH', 'DELETE') and response.status_code < 400:
+        clear_reads()
     if actor and request.method in ('POST', 'PATCH', 'DELETE') and response.status_code < 400:
         try:
             with Session() as audit_db:
@@ -993,7 +1010,7 @@ async def ollama_status(auth: AUTH):
 
 sync_lock = asyncio.Lock()
 job_dispatch_lock = asyncio.Lock()
-maintenance_lock = asyncio.Lock()
+maintenance_lock = ProcessLock('maintenance')
 sync_schedule_lock = asyncio.Lock()
 
 
@@ -1209,6 +1226,8 @@ async def execute_job(job_id):
 
 
 async def run_job_queue():
+    if os.environ.get('WB_BACKGROUND_ROLE') == 'api':
+        return  # The persistent worker consumes committed jobs, including after a crash.
     async with job_dispatch_lock:
         while True:
             with Session() as db:
@@ -1428,7 +1447,22 @@ def preview_all_drafts(auth: AUTH, db: DB):
 
 
 @app.get('/jobs')
-def jobs(auth: AUTH, db: DB):
+def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
+    if compact:
+        fields = ('account_id', 'requested_by', 'manual_batch', 'operation_key', 'total', 'processed', 'failed',
+                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures')
+        columns = [column for column in Job.__table__.columns if column.name != 'result']
+        query = select(*columns, *(Job.result[key].label('r_' + key) for key in fields))
+        if auth['role'] != 'owner':
+            query = query.where(Job.result['account_id'].as_string() == active_store(db, auth))
+        rows = []
+        for row in db.execute(query.order_by(Job.created_at.desc()).limit(100)).mappings():
+            rows.append({**{column.name: row[column.name] for column in columns},
+                         'result': {key: row['r_' + key] for key in fields if row['r_' + key] is not None}})
+        etag = '"' + hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest() + '"'
+        if request.headers.get('if-none-match') == etag:
+            return Response(status_code=304, headers={'ETag': etag})
+        return JSONResponse(rows, headers={'ETag': etag})
     rows = list(db.scalars(select(Job).order_by(Job.created_at.desc()).limit(100)))
     if auth['role'] != 'owner':
         active = active_store(db, auth)
@@ -1485,7 +1519,12 @@ def get_job(jid: str, auth: AUTH, db: DB):
 
 @app.get('/sync/status')
 def sync_status(auth: AUTH, db: DB):
-    jobs = list(db.scalars(select(Job).where(Job.kind.in_(['products', 'reviews', 'questions'])).order_by(Job.created_at.desc()).limit(1000)))
+    ranked = select(Job.id, func.row_number().over(
+        partition_by=(Job.kind, Job.status, Job.result['account_id'].as_string()),
+        order_by=(Job.created_at.desc(), Job.id.desc())).label('rank')).where(
+            Job.kind.in_(['products', 'reviews', 'questions'])).subquery()
+    jobs = list(db.scalars(select(Job).join(ranked, Job.id == ranked.c.id).where(ranked.c.rank == 1)
+                          .order_by(Job.created_at.desc(), Job.id.desc())))
     result = []
     for store in db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)):
         kinds = {}
@@ -1550,7 +1589,8 @@ def reviews_available_filters(auth: AUTH, db: DB):
 
 @app.get('/reviews/counts')
 def review_counts(auth: AUTH, db: DB, q: str = ''):
-    return review_filter_counts(db, q=q, account_id=active_store(db, auth))
+    store = active_store(db, auth)
+    return cached_read(db, ('review-counts', store, q), lambda: review_filter_counts(db, q=q, account_id=store))
 
 
 @app.get('/drafts/{did}')
@@ -1773,11 +1813,18 @@ def product_fact_delete(pid: str, fact_index: int, auth: MARKET_OPERATOR, db: DB
 
 @app.get('/analytics')
 def stats(auth: AUTH, db: DB, days: int = 0, product_id: str = ''):
-    return analytics(db, days, product_id, active_store(db, auth))
+    store = active_store(db, auth)
+    return cached_read(db, ('analytics', store, days, product_id), lambda: analytics(db, days, product_id, store))
 
 
 @app.get('/analytics/marketplaces')
 def marketplace_stats(auth: AUTH, db: DB, days: int = 0):
+    key = ('marketplaces', max(0, min(days, 365)), auth['role'],
+           tuple(sorted(auth.get('store_ids') or [])), tuple(sorted(auth.get('permissions') or [])))
+    return cached_read(db, key, lambda: _marketplace_stats(auth, db, days))
+
+
+def _marketplace_stats(auth, db, days=0):
     days = max(0, min(days, 365))
     allowed = auth.get('store_ids') or []
     stores = list(db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)))
@@ -2125,6 +2172,37 @@ class MemoryInput(Payload):
     text: str = Field(min_length=2, max_length=2000)
     kind: Literal['GLOBAL_RULE', 'REVIEW_RULE', 'QUESTION_RULE'] = 'REVIEW_RULE'
     scope: str = 'global'
+
+
+class CreateMemoryInput(MemoryInput):
+    kind: Literal['REVIEW_RULE', 'QUESTION_RULE']
+    operation_id: str = Field(min_length=16, max_length=100, pattern=r'^[a-zA-Z0-9-]+$')
+
+
+@app.post('/memory')
+def create_memory(body: CreateMemoryInput, request: Request, auth: OWNER, db: DB):
+    value, scope = body.text.strip(), body.scope.strip()
+    if len(value) < 2 or not re.fullmatch(r'global|(?:brand|product|category):\S[^\r\n]*', scope):
+        raise HTTPException(422, 'Введите текст правила и область применения')
+    mid = str(uuid5(NAMESPACE_URL, 'memory:' + auth['user_id'] + ':' + body.operation_id))
+    item = db.get(Memory, mid)
+    if item and (item.text, item.kind, item.scope) != (value, body.kind, scope):
+        raise HTTPException(409, 'Этот запрос уже использован для другого правила')
+    if not item:
+        item = Memory(id=mid, text=value, kind=body.kind, scope=scope, enabled=True)
+        db.add(item)
+        actor = db.get(User, auth['user_id'])
+        set_setting(db, 'memory-meta:' + mid, {'created_at': now(),
+                    'created_by_name': actor.display_name if actor else auth.get('username', '')})
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            item = db.get(Memory, mid)
+            if not item or (item.text, item.kind, item.scope) != (value, body.kind, scope):
+                raise HTTPException(409, 'Правило изменилось; обновите страницу') from None
+    request.state.activity_details = rule_details(public(item), 'rule_added')
+    return {**public(item), **setting(db, 'memory-meta:' + mid, {})}
 
 
 @app.post('/memory/propose')
