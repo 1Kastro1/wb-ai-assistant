@@ -164,6 +164,10 @@ def test_every_rule_group_is_checked_and_partial_success_is_not_ready(monkeypatc
             raise TimeoutError()
         return {'compliant': True, 'violations': [], 'revised_answer': ''}
     monkeypatch.setattr(ollama, 'structured', interrupted)
+    # A new model run must start fresh; identical successful inputs otherwise
+    # legitimately reuse the prior complete verdict.
+    from app.rule_execution import clear_verdicts
+    clear_verdicts()
     _, quality = asyncio.run(enforce_owner_rules('Добрый день! Спасибо за оценку.', row,
         SimpleNamespace(name='Ароматизатор'), rules, [], lambda text: {'passed': True}))
     assert quality['verified_groups'] == 1 and not quality['passed'] and not quality['checked']

@@ -17,6 +17,8 @@ from app.safety import classify
 
 @pytest.fixture(autouse=True)
 def fresh():
+    from app.rule_execution import clear_verdicts
+    clear_verdicts()
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     login_attempts.clear()
