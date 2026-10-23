@@ -18,7 +18,7 @@ from .db import Session, Setting, setting, set_setting, IS_SQLITE
 PORTABLE_MAGIC = b'WBAIPORT1'
 PORTABLE_HEADER = len(PORTABLE_MAGIC) + 16 + 12
 
-SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,13))
+SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,14))
 AUTH_TABLES=('wb_accounts','sessions','users','registration_requests','team_invites')
 
 
@@ -30,6 +30,9 @@ def _strip_authentication(connection):
     for table in AUTH_TABLES:
         if _table_exists(connection,table):connection.execute('DELETE FROM '+table)
     connection.execute("DELETE FROM app_settings WHERE key='password_hash'")
+    # Runtime leases must never block resumed work after restoring a copy.
+    if _table_exists(connection, 'generation_claims'):
+        connection.execute('DELETE FROM generation_claims')
 
 
 def _enrollment_snapshot(connection):
