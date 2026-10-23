@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from app.review_cases import specific_review_case
 from app.product_guidance import product_usage_reply, battery_voltage_answer, usage_excerpt
-from app.reply_policy import analyze_customer_message, missing_complaints
+from app.reply_policy import analyze_customer_message, missing_complaints, has_redundant_clarification
 from app.safety import rule_reply, validate_reply, review_intent, cleaner_effectiveness_complaint
 
 
@@ -20,7 +20,7 @@ class SpecificReviewDetailsTests(unittest.TestCase):
         tree = ast.parse((app_path / 'services.py').read_text(encoding='utf-8'))
         nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('assess_reply', '_addresses_review_topic')]
         namespace = dict(specific_review_case=specific_review_case, re=re, WORDS=re.compile(r'[а-яё0-9]{4,}', re.I), analyze_customer_message=analyze_customer_message,
-                         missing_complaints=missing_complaints, review_intent=review_intent, usage_excerpt=usage_excerpt,
+                         missing_complaints=missing_complaints, has_redundant_clarification=has_redundant_clarification, review_intent=review_intent, usage_excerpt=usage_excerpt,
                          cleaner_effectiveness_complaint=cleaner_effectiveness_complaint, INTENT_LABELS={'GENERAL':'Общий'},
                          MIN_DRAFT_QUALITY=96, QUALITY_EVALUATOR_VERSION='test', now=lambda:'test')
         exec(compile(ast.Module(body=nodes,type_ignores=[]),'<quality>','exec'),namespace)

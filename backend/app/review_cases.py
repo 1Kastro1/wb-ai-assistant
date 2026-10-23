@@ -30,6 +30,15 @@ def specific_review_case(review, product):
 
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
+    if analysis.get('sprayer_replaced') and set(analysis['complaints']) & {'LEAKAGE','DAMAGED_ITEM','QUALITY_ISSUE'}:
+        praise = 'Спасибо, что отметили хороший результат очистки. ' if re.search(r'очища\w*\s+хорош|моет\s+хорош|отмыва\w*\s+хорош', text) else ''
+        problems = ['поломку распылителя']
+        if 'LEAKAGE' in analysis['complaints']: problems.append('протечку')
+        if 'PACKAGING_ISSUE' in analysis['complaints']: problems.append('состояние упаковки')
+        answer = praise+'Приносим извинения за '+', '.join(problems)+'. Вы уже заменили распылитель и сообщили о результате; повторно описывать проблему не нужно. '
+        answer += 'Если фотографии флакона, распылителя и упаковки сохранились, приложите их к обращению через полученный заказ для проверки ситуации.'
+        if 'LEAKAGE' in analysis['complaints']: answer += ' Повреждённый или продолжающий протекать флакон не используйте до проверки.'
+        return result('replaced_sprayer', answer)
     # A date complaint must not fall through to cleaner usage advice. The owner
     # supplied the Korean YY.MM.DD convention; require the package to confirm it.
     if getattr(product, 'brand', '').strip().upper() == 'KANGAROO' and re.search(r'просроч|годност|дата.*изготов|изготовлено', text):

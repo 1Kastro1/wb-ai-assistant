@@ -59,7 +59,7 @@ COMPLAINT_PATTERNS = {
     'WRONG_ITEM': ('не тот товар', 'другой товар', 'пришел не тот', 'прислали не тот'),
     'MISSING_PARTS': ('не хватает', 'нет детал', 'неполная комплектац', 'не доложили', 'недостает'),
     'DAMAGED_ITEM': ('сломал', 'сломан', 'разбит', 'товар поврежд', 'товар помят', 'трещин'),
-    'QUALITY_ISSUE': ('плохое качество', 'не работает', 'неисправ', 'дефект', 'слабая искра', 'криво бьет', 'быстро выш'),
+    'QUALITY_ISSUE': ('плохое качество', 'не работает', 'нерабоч', 'неисправ', 'дефект', 'слабая искра', 'криво бьет', 'быстро выш'),
     'PACKAGING_ISSUE': ('упаковка поврежд', 'упаковка помят', 'коробка помят', 'плохо упакован', 'упаковали плохо', 'упаковка вскрыт', 'крышка без заводской защиты', 'одета криво'),
     'LEAKAGE': ('протек', 'потек', 'протеч'),
     'RESIDUE': ('белые разводы', 'жирный слой', 'вазелиновое состояние'),
@@ -76,7 +76,7 @@ TOPIC_WORDS = {
     'WRONG_ITEM': ('не тот', 'другой товар', 'выбранный товар'),
     'MISSING_PARTS': ('комплект', 'недоста', 'не хватает', 'элемент', 'детал'),
     'DAMAGED_ITEM': ('поврежд', 'разбит', 'сломан', 'сломал', 'поломк', 'трещин'),
-    'QUALITY_ISSUE': ('качеств', 'неисправ', 'дефект', 'искр', 'работ'),
+    'QUALITY_ISSUE': ('качеств', 'неисправ', 'дефект', 'искр', 'работ', 'поломк'),
     'PACKAGING_ISSUE': ('упаков', 'коробк'),
     'LEAKAGE': ('протеч', 'протек', 'потек'),
     'RESIDUE': ('развод', 'жирный слой'),
@@ -98,6 +98,8 @@ def analyze_customer_message(text, rating=None):
             return any(not re.search(r'(?<!\w)(?:не|без)\s*$', value[:match.start()]) for match in re.finditer(r'(?<!\w)' + re.escape(marker), value))
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
+    if re.search(r'упакован\w*\s+(?:отвратительн\w*|плохо|ужасн\w*)|дран\w*\s+пакет', value) and 'PACKAGING_ISSUE' not in complaints:
+        complaints.append('PACKAGING_ISSUE')
     if quantity_shortage(text) and 'MISSING_PARTS' not in complaints:
         complaints.append('MISSING_PARTS')
     if yellow_light_complaint(text) and 'DIM_LIGHT' not in complaints:complaints.append('DIM_LIGHT')
@@ -119,7 +121,27 @@ def analyze_customer_message(text, rating=None):
         'requested_information': text.strip() if question else '',
         'buyer_asks_about_money': financial,
         'cause_confirmed': False,
+        'sprayer_replaced': bool(re.search(r'(?:поменял\w*|заменил\w*)\s+(?:(?:его|распылитель)\s+)?на\s+нов\w*|(?:поменял\w*|заменил\w*)\s+распылитель', value)) and 'распылител' in value,
+        'buyer_text': text,
     }
+
+
+# Broad requests to retell a known complaint are different from a targeted
+# request for a missing VIN, surface, batch/photo or installation detail.
+REDUNDANT_CLARIFICATION = re.compile(
+    r'[^.!?\n]*(?:уточните|расскажите|опишите|подскажите|сообщите)[^.!?\n]*'
+    r'(?:что\s+именно[^.!?\n]*(?:не\s+устроило|не\s+понравилось)|'
+    r'какие\s+свойства[^.!?\n]*не\s+устроили|в\s+ч[её]м\s+(?:проявилась|заключается)\s+проблема|'
+    r'(?:детали|подробности|суть|причину)\s+(?:Вашей\s+)?(?:проблемы|жалобы|недовольства)|'
+    r'(?:ситуацию|проблему))[^.!?\n]*[.!?]?', re.I)
+
+
+def has_redundant_clarification(reply, buyer_text):
+    return bool(analyze_customer_message(buyer_text)['complaints'] and REDUNDANT_CLARIFICATION.search(reply))
+
+
+def remove_redundant_clarification(reply, buyer_text):
+    return REDUNDANT_CLARIFICATION.sub('', reply) if analyze_customer_message(buyer_text)['complaints'] else reply
 
 
 def missing_complaints(analysis, reply):
@@ -157,5 +179,14 @@ def contextual_complaint_reply(analysis, revision=0):
     if not details:
         return None
     thanks = ('Спасибо за обратную связь.', 'Благодарим, что рассказали о ситуации.', 'Спасибо за Ваш отзыв.')[revision % 3]
-    ending = 'Для дополнительной проверки можно обратиться в официальную поддержку маркетплейса.' if analysis['buyer_asks_about_money'] else 'Для проверки уточните, пожалуйста, детали проблемы; при необходимости обратитесь в официальную поддержку маркетплейса.'
+    if analysis['buyer_asks_about_money']:
+        ending = 'Для дополнительной проверки можно обратиться в официальную поддержку маркетплейса.'
+    elif set(analysis['complaints']) & {'DAMAGED_ITEM','QUALITY_ISSUE','PACKAGING_ISSUE','LEAKAGE','WRONG_ITEM','MISSING_PARTS'}:
+        ending = 'Если фотографии товара, маркировки и упаковки сохранились, приложите их к обращению через полученный заказ для проверки ситуации.'
+        if analysis.get('sprayer_replaced'):
+            ending = 'Вы уже заменили распылитель; повторять эту проверку не нужно. ' + ending
+        if 'LEAKAGE' in analysis['complaints']:
+            ending += ' Повреждённый или продолжающий протекать флакон не используйте до проверки.'
+    else:
+        ending = 'Для проверки обращения можно передать маркировку товара и имеющиеся фотографии через полученный заказ в официальную поддержку маркетплейса.'
     return 'Здравствуйте! ' + thanks + ' Приносим извинения за то, что ' + '; '.join(details) + '. ' + ending
