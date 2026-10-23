@@ -1,4 +1,5 @@
 'use client';
+import {AnimatedNumber} from './WorkspaceMotion';
 import AppIcon from './AppIcon';
 import ActionButton from './ActionButton';
 
@@ -9,5 +10,5 @@ export default function HomeWelcome({store,busy,onReviews,onQueue,onApproval,onR
 export function HomeQualityScore({score}:{score?:number}){
  const known=typeof score==='number';
  const value=Math.max(0,Math.min(100,Number(score)||0));
- return <div className="home-quality"><svg viewBox="0 0 120 120" role="img" aria-label={known?'Средняя оценка качества: '+value+' из 100':'Оценка качества пока не загружена'}><circle cx="60" cy="60" r="49" fill="none" stroke="#edf0f8" strokeWidth="8"/><circle cx="60" cy="60" r="49" fill="none" stroke="#7e57cd" strokeWidth="8" strokeLinecap="round" pathLength="100" strokeDasharray={`${value} 100`} transform="rotate(-90 60 60)"/></svg><div><strong>{known?value:'—'}</strong><span>из 100</span></div><p>Средняя оценка<br/>подготовленных ответов</p></div>;
+ return <div className="home-quality"><svg viewBox="0 0 120 120" role="img" aria-label={known?'Средняя оценка качества: '+value+' из 100':'Оценка качества пока не загружена'}><circle cx="60" cy="60" r="49" fill="none" stroke="#edf0f8" strokeWidth="8"/><circle cx="60" cy="60" r="49" fill="none" stroke="#7e57cd" strokeWidth="8" strokeLinecap="round" pathLength="100" strokeDasharray={`${value} 100`} transform="rotate(-90 60 60)"/></svg><div><strong><AnimatedNumber value={known?value:undefined}/></strong><span>из 100</span></div><p>Средняя оценка<br/>подготовленных ответов</p></div>;
 }
