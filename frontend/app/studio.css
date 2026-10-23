@@ -87,6 +87,8 @@ body { color: var(--ink); background: var(--canvas); -webkit-font-smoothing: ant
 .shell .segmented,.shell .settings-tabs { padding: 5px; border: 1px solid #e4e1ee; border-radius: 14px; background: #eaeaf3a8; gap: 5px; }
 .shell .segmented button,.shell .settings-tabs button { border-radius: 10px; min-height: 40px; color: #6d6680; background: transparent; border-color: transparent; }
 .shell .segmented button.active,.shell .segmented button[aria-pressed=true],.shell .segmented button[aria-selected=true],.shell .settings-tabs button.active,.shell .settings-tabs button[aria-selected=true] { color: #6943b2; background: #fff; border: 1px solid #e0d7f1; box-shadow: 0 3px 9px #4b336c08; }
+.shell .settings-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.shell .settings-tabs button { flex: 1 0 auto; min-width: 112px; padding: 11px 13px; white-space: nowrap; }
 .shell .pill { font-size: 11px; line-height: 1.4; font-weight: 600; letter-spacing: 0; padding: 5px 9px; border-radius: 7px; }
 .shell .pill.green { color: #26755f; background: #e9f6ef; }
 .shell .pill.amber { color: #99601d; background: #fff2dd; }
