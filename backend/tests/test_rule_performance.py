@@ -140,3 +140,27 @@ def test_maintenance_lock_waits_and_cancellation_releases_descriptor():
         async with second:
             pass
     asyncio.run(run())
+
+
+def test_every_rule_group_is_checked_and_partial_success_is_not_ready(monkeypatch):
+    import json
+    from app.integrations import ollama
+    rules = ['Требование ' + str(i) + ': ' + 'соблюдай условия. ' * 70 for i in range(3)]
+    seen = []
+    async def check(messages, *args, **kwargs):
+        seen.extend(json.loads(messages[-1]['content'])['owner_rules'])
+        return {'compliant': True, 'violations': [], 'revised_answer': ''}
+    monkeypatch.setattr(ollama, 'structured', check)
+    row = SimpleNamespace(text='', rating=5, marketplace='ozon')
+    _, quality = asyncio.run(enforce_owner_rules('Добрый день! Спасибо за оценку.', row,
+        SimpleNamespace(name='Ароматизатор'), rules, [], lambda text: {'passed': True}))
+    assert seen == rules
+    assert quality['passed'] and quality['verified_groups'] == quality['semantic_groups'] == 3
+    async def interrupted(messages, *args, **kwargs):
+        if json.loads(messages[-1]['content'])['owner_rules'] == [rules[1]]:
+            raise TimeoutError()
+        return {'compliant': True, 'violations': [], 'revised_answer': ''}
+    monkeypatch.setattr(ollama, 'structured', interrupted)
+    _, quality = asyncio.run(enforce_owner_rules('Добрый день! Спасибо за оценку.', row,
+        SimpleNamespace(name='Ароматизатор'), rules, [], lambda text: {'passed': True}))
+    assert quality['verified_groups'] == 1 and not quality['passed'] and not quality['checked']
