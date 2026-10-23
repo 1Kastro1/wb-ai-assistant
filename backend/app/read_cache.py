@@ -6,18 +6,21 @@ from time import monotonic
 
 _values = OrderedDict()
 _lock = RLock()
+_generation = 0
 
 
 def clear_reads():
-    with _lock:
-        _values.clear()
+    # Called from HTTP middleware: never wait on a long-running statistics query
+    # in a request thread. Old generations are bounded by the same LRU limit.
+    global _generation
+    _generation += 1
 
 
 def cached_read(db, key, load, seconds=5):
     # SQLite tools/tests retain immediate read-your-writes semantics.
     if db.bind.dialect.name != 'postgresql':
         return load()
-    key = (id(db.bind), *key)
+    key = (id(db.bind), _generation, *key)
     # Single-flight: colleagues opening the same dashboard share one calculation.
     with _lock:
         current = _values.get(key)
