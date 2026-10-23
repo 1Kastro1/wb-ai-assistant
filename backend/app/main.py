@@ -1362,24 +1362,43 @@ async def schedule_sync(kind: str, background: BackgroundTasks, auth: AUTH, db: 
     return public(job)
 
 
+selected_drafts_lock = asyncio.Lock()
+
+
+class AllDraftsInput(Payload):
+    manual_start: bool = False
+
+
 @app.post('/jobs/drafts')
-async def schedule_all_drafts(background: BackgroundTasks, auth: AUTH, db: DB):
+async def schedule_all_drafts(background: BackgroundTasks, auth: AUTH, db: DB, body: AllDraftsInput | None = None):
     can(auth, 'assistant:use')
     active = active_store(db, auth)
     store = db.get(StoreProfile, active)
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
-    existing = db.scalar(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), func.coalesce(Job.result['account_id'].as_string(), 'owner') == active))
-    if existing:
-        return public(existing)
-    job = Job(id=str(uuid4()), kind='drafts', priority=50, result={'account_id': active, 'message': 'Подготовка ответов поставлена в очередь'})
-    db.add(job)
-    db.commit()
-    background.add_task(run_job_queue)
-    return public(job)
-
-
-selected_drafts_lock = asyncio.Lock()
+    manual = bool(body and body.manual_start)
+    if manual and not setting(db, 'assistant_enabled', True):
+        raise ValueError('Сначала включите ассистента')
+    async with selected_drafts_lock:
+        pending = db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.cancel_requested == False, func.coalesce(Job.result['account_id'].as_string(), 'owner') == active).order_by(Job.created_at.asc()))
+        for existing in pending:
+            # A page selection or a date-limited scheduled run cannot stand in
+            # for an explicit request to process the entire store.
+            if manual and ((existing.result or {}).get('selected_ids') or (existing.result or {}).get('since')):
+                continue
+            background.add_task(run_job_queue)
+            return public(existing)
+        result = {'account_id': active, 'message': 'Подготовка ответов поставлена в очередь'}
+        if manual:
+            total = db.scalar(select(func.count()).select_from(Review).outerjoin(Draft, Draft.review_id == Review.id).where(
+                Review.wb_account_id == active, Review.is_answered == False,
+                Review.status != 'publishing', ~Review.marketplace.like('%_question'), Draft.id.is_(None))) or 0
+            result.update(manual_batch=True, requested_by=auth['user_id'], total=total, processed=0, failed=0)
+        job = Job(id=str(uuid4()), kind='drafts', priority=45 if manual else 50, result=result)
+        db.add(job)
+        db.commit()
+        background.add_task(run_job_queue)
+        return public(job)
 
 
 class SelectedDraftsInput(Payload):
