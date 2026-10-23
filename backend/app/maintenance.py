@@ -18,7 +18,7 @@ from .db import Session, Setting, setting, set_setting, IS_SQLITE
 PORTABLE_MAGIC = b'WBAIPORT1'
 PORTABLE_HEADER = len(PORTABLE_MAGIC) + 16 + 12
 
-SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,12))
+SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,13))
 AUTH_TABLES=('wb_accounts','sessions','users','registration_requests','team_invites')
 
 

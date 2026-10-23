@@ -21,7 +21,7 @@ def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requ
     encrypted.write_bytes(exported.content);_decrypt_portable(encrypted,decrypted,PASSWORD)
     _check_backup_database(decrypted)
     with sqlite3.connect(decrypted) as check:
-        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0011'
+        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0012'
         for table in ('users','sessions','registration_requests','team_invites'):
             assert check.execute('SELECT count(*) FROM '+table).fetchone()[0]==0
     restored=client.post('/portable/restore',data={'password':PASSWORD},files={'file':('shop.wbai',exported.content,'application/octet-stream')})
