@@ -66,6 +66,20 @@ def test_low_rating_without_text_may_ask_for_reason():
     assert not has_redundant_clarification('Подскажите, что именно Вас не устроило?', '')
 
 
+def test_repair_clears_only_resolved_complaint_warnings(monkeypatch):
+    from app.integrations import ollama
+    fixed = 'Добрый день! Спасибо за отзыв. Извините за повреждение товара, неисправность распылителя, протечку и состояние упаковки. Передайте имеющиеся фотографии через заказ для проверки.'
+    judge = AsyncMock(side_effect=[{'compliant':False,'violations':['Не учтена упаковка'],'revised_answer':fixed},
+                                  {'compliant':True,'violations':[],'revised_answer':''}])
+    monkeypatch.setattr(ollama,'structured',judge)
+    review=SimpleNamespace(text=BUYER,rating=4,risk='NORMAL',marketplace='wb')
+    product=SimpleNamespace(name='Fine Glass')
+    answer,quality=asyncio.run(enforce_owner_rules('Добрый день! Спасибо за отзыв. Извините за повреждение и протечку.',review,product,
+        ['Учитывай каждую жалобу покупателя.'],[],lambda _: {'passed':True}))
+    assert answer==fixed
+    assert quality['passed'] and not quality['issues']
+
+
 @pytest.mark.parametrize('text', ['Флакон протёк, упаковка помята.',
     'Пришёл другой товар, не хватает деталей.', 'Товар сломан и не работает.'])
 def test_fallback_addresses_known_complaints_without_retelling_request(text):

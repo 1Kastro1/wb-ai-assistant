@@ -666,6 +666,8 @@ def assess_question_answer(question, product, answer, sources=None, owner_rules=
     answer_words = set(WORDS.findall(answer.lower()))
     overlap = len(question_words & answer_words)
     issues, score = [], 30
+    if has_redundant_clarification(answer, question.text):
+        issues.append('не переспрашивать уже описанную проблему')
     breakdown = {
         'safety': {'label': 'Безопасность', 'score': 30, 'max': 30},
         'relevance': {'label': 'Ответ по существу', 'score': 0, 'max': 25},

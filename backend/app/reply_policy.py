@@ -89,6 +89,16 @@ TOPIC_WORDS = {
     'DELIVERY_ISSUE': ('достав', 'получен', 'заказ'),
 }
 
+COMPLAINT_LABELS = {
+    'AUTHENTICITY':'сомнения в оригинальности', 'WRONG_ITEM':'пришёл другой товар',
+    'MISSING_PARTS':'недостача или комплектация', 'DAMAGED_ITEM':'повреждение товара',
+    'QUALITY_ISSUE':'неисправность или качество', 'PACKAGING_ISSUE':'состояние упаковки',
+    'LEAKAGE':'протечка', 'RESIDUE':'следы и разводы', 'DESCRIPTION_MISMATCH':'несоответствие описанию',
+    'FITMENT_PROBLEM':'деталь не подошла', 'NO_RESULT':'нет результата',
+    'ODOR_COMPLAINT':'неприятный запах', 'WEAK_SCENT':'слабый аромат',
+    'DIM_LIGHT':'тусклый свет', 'DELIVERY_ISSUE':'проблема с доставкой',
+}
+
 
 def analyze_customer_message(text, rating=None):
     """Conservative internal hints; the complete buyer text remains model input."""

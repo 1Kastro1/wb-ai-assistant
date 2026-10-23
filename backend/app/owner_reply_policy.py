@@ -7,7 +7,7 @@ from time import monotonic
 
 from .plain_text import plain_text
 from .safety import mask_vin, validate_reply
-from .reply_policy import has_redundant_clarification, remove_redundant_clarification, analyze_customer_message, missing_complaints
+from .reply_policy import has_redundant_clarification, remove_redundant_clarification, analyze_customer_message, missing_complaints, COMPLAINT_LABELS
 from .rule_execution import select_rules, positive_template, verification_key, cached_verdict, remember_verdict
 
 
@@ -150,7 +150,7 @@ def local_issues(reply, rules, review=None):
     if rules and review is not None and not (getattr(review, 'marketplace', '') or '').endswith('_question'):
         analysis = analyze_customer_message(review.text, getattr(review, 'rating', None))
         for topic in missing_complaints(analysis, reply):
-            issues.append('Не учтено замечание покупателя: ' + topic)
+            issues.append('Не учтено замечание покупателя: ' + COMPLAINT_LABELS.get(topic, topic))
     return issues
 
 
@@ -206,6 +206,9 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         result.update(checked=False)
         result['issues'].append('Проверьте дополнительные правила магазина: вывод каталога или предупреждение безопасности сохранены без переформулировки.')
     elif semantic:
+        # A model repair may resolve the initial local defects. Recompute them
+        # against the final text below instead of retaining stale warnings.
+        result['issues'] = []
         groups = rule_groups(semantic)
         result['semantic_groups'] = len(groups)
         messages = [
