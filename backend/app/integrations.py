@@ -31,7 +31,7 @@ class OllamaProvider:
         body = {**ModelRouter().choose(task or ('FAST' if schema else 'STANDARD')), 'messages': messages, 'stream': False, 'think': False}
         # Cyrillic policy lists need substantially more tokens than English text.
         # Never silently truncate the beginning (system instructions / conditions).
-        estimated = sum(len(message.get('content', '').encode('utf-8')) for message in messages) // 2
+        estimated = sum(len(message.get('content', '').encode('utf-8')) for message in messages) // 3
         needed = estimated + body['options']['num_predict'] + 512
         if needed > 16384:
             raise ValueError('Правила слишком длинные для контекста модели; сократите повторы или область применения')
@@ -39,6 +39,8 @@ class OllamaProvider:
         if schema:
             body['format'] = schema
         result = await guard.request('ollama', 'chat', body=body)
+        if result.get('prompt_eval_count', 0) >= body['options']['num_ctx'] - 8:
+            raise ValueError('Контекст модели переполнен; сократите повторяющиеся правила или их область применения')
         content = result['message']['content']
         # Some installed Qwen templates include reasoning in content despite think=false.
         if '</think>' in content:

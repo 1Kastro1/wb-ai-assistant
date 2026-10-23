@@ -108,11 +108,11 @@ def test_model_context_keeps_long_cyrillic_rules(monkeypatch):
     message = 'я' * 10000
     asyncio.run(ollama.chat([{'role': 'user', 'content': message}], task='OWNER_RULES'))
     body = request.call_args.kwargs['body']
-    assert 12000 <= body['options']['num_ctx'] <= 16384
+    assert 8192 <= body['options']['num_ctx'] <= 16384
     assert body['messages'][0]['content'].startswith(message)
     import pytest
     with pytest.raises(ValueError, match='слишком длинные'):
-        asyncio.run(ollama.chat([{'role': 'user', 'content': 'я' * 20000}], task='OWNER_RULES'))
+        asyncio.run(ollama.chat([{'role': 'user', 'content': 'я' * 30000}], task='OWNER_RULES'))
     assert request.await_count == 1
 
 

@@ -217,6 +217,8 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         except Exception as error:
             result.update(checked=False)
             reason = 'истекло время проверки' if isinstance(error, TimeoutError) else 'модель вернула некорректную проверку' if isinstance(error, (ValueError, KeyError, TypeError)) else 'сервис проверки недоступен'
+            if isinstance(error, ValueError) and str(error).startswith(('Правила слишком длинные', 'Контекст модели переполнен')):
+                reason = 'объём правил превышает контекст модели; сократите повторы или область применения'
             result['reason'] = reason
             result['issues'].append('Не удалось проверить правила: ' + reason + '. Ответ сохранён; повторите подготовку.')
     result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules)))
