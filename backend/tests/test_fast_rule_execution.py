@@ -1,5 +1,7 @@
 import asyncio
+import json
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,6 +18,7 @@ SIGNATURE = 'В конце ответа на отзыв добавляй под�
 REVIEWED = 'Пиши кратко и доброжелательно, не выдумывай свойства товара.'
 PARTS = 'Применяй только к автозапчастям: учитывай ось и сторону установки.'
 UNKNOWN = 'Всегда сообщай точный код упаковки из карточки.'
+CURRENT_POLICIES = json.loads((Path(__file__).parent/'fixtures/positive_rating_rules.json').read_text(encoding='utf-8'))
 
 
 @pytest.fixture
@@ -189,3 +192,59 @@ def test_cache_is_bounded_and_expires(monkeypatch):
     assert execution.cached_verdict(str(execution.CACHE_LIMIT))
     clock[0]+=execution.CACHE_SECONDS+1
     assert execution.cached_verdict(str(execution.CACHE_LIMIT)) is None
+
+
+@pytest.mark.parametrize('marketplace', ['wb', 'ozon', 'yandex'])
+@pytest.mark.parametrize('rating', [4, 5])
+def test_current_category_policies_do_not_send_empty_rating_to_model(client, monkeypatch, marketplace, rating):
+    from app.integrations import ollama
+    checker = AsyncMock(side_effect=AssertionError('Empty positive rating must not wait for Ollama'))
+    for method in ('structured', 'reply_variants', 'chat'):
+        monkeypatch.setattr(ollama, method, checker)
+    with Session() as db:
+        # All current global policies, including the 13 newer recommendations.
+        rules = [row['text'] for row in CURRENT_POLICIES if row['scope'] == 'Все товары']
+        db.add_all([Memory(id=f'live-{i}',kind='REVIEW_RULE',text=text) for i,text in enumerate(rules)])
+        db.add(Product(id='cleaner',name='Универсальный спрей очиститель с ароматом мяты, 500мл',brand='POLLY ROLLY'))
+        db.flush()
+        db.add(Review(id='rating',wb_review_id='remote-rating',product_id='cleaner',rating=rating,text='',marketplace=marketplace))
+        db.commit()
+        replies = []
+        for _ in range(3):
+            result = asyncio.run(generate_draft(db,'rating'))
+            policy = result['quality']['owner_rules']
+            assert policy['matched'] == 25
+            assert policy['passed'] and policy['checked']
+            assert policy['verification_method'] == 'local_positive'
+            assert result['quality']['timing']['model_seconds'] == 0
+            assert result['quality']['timing']['web_seconds'] == 0
+            assert result['text'].startswith('Добрый день!')
+            assert result['text'].count('С уважением ГК Юником.') == 1
+            assert not any(word in result['text'].lower() for word in ('очистит', 'vin', 'возврат', 'довольны', 'совместим'))
+            replies.append(result['text'])
+        assert len(set(replies)) == 3
+        assert db.get(Review,'rating').is_answered is False
+        assert list(db.query(Action)) == []
+    checker.assert_not_awaited()
+
+
+def test_audited_recommendation_edits_and_unknown_rules_still_require_model():
+    review, product = example()
+    rules = [row['text'] for row in CURRENT_POLICIES]
+    assert execution.positive_template(review,rules,product=product)
+    assert execution.positive_template(review,[*rules,UNKNOWN],product=product) is None
+    changed = next(row['text'] for row in CURRENT_POLICIES if row['text'].startswith('Рекомендации для отзывов — Очистители'))
+    assert execution.positive_template(review,[*rules,changed+' Всегда обещай результат.'],product=product) is None
+
+
+def test_positive_eligibility_matches_certified_context_exclusions(monkeypatch):
+    review, product = example()
+    workflow = 'Рабочий процесс: сохраняй черновик, не публикуй самостоятельно.'
+    profiles = dict(execution.PROFILES)
+    profiles[execution.digest(workflow)] = {'workflow':True}
+    monkeypatch.setattr(execution,'PROFILES',profiles)
+    rules = [HELLO,SIGNATURE,workflow]
+    answer = execution.positive_template(review,rules,product=product)
+    assert answer
+    _, quality = asyncio.run(enforce_owner_rules(answer,review,product,rules,[],lambda _: {'passed':True},allow_fast_positive=True))
+    assert quality['verification_method'] == 'local_positive'

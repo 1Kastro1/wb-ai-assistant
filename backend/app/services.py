@@ -864,7 +864,7 @@ async def generate_draft(db, review_id, instruction=''):
     context_memories, _ = select_rules(memories, review, product)
     verified_facts += owner_business_facts(product, memories)
     generation_revision = initial_draft.revision if initial_draft else 0
-    local_positive = positive_template(review, memories, generation_revision) if not requested_instruction.strip() else None
+    local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
     rule_candidates = []
     for offset in range(3):
         candidate = rule_reply(review, product, generation_revision + offset, verified_facts)
