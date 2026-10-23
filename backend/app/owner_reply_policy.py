@@ -162,7 +162,7 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
 
 
 async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=600,
-                              allow_fast_positive=False, instruction=''):
+                              allow_fast_positive=False, instruction='', local_only=False):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
@@ -197,6 +197,9 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             result.update(verification_method='local_positive', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
             return adjusted, result
+    if local_only:
+        from .generation_control import FastPathUnavailable
+        raise FastPathUnavailable('Нужна дополнительная проверка правил')
     if semantic and not protected and not result['issues']:
         from .model_router import ModelRouter
         key = verification_key(adjusted, review, product, rules, facts, instruction, ModelRouter().choose('OWNER_RULES'))
@@ -273,6 +276,8 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 adjusted = candidate
                 applied.append('исправление по правилам магазина')
         except Exception as error:
+            from .batch_processing import transient
+            result['technical_error'] = transient(error)
             result.update(checked=False)
             reason = 'истекло время проверки' if isinstance(error, TimeoutError) else 'модель вернула некорректную проверку' if isinstance(error, (ValueError, KeyError, TypeError)) else 'сервис проверки недоступен'
             if isinstance(error, ValueError) and str(error).startswith(('Правила слишком длинные', 'Контекст модели переполнен')):

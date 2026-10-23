@@ -26,7 +26,14 @@ def test_queued_and_running_batches_resume_without_a_browser(seeded, monkeypatch
 
     monkeypatch.setattr(main, 'generate_draft', generate)
     with TestClient(main.app) as client:
-        client.portal.call(asyncio.sleep, 0)
+        async def wait_for_completion():
+            for _ in range(200):
+                with Session() as db:
+                    if all(db.get(Job, jid).status == 'completed' for jid in ('all-store', 'waiting')):
+                        return
+                await asyncio.sleep(.01)
+            raise AssertionError('Startup queue did not finish')
+        client.portal.call(wait_for_completion)
         with Session() as db:
             full = db.get(Job, 'all-store')
             assert full.status == 'completed'

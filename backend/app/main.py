@@ -41,6 +41,7 @@ from .activity_history import activity_page, rule_details
 from .generation_monitor import generation_metrics
 from .read_cache import cached_read, clear_reads
 from .process_lock import ProcessLock
+from .batch_processing import cancellable_batch
 from .reviewed_knowledge import product_scope,product_owned,knowledge_report,refresh_reviewed_knowledge
 from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vehicle_identifiers, vin_key, oem_numbers, fitment_answer, save_question_evidence
 
@@ -85,6 +86,8 @@ async def lifespan(app):
                 job.status = 'queued'
                 message = 'Продолжение синхронизации после перезапуска' if resumable_import else 'Подготовка ответов продолжится на сервере'
                 job.result = {**(job.result or {}), 'message': message}
+            elif job.cancel_requested:
+                job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'current_reviews': []}
             else:
                 job.status, job.result = 'interrupted', {**(job.result or {}), 'message':'Приложение перезапущено; повторите задание'}
         for job in db.scalars(select(Job).where(Job.status == 'completed', Job.progress < 100)):
@@ -1050,8 +1053,10 @@ async def execute_job(job_id):
         job = db.get(Job, job_id)
         if not job or job.cancel_requested:
             if job:
-                job.status, job.result = 'cancelled', {'message': 'Задание отменено'}
+                job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'current_reviews': []}
                 db.commit()
+            return
+        if job.status != 'queued':
             return
         started_clock = time.monotonic()
         queue_seconds = max(0, time.time() - datetime.fromisoformat(job.created_at).timestamp())
@@ -1081,61 +1086,16 @@ async def execute_job(job_id):
                 since = (job.result or {}).get('since', '')
                 is_questions = kind in ('question_drafts', 'single_question_draft')
                 is_single = kind in ('single_draft', 'single_question_draft')
-                conditions = [
-                    Review.wb_account_id == account_id,
-                    Review.is_answered == False,
-                    Review.status != 'publishing',
-                    Review.marketplace.like('%_question') if is_questions else ~Review.marketplace.like('%_question'),
-                ]
-                if not is_single:
-                    conditions.append(Draft.id.is_(None))
-                selected_ids = list((job.result or {}).get('selected_ids') or [])
-                if selected_ids:
-                    conditions.append(Review.id.in_(selected_ids))
-                if since:
-                    conditions.append(Review.created_at >= since)
-                failed_ids = list((job.result or {}).get('failed_ids') or [item['review_id'] for item in (job.result or {}).get('failures', [])]) if not is_single else []
-                if failed_ids:
-                    conditions.append(Review.id.not_in(failed_ids))
-                ids = list(db.scalars(
-                    select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(
-                        *conditions,
-                    ).order_by(Review.created_at.desc(), Review.id)
-                ))
-                processed = 0 if is_single else int((job.result or {}).get('processed', 0))
-                failed = 0 if is_single else int((job.result or {}).get('failed', 0))
-                failures = [] if is_single else list((job.result or {}).get('failures', []))
-                completed_before = processed + failed
-                total = completed_before + len(ids)
-                single_draft = None
-                job.result = {**job.result, 'total': total, 'processed': processed, 'failed': failed}
+                # The batch runner owns short checkpoint sessions and one session per lane.
+                # Keep the outer job fresh after concurrent fast/model completions.
+                job.result = {**(job.result or {}), 'account_id': account_id}
                 db.commit()
-                for index, review_id in enumerate(ids, 1):
-                    if cancelled():
-                        raise asyncio.CancelledError
-                    try:
-                        single_draft = await generate_draft(db, review_id, (job.result or {}).get('instruction', '') if is_single else '')
-                        if requested_by:
-                            stored_draft = db.get(Draft, single_draft['id'])
-                            if not stored_draft.created_by:
-                                stored_draft.created_by = requested_by
-                            stored_draft.updated_by = requested_by
-                            db.commit()
-                            single_draft = draft_public(db, stored_draft)
-                        processed += 1
-                    except Exception as error:
-                        db.rollback()
-                        if is_single:
-                            raise
-                        failed += 1
-                        failed_ids.append(review_id)
-                        if len(failures) < 20:
-                            failures.append({'review_id': review_id, 'reason': (str(error) or type(error).__name__)[:300]})
-                    job.result = {**(job.result or {}), 'processed': processed, 'failed': failed, 'total': total, 'failures': failures, 'failed_ids': failed_ids}
-                    db.flush()
-                    update_progress(round((completed_before + index) / max(1, total) * 100))
-                    if not is_single:
-                        await run_waiting_sync()
+                batch_result, single_draft = await cancellable_batch(job_id, generate_draft, run_waiting_sync, Session)
+                db.refresh(job)
+                processed, failed, total = (batch_result.get(key, 0) for key in ('processed', 'failed', 'total'))
+                selected_ids = list(batch_result.get('selected_ids') or [])
+                failures = batch_result.get('failures', [])
+                failed_ids = batch_result.get('failed_ids', [])
                 schedule = setting(db, 'automation_schedule', {})
                 proposal_id = None
                 if schedule.get('auto_propose') and not is_questions and not is_single and not manual_batch:
@@ -1158,6 +1118,7 @@ async def execute_job(job_id):
                     raise ValueError('Отзыв или вопрос изменился. Обновите страницу')
                 job.status, job.progress = 'completed', 100
                 job.result = {
+                    **batch_result,
                     'processed': processed,
                     'failed': failed,
                     'total': total,
@@ -1210,8 +1171,9 @@ async def execute_job(job_id):
                     set_setting(db, 'automation_schedule', schedule)
         except asyncio.CancelledError:
             db.rollback()
+            db.expire_all()
             job = db.get(Job, job_id)
-            if asyncio.current_task().cancelling():
+            if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
                 job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts') else 'interrupted'
@@ -1222,6 +1184,7 @@ async def execute_job(job_id):
             job.status, job.result = 'cancelled', {**(job.result or {}), 'message': 'Задание отменено', 'account_id': account_id}
         except Exception as error:
             db.rollback()
+            db.expire_all()
             job = db.get(Job, job_id)
             if job.attempts < job.max_attempts and not job.cancel_requested:
                 job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
@@ -1441,8 +1404,20 @@ async def schedule_selected_drafts(body: SelectedDraftsInput, background: Backgr
                 if sorted((previous.result or {}).get('operation_requested_ids') or []) != sorted(ids):
                     raise HTTPException(409, 'Этот запрос уже использован для другой подборки')
                 return public(previous)
+        pending = list(db.scalars(select(Job).where(
+            Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.cancel_requested == False,
+            Job.result['account_id'].as_string() == active,
+        ).order_by(Job.created_at.asc())))
+        covering = next((job for job in pending if not (job.result or {}).get('selected_ids') and not (job.result or {}).get('since')), None)
+        if covering:
+            return public(covering)
         existing_ids = set(db.scalars(select(Draft.review_id).where(Draft.review_id.in_(ids))))
         eligible = sorted(row.id for row in rows if not row.is_answered and row.status != 'publishing' and row.id not in existing_ids)
+        covered_ids = {rid for job in pending for rid in (job.result or {}).get('selected_ids', [])}
+        uncovered = [rid for rid in eligible if rid not in covered_ids]
+        if eligible and not uncovered:
+            return public(next(job for job in pending if set((job.result or {}).get('selected_ids') or []) & set(eligible)))
+        eligible = uncovered
         for job in db.scalars(select(Job).where(Job.kind == 'drafts', Job.status.in_(['queued', 'running']), Job.result['account_id'].as_string() == active)):
             if (job.result or {}).get('manual_batch') and sorted((job.result or {}).get('selected_ids') or []) == eligible:
                 return public(job)
@@ -1486,7 +1461,8 @@ def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
     active_first = case((Job.status.in_(['queued', 'running']), 0), else_=1)
     if compact:
         fields = ('account_id', 'requested_by', 'manual_batch', 'operation_key', 'total', 'processed', 'failed',
-                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since')
+                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since',
+                  'skipped', 'attention', 'manual_errors', 'remaining', 'retrying', 'current_reviews', 'queue_version')
         columns = [column for column in Job.__table__.columns if column.name != 'result']
         query = select(*columns, *(Job.result[key].label('r_' + key) for key in fields))
         if auth['role'] != 'owner':
@@ -1521,6 +1497,7 @@ def cancel_job(jid: str, auth: MARKET_OPERATOR, db: DB):
     job.cancel_requested = True
     if job.status == 'queued':
         job.status = 'cancelled'
+    job.result = {**(job.result or {}), 'message': 'Остановка подготовки ответов' if job.status == 'running' else 'Задание отменено'}
     db.commit()
     return public(job)
 

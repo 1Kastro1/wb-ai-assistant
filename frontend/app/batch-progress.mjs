@@ -16,9 +16,13 @@ export function batchProgress(job) {
  const result = job.result || {};
  const processed = Math.max(0, Number(result.processed) || 0);
  const failed = Math.max(0, Number(result.failed) || 0);
+ const skipped = Math.max(0, Number(result.skipped) || 0);
+ const attention = Math.max(0, Number(result.attention) || 0);
+ const manualErrors = Math.max(0, Number(result.manual_errors) || 0);
  const total = result.total == null ? null : Math.max(0, Number(result.total) || 0);
- const attempted = processed + failed;
+ const attempted = processed + failed + skipped + manualErrors;
  const percent = job.status === 'completed' ? 100 : total > 0
-  ? Math.min(100, Math.floor(attempted / total * 100)) : 0;
- return {processed, failed, total, attempted, percent};
+  ? Math.min(100, Math.round(attempted / total * 1000) / 10) : 0;
+ return {processed, failed, skipped, attention, total, attempted, percent,
+  remaining: total == null ? null : Math.max(0, total - attempted)};
 }

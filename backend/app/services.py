@@ -19,6 +19,7 @@ from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
+from .generation_control import exclusive_generation, FastPathUnavailable, ReviewSkipped, record_outcome
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
 from .rule_execution import select_rules, positive_template
@@ -835,11 +836,25 @@ async def generate_question_draft(db, question, instruction=''):
         draft = Draft(id=str(uuid4()), review_id=question.id, text=reply, original=reply, model=model, quality=quality)
         db.add(draft)
     question.status = 'draft_ready' if quality['passed'] else 'manual_review'
+    record_outcome(db, question, draft)
     db.commit()
     return public(draft)
 
 
-async def generate_draft(db, review_id, instruction=''):
+async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip_existing=False):
+    async def operation():
+        # Re-read after acquiring the cross-process claim. Bulk work never overwrites edits.
+        db.expire_all()
+        if skip_existing:
+            review = db.get(Review, review_id)
+            if (not review or review.is_answered or review.status == 'publishing'
+                or db.scalar(select(Draft.id).where(Draft.review_id == review_id))):
+                raise ReviewSkipped('У отзыва уже есть ответ или черновик')
+        return await _generate_draft(db, review_id, instruction, fast_only=fast_only, retry_outages=skip_existing)
+    return await exclusive_generation(review_id, operation, sessionmaker(bind=db.get_bind(), expire_on_commit=False))
+
+
+async def _generate_draft(db, review_id, instruction='', *, fast_only=False, retry_outages=False):
     generation_started = time.monotonic()
     requested_instruction = instruction
     web_seconds = model_seconds = 0.0
@@ -869,6 +884,8 @@ async def generate_draft(db, review_id, instruction=''):
     verified_facts += owner_business_facts(product, memories)
     generation_revision = initial_draft.revision if initial_draft else 0
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
+    if fast_only and not local_positive:
+        raise FastPathUnavailable('Нужна дополнительная проверка правил')
     rule_candidates = []
     for offset in range(3):
         candidate = rule_reply(review, product, generation_revision + offset, verified_facts)
@@ -952,6 +969,9 @@ async def generate_draft(db, review_id, instruction=''):
         try:
             seed_candidates = await budget.run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
         except Exception as error:
+            from .batch_processing import transient
+            if retry_outages and transient(error):
+                raise
             fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
             # A connection failure should immediately use the safe local path instead
             # of holding the browser open for several identical network retries.
@@ -1013,7 +1033,10 @@ async def generate_draft(db, review_id, instruction=''):
     reply, rule_quality = await enforce_owner_rules(
         reply, review, product, memories, verified_facts,
         lambda value: assess_reply(review, product, value, verified_facts),
-        protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction)
+        protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
+        local_only=fast_only)
+    if retry_outages and rule_quality.get('technical_error'):
+        raise ConnectionError(rule_quality.get('reason', 'Сервис проверки недоступен'))
     quality = attach_rule_quality(assess_reply(review, product, reply, verified_facts), rule_quality)
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
@@ -1038,6 +1061,7 @@ async def generate_draft(db, review_id, instruction=''):
         draft = Draft(id=str(uuid4()), review_id=review_id, text=reply, original=reply, model=model, quality=quality)
         db.add(draft)
     review.status = 'manual_review' if review.manual or not quality['passed'] or model.startswith('safety-fallback') else 'draft_ready'
+    record_outcome(db, review, draft)
     db.commit()
     return public(draft)
 
