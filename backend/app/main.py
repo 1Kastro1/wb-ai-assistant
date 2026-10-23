@@ -1558,7 +1558,7 @@ async def sync(kind: str, auth: MARKET_OPERATOR, db: DB):
     provider = provider_for(store)
     if sync_lock.locked():
         raise ValueError('Синхронизация уже выполняется')
-    async with sync_lock:
+    async with sync_lock, maintenance_lock:
         if kind == 'products':
             count = await provider.sync_products(db, store.id)
         elif kind == 'reviews':
@@ -2753,4 +2753,5 @@ async def portable_import(auth: OWNER, password: str = Form(...), file: UploadFi
 def export_reviews(auth: AUTH, db: DB):
     # Explicit allowlist; never export ORM internals, accounts, settings or sessions.
     return [{'id': r.id, 'rating': r.rating, 'text': mask_vin(r.text), 'status': r.status} for r in db.scalars(select(Review))]
+
 
