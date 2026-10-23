@@ -1,5 +1,5 @@
 'use client';
-import {useState} from 'react';
+import {useState,useRef} from 'react';
 import {api} from './client';
 
 type Row=Record<string,any>;
@@ -13,16 +13,33 @@ export default function MemoryRules({items,products,owner,onRefresh,onPropose,on
  const [filter,setFilter]=useState('all'),[search,setSearch]=useState(''),[rule,setRule]=useState(''),[scopeKind,setScopeKind]=useState('global'),[target,setTarget]=useState('');
  const [example,setExample]=useState(''),[rating,setRating]=useState(3),[product,setProduct]=useState(''),[result,setResult]=useState<Row|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const questions=audience==='QUESTION_RULE';
+ const [success,setSuccess]=useState('');
+ const operation=useRef(''),submitting=useRef(false);
  const sectionItems=items.filter(m=>matchesKind(m,audience));
  const visible=sectionItems.filter(m=>(filter==='all'||(m.scope||'global').split(':')[0]===filter)&&m.text.toLocaleLowerCase('ru').includes(search.toLocaleLowerCase('ru')));
  async function run(fn:()=>Promise<void>){setBusy(true);setError('');try{await fn()}catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить действие')}finally{setBusy(false)}}
- function changeAudience(value:RuleKind){setAudience(value);setRule('');setScopeKind('global');setTarget('');setExample('');setProduct('');setResult(null);setError('')}
+ function changeAudience(value:RuleKind){operation.current='';setSuccess('');setAudience(value);setRule('');setScopeKind('global');setTarget('');setExample('');setProduct('');setResult(null);setError('')}
+ async function createRule(){
+  if(submitting.current)return;
+  submitting.current=true;setSuccess('');
+  try{await run(async()=>{
+   const scope=scopeKind==='global'?'global':scopeKind+':'+target.trim();
+   if(owner){
+    if(!operation.current)operation.current=crypto.randomUUID();
+    await api('/memory','POST',{text:rule.trim(),scope,kind:audience,operation_id:operation.current});
+    operation.current='';setRule('');setResult(null);setSearch('');setFilter('all');
+    setSuccess('Правило создано и включено для '+(questions?'вопросов':'отзывов')+' на всех маркетплейсах.');
+    try{await onRefresh()}catch{setError('Правило сохранено. Обновите список, чтобы увидеть его.');}
+   }else{await onPropose(rule.trim(),scope,audience);setRule('');setResult(null);setSuccess('Правило отправлено владельцу на подтверждение.');}
+  })}finally{submitting.current=false}
+ }
  return <section>
   <div className="section-title"><div><p className="eyebrow">ПРАВИЛА ВАШЕГО МАГАЗИНА</p><h1>Правила ответов</h1><p className="muted">Создавайте правила отдельно для отзывов и вопросов. Каждый раздел действует на Wildberries, Ozon и Яндекс Маркете. Область товара, бренда или категории выбирается независимо от типа ответа.</p></div><span className="pill">{sectionItems.filter(m=>m.enabled).length} действуют</span></div>
   <div className="segmented rule-kind-tabs" role="tablist" aria-label="Тип правил">
    {(['REVIEW_RULE','QUESTION_RULE'] as RuleKind[]).map(value=><button key={value} id={'rules-'+value} role="tab" aria-selected={audience===value} aria-pressed={audience===value} aria-controls="rule-kind-panel" disabled={busy} onClick={()=>changeAudience(value)}>{kindLabels[value]} <span className="pill">{items.filter(m=>matchesKind(m,value)).length}</span></button>)}
   </div>
   {error&&<div className="error" role="alert">{error}</div>}
+  {success&&<p className="pill green" style={{whiteSpace:'normal'}} role="status">{success}</p>}
   <div id="rule-kind-panel" role="tabpanel" aria-labelledby={'rules-'+audience} className="rules-layout" style={{marginTop:20}}>
    <div>
     <div className="toolbar"><input aria-label="Поиск правила" type="search" placeholder="Слово или текст правила" value={search} onChange={e=>setSearch(e.target.value)}/></div>
@@ -37,9 +54,10 @@ export default function MemoryRules({items,products,owner,onRefresh,onPropose,on
    </div>
    <aside className="card rule-preview">
     <h3>Новое правило {questions?'для вопросов':'для отзывов'}</h3><p className="muted">Будет применяться только к {questions?'вопросам':'отзывам'} на всех маркетплейсах.</p>
-    <label>Что учитывать в ответах<textarea disabled={busy} value={rule} maxLength={2000} onChange={e=>{setRule(e.target.value);setResult(null)}} placeholder={questions?'Например: проверяй нужную деталь по тексту вопроса.':'Например: добавляй подпись в конце ответа на отзыв.'}/></label>
-    <div className="rule-scope"><label>Область<select disabled={busy} value={scopeKind} onChange={e=>{setScopeKind(e.target.value);setTarget('');setResult(null)}}>{Object.entries(scopes).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>{scopeKind!=='global'&&<label>{scopes[scopeKind]}<input disabled={busy} value={target} onChange={e=>setTarget(e.target.value)} placeholder={scopeKind==='product'?'Артикул товара':'Название'}/></label>}</div>
-    <button className="primary full" disabled={busy||rule.trim().length<2||scopeKind!=='global'&&!target.trim()} onClick={()=>void run(async()=>{await onPropose(rule.trim(),scopeKind==='global'?'global':scopeKind+':'+target.trim(),audience);setRule('');setResult(null)})}>Предложить сохранение</button>
+    <label>Что учитывать в ответах<textarea disabled={busy} value={rule} maxLength={2000} onChange={e=>{operation.current='';setRule(e.target.value);setResult(null)}} placeholder={questions?'Например: проверяй нужную деталь по тексту вопроса.':'Например: добавляй подпись в конце ответа на отзыв.'}/></label>
+    <div className="rule-scope"><label>Область<select disabled={busy} value={scopeKind} onChange={e=>{operation.current='';setScopeKind(e.target.value);setTarget('');setResult(null)}}>{Object.entries(scopes).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>{scopeKind!=='global'&&<label>{scopes[scopeKind]}<input disabled={busy} value={target} onChange={e=>{operation.current='';setTarget(e.target.value)}} placeholder={scopeKind==='product'?'Артикул товара':'Название'}/></label>}</div>
+    <button className="primary full" disabled={busy||rule.trim().length<2||scopeKind!=='global'&&!target.trim()} onClick={()=>void createRule()}>{busy?'Сохраняем…':owner?'Создать правило':'Предложить сохранение'}</button>
+    <small>{owner?'После создания правило сразу действует в выбранном разделе.':'Владелец проверит и подтвердит предложенное правило.'}</small>
     <hr/><h3>Проверить на примере {questions?'вопроса':'отзыва'}</h3>
     <label>Товар<select disabled={busy} value={product} onChange={e=>{setProduct(e.target.value);setResult(null)}}><option value="">Без привязки к товару</option>{products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
     <label>{questions?'Вопрос покупателя':'Отзыв'}<textarea disabled={busy} id="rule-example" value={example} maxLength={5000} onChange={e=>{setExample(e.target.value);setResult(null)}} placeholder={questions?'Вставьте пример вопроса покупателя':'Вставьте пример отзыва покупателя'}/></label>

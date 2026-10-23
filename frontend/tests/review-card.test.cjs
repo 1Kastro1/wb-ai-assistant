@@ -45,7 +45,7 @@ test('published review offers no regeneration or save',()=>{const html=render({r
 test('rule verification status distinguishes checked and unverified answers',()=>{
  for(const passed of [true,false]){
   const html=render({generationError:'Откройте ответ',review:{draft:{text:'Добрый день! Спасибо за отзыв.',revision:2,quality:{passed,owner_rules:{matched:3,passed}},edits:[]}}});
-  assert(html.includes(passed?'Правила магазина выполнены':'Правила магазина требуют проверки'));
+  assert(html.includes(passed?'Правила магазина выполнены':'Найдены замечания по правилам'));
   assert(!html.includes(passed?'Правила магазина требуют проверки':'Правила магазина выполнены'));
  }
 });

@@ -29,9 +29,19 @@ class OllamaProvider:
             # ignores the API-level `think: false` flag.
             messages[-1]['content'] = messages[-1].get('content', '') + '\n/no_think'
         body = {**ModelRouter().choose(task or ('FAST' if schema else 'STANDARD')), 'messages': messages, 'stream': False, 'think': False}
+        # Cyrillic policy lists need substantially more tokens than English text.
+        # Never silently truncate the beginning (system instructions / conditions).
+        estimated = sum(len(message.get('content', '').encode('utf-8')) for message in messages) // 3
+        needed = estimated + body['options']['num_predict'] + 512
+        if needed > 16384:
+            raise ValueError('Правила слишком длинные для контекста модели; сократите повторы или область применения')
+        body['options']['num_ctx'] = max(body['options']['num_ctx'], ((needed + 1023) // 1024) * 1024)
         if schema:
             body['format'] = schema
-        result = await guard.request('ollama', 'chat', body=body)
+        request_options = {'timeout_seconds': 600} if task == 'OWNER_RULES' else {}
+        result = await guard.request('ollama', 'chat', body=body, **request_options)
+        if result.get('prompt_eval_count', 0) >= body['options']['num_ctx'] - 8:
+            raise ValueError('Контекст модели переполнен; сократите повторяющиеся правила или их область применения')
         content = result['message']['content']
         # Some installed Qwen templates include reasoning in content despite think=false.
         if '</think>' in content:
@@ -725,3 +735,4 @@ ozon, yandex = OzonProvider(), YandexProvider()
 
 def provider_for(store):
     return {'wb': wb, 'ozon': ozon, 'yandex': yandex}.get(store.provider)
+

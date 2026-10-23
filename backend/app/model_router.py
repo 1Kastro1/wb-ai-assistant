@@ -13,5 +13,6 @@ class ModelRouter:
         if task=='FAST':predict=min(predict,256)
         # A policy check contains all matched owner rules and may return a full
         # repaired answer. The short FAST JSON cap can truncate that answer.
-        if task=='OWNER_RULES':context,predict=max(context,8192),max(predict,1024)
+        if task=='OWNER_RULES':context,predict=16384,512
         return {'model':MODEL,'options':{'num_ctx':context,'num_predict':predict,'temperature':0.2}}
+

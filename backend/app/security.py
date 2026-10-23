@@ -125,7 +125,7 @@ class EgressGuard:
                     raise ValueError('WB WRITE заблокирован режимом безопасности')
         return endpoint
 
-    async def request(self, provider, operation, *, token=None, params=None, body=None, headers=None, url=None, return_text=False):
+    async def request(self, provider, operation, *, token=None, params=None, body=None, headers=None, url=None, return_text=False, timeout_seconds=None):
         start = time.monotonic()
         status, host = 'BLOCKED', 'blocked'
         try:
@@ -139,7 +139,7 @@ class EgressGuard:
                 raise ValueError('Соединение заблокировано: неверный адрес Telegram')
             host = urlsplit(url).hostname
             # Ignore environment proxies; never follow redirects with a secret.
-            timeout = 120 if provider == 'ollama' else httpx.Timeout(60, connect=10, write=30, pool=10)
+            timeout = min(600, timeout_seconds or 120) if provider == 'ollama' else httpx.Timeout(60, connect=10, write=30, pool=10)
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, transport=self.transport) as client:
                 attempts = 1 if provider == 'ollama' or operation in ('publish', 'question_publish') else 3
                 for attempt in range(attempts):
@@ -176,3 +176,4 @@ class EgressGuard:
 
 
 guard = EgressGuard()
+
