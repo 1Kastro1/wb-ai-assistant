@@ -22,7 +22,7 @@ from .generation_budget import GenerationBudget
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
 from .rule_execution import select_rules, positive_template
-from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply
+from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply, has_redundant_clarification
 from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
@@ -87,7 +87,7 @@ def draft_public(db, draft, actors=None, rules=None):
         if rules is None:
             rules = matching_owner_rules(db, product, for_questions=review.marketplace.endswith('_question'))
         quality = dict(item.get('quality') or {})
-        rule_quality = saved_rule_quality(item['text'], rules, quality.get('owner_rules'))
+        rule_quality = saved_rule_quality(item['text'], rules, quality.get('owner_rules'), review=review)
         if rules or quality.get('owner_rules'):
             item['quality'] = attach_rule_quality(quality, rule_quality)
     for key in ('created_by', 'updated_by'):
@@ -427,6 +427,8 @@ def assess_reply(review, product, reply, verified_facts=None):
     else:
         issues.append('ответить именно на содержание отзыва')
     analysis = analyze_customer_message(review.text, review.rating)
+    if has_redundant_clarification(reply, review.text):
+        issues.append('не переспрашивать уже описанную проблему')
     for topic in missing_complaints(analysis, reply):
         issues.append('не учтено существенное замечание: ' + INTENT_LABELS.get(topic, topic))
     intent = review_intent(review.text)
@@ -485,7 +487,7 @@ def assess_reply(review, product, reply, verified_facts=None):
     if review.rating <= 2 and intent == 'POSITIVE_EXPERIENCE':
         score = min(score, 80)
         issues.append('оценка и текст отзыва противоречат друг другу — проверьте тон вручную')
-    if any(x in lowered for x in ('распылите', 'распылить', 'выдержите', 'оставьте на 30', 'ближе к потоку воздуха')):
+    if re.search(r'\b(?:распылите|распылить|выдержите)\b|оставьте на 30|ближе к потоку воздуха', lowered):
         facts_text = ' '.join(str(f.get('text', '')) for f in (verified_facts if verified_facts is not None else (getattr(product, 'facts', None) or []))).lower().replace('ё','е')
         if not facts_text or not any(x in facts_text for x in ('распыл', 'выдерж', '30 секунд', 'потоку воздуха')):
             score = min(score, 75)
@@ -664,6 +666,8 @@ def assess_question_answer(question, product, answer, sources=None, owner_rules=
     answer_words = set(WORDS.findall(answer.lower()))
     overlap = len(question_words & answer_words)
     issues, score = [], 30
+    if has_redundant_clarification(answer, question.text):
+        issues.append('не переспрашивать уже описанную проблему')
     breakdown = {
         'safety': {'label': 'Безопасность', 'score': 30, 'max': 30},
         'relevance': {'label': 'Ответ по существу', 'score': 0, 'max': 25},
@@ -1067,7 +1071,7 @@ def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=Tru
     if generation_timing:
         draft.quality = {**draft.quality, 'timing': generation_timing}
     draft.quality = attach_rule_quality(draft.quality, saved_rule_quality(
-        value, rules, previous_rule_quality, changed=value != old))
+        value, rules, previous_rule_quality, changed=value != old, review=review))
     if learn_preferences:
         learn_from_edit(db, draft, old, value)
     review.status = 'manual_review' if review.manual or not draft.quality['passed'] else 'draft_ready'
@@ -1088,7 +1092,7 @@ def propose_publish(db, review_ids):
         is_question = review.marketplace.endswith('_question')
         product = db.get(Product, review.product_id)
         rules = matching_owner_rules(db, product, for_questions=is_question)
-        rule_quality = saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'))
+        rule_quality = saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'), review=review)
         if not rule_quality['passed']:
             raise ValueError('Перед публикацией проверьте правила магазина: ' + '; '.join(rule_quality['issues']))
         if is_question and (draft.quality or {}).get('fitment',{}).get('status') in ('NEEDS_CATALOG','CONFLICT'):
@@ -1144,7 +1148,7 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
         if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
         rules = matching_owner_rules(db, db.get(Product, review.product_id), for_questions=review.marketplace.endswith('_question'))
-        if not saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'))['passed']:
+        if not saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'), review=review)['passed']:
             raise ValueError('Правила магазина изменились или не выполнены. Подготовьте ответ и подтверждение заново.')
         if review.manual and not manual_ack:
             raise ValueError('Нужно отдельное подтверждение ручной проверки опасного отзыва')

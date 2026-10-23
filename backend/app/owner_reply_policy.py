@@ -7,6 +7,7 @@ from time import monotonic
 
 from .plain_text import plain_text
 from .safety import mask_vin, validate_reply
+from .reply_policy import has_redundant_clarification, remove_redundant_clarification, analyze_customer_message, missing_complaints, COMPLAINT_LABELS
 from .rule_execution import select_rules, positive_template, verification_key, cached_verdict, remember_verdict
 
 
@@ -41,7 +42,7 @@ def constraints(rules):
     for rule in rules:
         for clause in _clauses(rule):
             lower = clause.lower().replace('ё', 'е')
-            no_reask = ('уже опис' in lower or 'уже указ' in lower) and bool(re.search(r'не (?:спраш|уточн|прос)', lower))
+            no_reask = bool(re.search(r'уже\s+(?:опис|указ|назван)|повторно\s+опис|заново\s+опис', lower)) and bool(re.search(r'не\s+(?:спраш|уточн|прос|переспраш)', lower))
             if not no_reask and re.search(r'\b(?:если|когда|при|в случае)\b|(?:позитивн|негативн|положительн|отрицательн)\w*\s+(?:отзыв|ответ)', lower):
                 # Conditional style rules require a context check; they must not
                 # silently become unconditional text substitutions.
@@ -107,6 +108,7 @@ def apply_local_preferences(reply, review, rules, style_only=False):
     applied = []
     if config['no_reask'] and review.text.strip() and not style_only:
         reply = REASK.sub('', reply)
+        reply = remove_redundant_clarification(reply, review.text)
         applied.append('не переспрашивать описанную проблему')
     for phrase in ([] if style_only else config['banned']):
         # Whole phrases, not fragments inside another word or an OEM number.
@@ -133,7 +135,7 @@ def apply_signature(reply, rules):
     return body + '\n' + signature if body else signature
 
 
-def local_issues(reply, rules):
+def local_issues(reply, rules, review=None):
     config = constraints(rules)
     issues = []
     if config['greeting'] and not reply.startswith(config['greeting']):
@@ -143,6 +145,12 @@ def local_issues(reply, rules):
     for phrase in config['banned']:
         if re.search(r'(?<!\w)' + re.escape(phrase) + r'(?!\w)', reply, re.I):
             issues.append('В ответе запрещённая фраза: ' + phrase)
+    if config['no_reask'] and review is not None and has_redundant_clarification(reply, review.text):
+        issues.append('Не переспрашивать уже описанную проблему')
+    if rules and review is not None and not (getattr(review, 'marketplace', '') or '').endswith('_question'):
+        analysis = analyze_customer_message(review.text, getattr(review, 'rating', None))
+        for topic in missing_complaints(analysis, reply):
+            issues.append('Не учтено замечание покупателя: ' + COMPLAINT_LABELS.get(topic, topic))
     return issues
 
 
@@ -171,7 +179,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     except ValueError as error:
         result.update(passed=False, issues=['Правило конфликтует с проверкой ответа: ' + str(error)])
         return validate_reply(mask_vin(reply)), result
-    result['issues'] = local_issues(adjusted, rules)
+    result['issues'] = local_issues(adjusted, rules, review)
     context_rules, skipped = select_rules(rules, review, product)
     result.update(context_rules=len(context_rules), skipped_rules=skipped, cache_hit=False)
     semantic = semantic_rules(context_rules)
@@ -189,7 +197,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         cached = cached_verdict(key)
         if cached:
             value, verdict = cached
-            if validate_reply(mask_vin(value)) == value and not local_issues(value, rules) and assess(value)['passed']:
+            if validate_reply(mask_vin(value)) == value and not local_issues(value, rules, review) and assess(value)['passed']:
                 verdict.update(cache_hit=True, verification_method='exact_input_cache',
                                reused_check_seconds=verdict.get('verification_seconds', 0),
                                verification_seconds=round(monotonic() - check_started, 4))
@@ -198,6 +206,9 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         result.update(checked=False)
         result['issues'].append('Проверьте дополнительные правила магазина: вывод каталога или предупреждение безопасности сохранены без переформулировки.')
     elif semantic:
+        # A model repair may resolve the initial local defects. Recompute them
+        # against the final text below instead of retaining stale warnings.
+        result['issues'] = []
         groups = rule_groups(semantic)
         result['semantic_groups'] = len(groups)
         messages = [
@@ -264,7 +275,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 reason = 'сервис модели недоступен или не ответил вовремя'
             result['reason'] = reason
             result['issues'].append('Не удалось проверить правила: ' + reason + '. Ответ сохранён; повторите подготовку.')
-    result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules)))
+    result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules, review)))
     result['passed'] = not result['issues']
     result['applied_preferences'] = list(dict.fromkeys(applied))
     result['verification_method'] = 'model' if semantic else 'local_constraints'
@@ -287,10 +298,10 @@ def attach_rule_quality(quality, rule_quality):
     return quality
 
 
-def saved_rule_quality(reply, rules, previous=None, *, changed=False):
+def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=None):
     """A saved/manual draft cannot inherit a rule check for different text/rules."""
     previous = previous or {}
-    issues = local_issues(reply, rules)
+    issues = local_issues(reply, rules, review)
     current = fingerprint(rules)
     if rules and (changed or previous.get('fingerprint') != current) and constraints(rules)['semantic']:
         issues.append('Правила магазина изменились или ответ отредактирован. Подготовьте ответ заново для проверки всех правил.')
