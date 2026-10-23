@@ -21,6 +21,7 @@ from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
+from .rule_execution import select_rules, positive_template
 from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply
 from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
@@ -713,6 +714,7 @@ async def generate_question_draft(db, question, instruction=''):
     existing = db.scalar(select(Draft).where(Draft.review_id == question.id))
     expected_revision = existing.revision if existing else None
     memories = matching_owner_rules(db, product, for_questions=True)
+    context_memories, _ = select_rules(memories, question, product)
     verified_facts = trusted_product_facts(db, product)
     verified_facts += owner_business_facts(product, memories)
     sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
@@ -741,7 +743,7 @@ async def generate_question_draft(db, question, instruction=''):
             examples.append({'question': item.text, 'answer': item.existing_answer})
     messages = [
         {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
-        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': memories, 'reply_style': shared_reply_style(db), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
+        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': context_memories, 'reply_style': shared_reply_style(db), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
     ]
     candidates = []
     fitment = fitment_answer(db, question, product) if not assortment and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк|сошк|рулев|наконечник|шаров', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
@@ -803,7 +805,7 @@ async def generate_question_draft(db, question, instruction=''):
     adjusted, rule_quality = await enforce_owner_rules(
         reply, question, product, memories, verified_facts,
         lambda value: assess_question_answer(question, product, value, sources, owner_rules=memories),
-        protected=bool(fitment))
+        protected=bool(fitment), instruction=instruction)
     if adjusted != reply:
         reply = validate_reply(mask_vin(adjusted))
         if not fitment:
@@ -835,6 +837,7 @@ async def generate_question_draft(db, question, instruction=''):
 
 async def generate_draft(db, review_id, instruction=''):
     generation_started = time.monotonic()
+    requested_instruction = instruction
     web_seconds = model_seconds = 0.0
     fallback_reason = ''
     if not setting(db, 'assistant_enabled', True):
@@ -858,8 +861,10 @@ async def generate_draft(db, review_id, instruction=''):
         holder=review_vent_holder(db,review,product)
         if holder:verified_facts=verified_facts+[holder]
     memories = matching_owner_rules(db, product)
+    context_memories, _ = select_rules(memories, review, product)
     verified_facts += owner_business_facts(product, memories)
     generation_revision = initial_draft.revision if initial_draft else 0
+    local_positive = positive_template(review, memories, generation_revision) if not requested_instruction.strip() else None
     rule_candidates = []
     for offset in range(3):
         candidate = rule_reply(review, product, generation_revision + offset, verified_facts)
@@ -892,6 +897,9 @@ async def generate_draft(db, review_id, instruction=''):
             forced_model = 'positive-rules-1.1'
         else:
             reply = None
+    if local_positive:
+        reply, forced_model = local_positive, 'positive-local-2.0'
+        selection_note = 'Краткая благодарность без выдуманных свойств; правила проверены программно'
     web_search_failed = False
     if reply and 'короче' in instruction.lower():
         if specific_case:
@@ -928,7 +936,7 @@ async def generate_draft(db, review_id, instruction=''):
                 web_sources = []
                 web_search_failed = True
         messages = [
-            {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\n' + customer_reply_policy() + '\nПравила владельца: ' + json.dumps(memories, ensure_ascii=False)},
+            {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\n' + customer_reply_policy() + '\nПравила владельца: ' + json.dumps(context_memories, ensure_ascii=False)},
             {'role': 'user', 'content': json.dumps({'review_data': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating), 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'verified_usage_instruction': usage_excerpt(facts), 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
         best_reply, best_quality = None, {'score': -1, 'issues': []}
         valid_candidates = []
@@ -1001,7 +1009,7 @@ async def generate_draft(db, review_id, instruction=''):
     reply, rule_quality = await enforce_owner_rules(
         reply, review, product, memories, verified_facts,
         lambda value: assess_reply(review, product, value, verified_facts),
-        protected=review.risk != 'NORMAL')
+        protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction)
     quality = attach_rule_quality(assess_reply(review, product, reply, verified_facts), rule_quality)
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note

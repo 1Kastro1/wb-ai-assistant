@@ -3,9 +3,11 @@ import asyncio
 import hashlib
 import json
 import re
+from time import monotonic
 
 from .plain_text import plain_text
 from .safety import mask_vin, validate_reply
+from .rule_execution import select_rules, positive_template, verification_key, cached_verdict, remember_verdict
 
 
 QUOTED = r'[«“"\u2018\u2019]([^»”"\u2018\u2019\n]{1,200})[»”"\u2018\u2019]'
@@ -151,13 +153,15 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
     'required': ['compliant', 'violations', 'revised_answer'], 'additionalProperties': False}
 
 
-async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=600):
+async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=600,
+                              allow_fast_positive=False, instruction=''):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
     a style model. No rule can turn itself into verified product/catalog evidence.
     """
     from .integrations import ollama
+    check_started = monotonic()
     adjusted, applied = apply_local_preferences(reply, review, rules, style_only=protected)
     adjusted = apply_signature(adjusted, rules)
     result = {'matched': len(rules), 'applied_preferences': applied,
@@ -168,7 +172,28 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         result.update(passed=False, issues=['Правило конфликтует с проверкой ответа: ' + str(error)])
         return validate_reply(mask_vin(reply)), result
     result['issues'] = local_issues(adjusted, rules)
-    semantic = semantic_rules(rules)
+    context_rules, skipped = select_rules(rules, review, product)
+    result.update(context_rules=len(context_rules), skipped_rules=skipped, cache_hit=False)
+    semantic = semantic_rules(context_rules)
+    key = None
+    # Only the exact no-claims templates and audited whole policies qualify.
+    # Unknown/edited semantic rules must still reach the model, even on five stars.
+    if allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
+        if any(adjusted == positive_template(review, rules, revision) for revision in range(3)) and assess(adjusted)['passed']:
+            result.update(verification_method='local_positive', semantic_groups=0, verified_groups=0,
+                          verification_seconds=round(monotonic() - check_started, 4))
+            return adjusted, result
+    if semantic and not protected and not result['issues']:
+        from .model_router import ModelRouter
+        key = verification_key(adjusted, review, product, rules, facts, instruction, ModelRouter().choose('OWNER_RULES'))
+        cached = cached_verdict(key)
+        if cached:
+            value, verdict = cached
+            if validate_reply(mask_vin(value)) == value and not local_issues(value, rules) and assess(value)['passed']:
+                verdict.update(cache_hit=True, verification_method='exact_input_cache',
+                               reused_check_seconds=verdict.get('verification_seconds', 0),
+                               verification_seconds=round(monotonic() - check_started, 4))
+                return value, verdict
     if semantic and protected:
         result.update(checked=False)
         result['issues'].append('Проверьте дополнительные правила магазина: вывод каталога или предупреждение безопасности сохранены без переформулировки.')
@@ -242,6 +267,10 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules)))
     result['passed'] = not result['issues']
     result['applied_preferences'] = list(dict.fromkeys(applied))
+    result['verification_method'] = 'model' if semantic else 'local_constraints'
+    result['verification_seconds'] = round(monotonic() - check_started, 4)
+    if key and result['passed'] and assess(adjusted)['passed']:
+        remember_verdict(key, adjusted, result)
     return adjusted, result
 
 

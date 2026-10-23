@@ -1,0 +1,134 @@
+{
+  "0365fd6e18b30a0310b21ec979ec992c89f3f990319875f5678860636a83edea": {
+    "family": "chemicals",
+    "label": "Применяй только если отзыв касается соответствующей категории товара. Автохимия ",
+    "local_positive": true
+  },
+  "0629ad64b4a49f28942f108174bd4aeb43278f630f4674c852d19125e71965ca": {
+    "empty_inapplicable": true,
+    "family": "parts",
+    "label": "Щётки стеклоочистителя: полосы и разводы. Если покупатель жалуется, что щётка на",
+    "local_positive": true
+  },
+  "12663c9c280102f250241d51389f13d39ccd6eb52df1ee76cea088795a831c74": {
+    "label": "Подбор через Uniqom. Применяй при вопросе о подборе детали или совместимости. Ес",
+    "local_positive": false
+  },
+  "135b00dbe981154017e46cad770cb38bee80b3218974fde871323e12f511c775": {
+    "label": "Вопросы о качестве и оригинальности",
+    "local_positive": false
+  },
+  "1faaae06007fa46b49c90aa8021a4f4e194626378c01e5f640806f88fc118a51": {
+    "label": "Вопросы о доставке и наличии",
+    "local_positive": false
+  },
+  "210292bac41cf62ab1b5ebb1c5d184e7c16a54b4494019b07c68423264f6b666": {
+    "label": "Вопросы о сроке годности и дате производства",
+    "local_positive": false
+  },
+  "246cc61504a76a9887ab74bf519a94e29312d3ebd1d2b6ee9361833409a539c6": {
+    "label": "Мы являемся официальным дистрибьютором EIKOSHA. Если покупатель сомневается в ор",
+    "local_positive": false
+  },
+  "35df7b0b5e65369438776b3f6e70b9eb02d92bf3c8de28256a770fb282332257": {
+    "label": "Подготовка и публикация ответов на вопросы. Подготавливай и отправляй на подтвер",
+    "local_positive": false,
+    "workflow": true
+  },
+  "55aca2779dfc093e5698d82374396712e89b5eed6441dec64c4388b95506ba68": {
+    "empty_inapplicable": true,
+    "family": "fragrance",
+    "label": "Если отзыв касается автомобильного ароматизатора: учитывай интенсивность, заявле",
+    "local_positive": true
+  },
+  "5af62c7d49915931c2c5f1e336afa461c5d9c4f8d687bc2d7ab5301651078f55": {
+    "label": "Несоответствие, недокомплект, оригинальность и обращения. При жалобе извинись за",
+    "local_positive": true
+  },
+  "61d8698fb39ca921dc8b6dc0638f114d8e74bd6255976bf79d31d3227193d101": {
+    "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.». Подпи",
+    "local_positive": true
+  },
+  "68fc2cc14cf403b0dd360abb76400fa09e6daf1e36576010e25ab377c0152109": {
+    "family": "cosmetics",
+    "label": "Применяй только если отзыв касается соответствующей категории товара. Автокосмет",
+    "local_positive": true
+  },
+  "7c4316e7411936db274345270ab26b43ca0ccc156ecd396c7eb60dc765134c35": {
+    "label": "Если покупатель доволен: Поблагодари за покупку и отзыв. Упомяни то преимущество",
+    "local_positive": true
+  },
+  "82b965bc807385a3d6717ac01af9b7a25c6a07bf7272f3aca8e9bba9bc45278c": {
+    "family": "household",
+    "label": "Применяй только если вопрос касается соответствующей категории товара. Категория",
+    "local_positive": false
+  },
+  "847ab126ca303701fdaaecc01d98e2250725c385a722cda5a5b2890a59538085": {
+    "label": "Содержание ответа на отзыв. Каждый ответ начинай с «Добрый день!». Внимательно п",
+    "local_positive": true
+  },
+  "ab5b7aef5355a1702713d742d27e056fa2f0f430ad32605e9643c1a12cfc9890": {
+    "label": "Стиль ответа на отзыв. Пиши по-русски, уважительно на «Вы», спокойно, профессион",
+    "local_positive": true
+  },
+  "b33e9a7c876382dd966c92de2109d81070d5948de2c0da8e40bf7c7f3f612b64": {
+    "label": "Формат ответа на отзыв. Выводи только готовый читаемый ответ покупателю без HTML",
+    "local_positive": true
+  },
+  "bc8672c223e095039d81e49d5354bec14c1f6d1fec896a7442cb1e2c44781edc": {
+    "empty_inapplicable": true,
+    "label": "Kangaroo: чтение даты на упаковке. Если отзыв касается даты изготовления или сро",
+    "local_positive": true
+  },
+  "bf41d94b96b6770cd467544bb022e88df4f63835257639fee03071498678a28a": {
+    "label": "Подготовка и публикация ответов на отзывы. Подготавливай и отправляй на подтверж",
+    "local_positive": true,
+    "workflow": true
+  },
+  "c909684bc83a8c38b45c52384f9dc1daaf4a33a21dfb0f177cd0be279eb83132": {
+    "empty_inapplicable": true,
+    "label": "EIKOSHA. Мы являемся официальным дистрибьютором EIKOSHA; при сомнениях в оригина",
+    "local_positive": true
+  },
+  "ccdb1a54deb82e1c8ce47a474d6992c6188f85b0d3d8235128dc523833cabae3": {
+    "family": "parts",
+    "label": "Применяй только если вопрос касается соответствующей категории товара. Категория",
+    "local_positive": false
+  },
+  "cd9d031817bf3dd0dcb4d6eb9be4a8ed5f0d51e06d12380b4210c1d3e039f3db": {
+    "family": "fragrance",
+    "label": "Применяй только если вопрос касается соответствующей категории товара. Категория",
+    "local_positive": false
+  },
+  "d2d9b092cd84db9a0b92f42e9a73a19ffdbffce9081bacc1801773139fa575f1": {
+    "label": "Правила по возвратам и отказам",
+    "local_positive": false
+  },
+  "dec42ecea2244a08214ecfeaa977c8ae67b0ead76b73c4227df41441759a31d8": {
+    "family": "parts",
+    "label": "Применяй только если отзыв касается соответствующей категории товара. Автозапчас",
+    "local_positive": true
+  },
+  "dfdac76553660ebba86a2d338366aa6b0e6b18c612bfc7be3032614e9c95096a": {
+    "label": "Достоверность, безопасность и приоритеты для вопросов. Приоритет: безопасность; ",
+    "local_positive": false
+  },
+  "ebc481d32034545376d9d4b97dfe82de2e4dab0ea177fe46dc44dc96cf7ee06c": {
+    "family": "cosmetics",
+    "label": "Применяй только если вопрос касается соответствующей категории товара. Категория",
+    "local_positive": false
+  },
+  "eed2a3356e38b4402ff8711727e8ae581261cce77536e48d320a8ffcc99ef0f4": {
+    "label": "Вопросы о комплектации",
+    "local_positive": false
+  },
+  "f109682e9052f3105887ae2dea9185d13a0891602313cb45df1fe21090d4217f": {
+    "family": "chemicals",
+    "label": "Применяй только если вопрос касается соответствующей категории товара. Категория",
+    "local_positive": false
+  },
+  "f5ddc943a4abd384ac725aed673806ef2b2bfb3f883d23fe9a7d4b5936296589": {
+    "label": "Содержание и стиль ответа на вопрос. Каждый ответ начинай с «Добрый день!». Зате",
+    "local_positive": false
+  }
+}
