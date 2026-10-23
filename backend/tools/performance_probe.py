@@ -44,9 +44,10 @@ async def check_rules():
         facts = trusted_product_facts(db, product)
         started = time.monotonic()
         _, quality = await enforce_owner_rules(draft.text, review, product, rules, facts,
-            lambda answer: assess_reply(review, product, answer, facts), check_seconds=90)
+            lambda answer: assess_reply(review, product, answer, facts), check_seconds=600)
         return {'found': True, 'seconds': round(time.monotonic() - started, 2), 'quality': quality}
 
 
 if __name__ == '__main__':
     print(json.dumps(asyncio.run(check_rules()) if '--rules' in sys.argv else probe(), ensure_ascii=True))
+

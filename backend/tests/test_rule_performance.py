@@ -145,6 +145,9 @@ def test_maintenance_lock_waits_and_cancellation_releases_descriptor():
 def test_every_rule_group_is_checked_and_partial_success_is_not_ready(monkeypatch):
     import json
     from app.integrations import ollama
+    from app import owner_reply_policy
+    original_groups = owner_reply_policy.rule_groups
+    monkeypatch.setattr(owner_reply_policy, 'rule_groups', lambda rules: original_groups(rules, max_chars=2200))
     rules = ['Требование ' + str(i) + ': ' + 'соблюдай условия. ' * 70 for i in range(3)]
     seen = []
     async def check(messages, *args, **kwargs):
@@ -164,3 +167,4 @@ def test_every_rule_group_is_checked_and_partial_success_is_not_ready(monkeypatc
     _, quality = asyncio.run(enforce_owner_rules('Добрый день! Спасибо за оценку.', row,
         SimpleNamespace(name='Ароматизатор'), rules, [], lambda text: {'passed': True}))
     assert quality['verified_groups'] == 1 and not quality['passed'] and not quality['checked']
+

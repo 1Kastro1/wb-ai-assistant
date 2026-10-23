@@ -86,7 +86,7 @@ def semantic_rules(rules):
     return list(dict.fromkeys(rule for rule in rules if constraints([rule])['semantic']))
 
 
-def rule_groups(rules, max_chars=2200):
+def rule_groups(rules, max_chars=14000):
     groups, current, size = [], [], 0
     for rule in rules:
         if current and size + len(rule) > max_chars:
@@ -151,7 +151,7 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
     'required': ['compliant', 'violations', 'revised_answer'], 'additionalProperties': False}
 
 
-async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=90):
+async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=600):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
@@ -235,6 +235,8 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             reason = 'истекло время проверки' if isinstance(error, TimeoutError) else 'модель вернула некорректную проверку' if isinstance(error, (ValueError, KeyError, TypeError)) else 'сервис проверки недоступен'
             if isinstance(error, ValueError) and str(error).startswith(('Правила слишком длинные', 'Контекст модели переполнен')):
                 reason = 'объём правил превышает контекст модели; сократите повторы или область применения'
+            elif isinstance(error, ValueError) and str(error).startswith('Не удалось установить соединение'):
+                reason = 'сервис модели недоступен или не ответил вовремя'
             result['reason'] = reason
             result['issues'].append('Не удалось проверить правила: ' + reason + '. Ответ сохранён; повторите подготовку.')
     result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules)))
@@ -267,3 +269,4 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False):
         issues.extend(previous.get('issues') or ['Выполнение правил магазина не подтверждено. Подготовьте ответ заново.'])
     return {**previous, 'matched': len(rules), 'fingerprint': current,
             'checked': not issues, 'passed': not issues, 'issues': list(dict.fromkeys(issues))}
+

@@ -13,7 +13,7 @@ export function OwnerRuleStatus({quality}:{quality:Row}){
 export function GenerationProgress({phase='running'}:{phase?:string}={}){
   const [seconds,setSeconds]=useState(0);
   useEffect(()=>{const start=Date.now();const timer=setInterval(()=>setSeconds(Math.floor((Date.now()-start)/1000)),1000);return()=>clearInterval(timer)},[]);
-  return <div className="generation-progress" role="status" aria-live="polite"><div className="generation-spinner">✦</div><div><b>{phase==='queued'?'Ожидаем очередь':'Готовим ответ'}<span aria-hidden="true"> · {seconds} сек.</span></b><p>{seconds<45?'Можно дождаться результата здесь.':'Подготовка занимает дольше обычного. Предыдущий текст сохраняется.'}</p></div></div>;
+  return <div className="generation-progress" role="status" aria-live="polite"><div className="generation-spinner">✦</div><div><b>{phase==='queued'?'Ожидаем очередь':'Готовим ответ'}<span aria-hidden="true"> · {seconds} сек.</span></b><p>{seconds<45?'Можно дождаться результата здесь.':'Подготовка и проверка правил продолжаются на сервере. Можно перейти в другой раздел — задание и предыдущий текст сохраняются.'}</p></div></div>;
 }
 
 export default function ReviewCard({review:r,checked,toggle,busy,assistantEnabled,canManage,generating,generationError,generate,save,feedback,onPending,onRegister,storageKey='',generationPhase='running',operationError='',publish}:{review:Row;checked:boolean;toggle:()=>void;busy:boolean;assistantEnabled:boolean;canManage:boolean;generating:boolean;generationError:string;generate:(instruction?:string)=>void;save:(text:string,revision:number)=>Promise<Row>;onPending?:(value:boolean)=>void;onRegister?:(id:string,flush:(()=>Promise<any>)|null)=>void|(()=>void);storageKey?:string;generationPhase?:string;operationError?:string;feedback:(rating:string,reasons:string[])=>void;publish?:()=>Promise<void>}){
@@ -47,3 +47,4 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
     </div>}</details>
   </article>;
 }
+

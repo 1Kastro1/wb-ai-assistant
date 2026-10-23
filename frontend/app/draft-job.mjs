@@ -2,7 +2,7 @@
  * @param {any} options
  */
 export async function waitForDraftJob(options) {
-  const {api,reviewId,instruction='',storage=null,now=()=>Date.now(),delay=ms=>new Promise(r=>setTimeout(r,ms)),timeoutMs=180000}=options;
+  const {api,reviewId,instruction='',storage=null,now=()=>Date.now(),delay=ms=>new Promise(r=>setTimeout(r,ms)),timeoutMs=720000}=options;
   const key='draft-job:'+reviewId,deadline=now()+timeoutMs;
   const read=()=>{try{return storage?.getItem(key)}catch{return null}};
   const keep=id=>{try{storage?.setItem(key,id)}catch{}};
@@ -40,3 +40,4 @@ export async function waitForDraftJob(options) {
   }
   throw new Error('Ответ ещё готовится на сервере. Нажмите «Продолжить ожидание», чтобы получить результат того же задания.');
 }
+
