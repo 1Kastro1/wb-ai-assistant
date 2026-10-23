@@ -5,7 +5,7 @@ import './marketplace-sync.css';
 
 type Row = Record<string, any>;
 
-export default function MarketplaceConnection({store,stores,name,connected,owner,canManage,busy,token,setToken,config,setConfig,status,onSelect,onSave,onTest,onSync,onHistory,productSync,reviewSync,questionSync}:Row) {
+export default function MarketplaceConnection({store,stores,name,connected,owner,canManage,busy,token,setToken,config,setConfig,status,onSelect,onSave,onTest,onSync,productSync,reviewSync,questionSync}:Row) {
   const items=[{kind:"products",label:"Товары",icon:"Товары",info:productSync},{kind:"reviews",label:"Отзывы",icon:"Отзывы",info:reviewSync},{kind:"questions",label:"Вопросы",icon:"Вопросы",info:questionSync}];
   return <div className="card marketplace-connection">
     <div className="card-heading"><div><h3>{name}</h3><p className="muted">Подключение активного магазина и обмен с маркетплейсом</p></div><span className={'pill '+(connected?'green':'amber')}>{connected?'Подключён':'Не подключён'}</span></div>
@@ -40,6 +40,5 @@ export default function MarketplaceConnection({store,stores,name,connected,owner
     {store.provider==='ozon'&&<p className="muted">Доступ к вопросам Ozon зависит от прав и возможностей кабинета. При отказе API проверьте доступ в Ozon Seller.</p>}
     {status.message&&<div className={'wb-feedback '+status.state} role={status.state==='error'?'alert':'status'}><span>{status.state==='success'?'✓':status.state==='error'?'!':'↻'}</span><div><b>{status.message}</b>{status.state==='working'&&<div className={status.kind==='products'?'sync-card-progress queued':'job-progress'}><i style={{width:status.kind==='products'?'28%':(status.progress||5)+'%'}}/></div>}</div></div>}
 
-    <button className="sync-details" onClick={onHistory}>Открыть историю синхронизаций →</button>
   </div>;
 }

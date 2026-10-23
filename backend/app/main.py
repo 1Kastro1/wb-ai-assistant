@@ -79,10 +79,11 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
+            resumable_batch = job.kind in ('drafts', 'question_drafts')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
-            if (resumable_import or waiting_reply) and not job.cancel_requested:
+            if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
-                message = 'Продолжение синхронизации после перезапуска' if resumable_import else 'Подготовка ответа ожидает запуска'
+                message = 'Продолжение синхронизации после перезапуска' if resumable_import else 'Подготовка ответов продолжится на сервере'
                 job.result = {**(job.result or {}), 'message': message}
             else:
                 job.status, job.result = 'interrupted', {**(job.result or {}), 'message':'Приложение перезапущено; повторите задание'}
@@ -1093,14 +1094,21 @@ async def execute_job(job_id):
                     conditions.append(Review.id.in_(selected_ids))
                 if since:
                     conditions.append(Review.created_at >= since)
+                failed_ids = list((job.result or {}).get('failed_ids') or [item['review_id'] for item in (job.result or {}).get('failures', [])]) if not is_single else []
+                if failed_ids:
+                    conditions.append(Review.id.not_in(failed_ids))
                 ids = list(db.scalars(
                     select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(
                         *conditions,
                     ).order_by(Review.created_at.desc(), Review.id)
                 ))
-                total, processed, failed, failures = len(ids), 0, 0, []
+                processed = 0 if is_single else int((job.result or {}).get('processed', 0))
+                failed = 0 if is_single else int((job.result or {}).get('failed', 0))
+                failures = [] if is_single else list((job.result or {}).get('failures', []))
+                completed_before = processed + failed
+                total = completed_before + len(ids)
                 single_draft = None
-                job.result = {**job.result, 'total': total, 'processed': 0, 'failed': 0}
+                job.result = {**job.result, 'total': total, 'processed': processed, 'failed': failed}
                 db.commit()
                 for index, review_id in enumerate(ids, 1):
                     if cancelled():
@@ -1120,11 +1128,12 @@ async def execute_job(job_id):
                         if is_single:
                             raise
                         failed += 1
+                        failed_ids.append(review_id)
                         if len(failures) < 20:
                             failures.append({'review_id': review_id, 'reason': (str(error) or type(error).__name__)[:300]})
-                    job.result = {**(job.result or {}), 'processed': processed, 'failed': failed, 'total': total, 'failures': failures}
+                    job.result = {**(job.result or {}), 'processed': processed, 'failed': failed, 'total': total, 'failures': failures, 'failed_ids': failed_ids}
                     db.flush()
-                    update_progress(round(index / max(1, total) * 100))
+                    update_progress(round((completed_before + index) / max(1, total) * 100))
                     if not is_single:
                         await run_waiting_sync()
                 schedule = setting(db, 'automation_schedule', {})
@@ -1155,6 +1164,7 @@ async def execute_job(job_id):
                     'account_id': account_id,
                     'since': since,
                     'failures': failures,
+                    'failed_ids': failed_ids,
                     'message': f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
                     'proposal_id': proposal_id, 'selected_ids': selected_ids, 'manual_batch': manual_batch, 'requested_by': requested_by,
                     **({'draft': single_draft} if is_single else {}),
@@ -1204,7 +1214,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling():
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -1467,22 +1477,25 @@ def preview_all_drafts(auth: AUTH, db: DB):
 
 @app.get('/jobs')
 def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
+    # Long all-store batches must remain visible even after hundreds of newer
+    # individual replies have pushed them out of the recent history window.
+    active_first = case((Job.status.in_(['queued', 'running']), 0), else_=1)
     if compact:
         fields = ('account_id', 'requested_by', 'manual_batch', 'operation_key', 'total', 'processed', 'failed',
-                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures')
+                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since')
         columns = [column for column in Job.__table__.columns if column.name != 'result']
         query = select(*columns, *(Job.result[key].label('r_' + key) for key in fields))
         if auth['role'] != 'owner':
             query = query.where(Job.result['account_id'].as_string() == active_store(db, auth))
         rows = []
-        for row in db.execute(query.order_by(Job.created_at.desc()).limit(100)).mappings():
+        for row in db.execute(query.order_by(active_first, Job.created_at.desc()).limit(100)).mappings():
             rows.append({**{column.name: row[column.name] for column in columns},
                          'result': {key: row['r_' + key] for key in fields if row['r_' + key] is not None}})
         etag = '"' + hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest() + '"'
         if request.headers.get('if-none-match') == etag:
             return Response(status_code=304, headers={'ETag': etag})
         return JSONResponse(rows, headers={'ETag': etag})
-    rows = list(db.scalars(select(Job).order_by(Job.created_at.desc()).limit(100)))
+    rows = list(db.scalars(select(Job).order_by(active_first, Job.created_at.desc()).limit(100)))
     if auth['role'] != 'owner':
         active = active_store(db, auth)
         rows = [job for job in rows if (job.result or {}).get('account_id') == active]
