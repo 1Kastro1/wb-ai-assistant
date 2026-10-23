@@ -128,7 +128,7 @@ async def boundary(request, call_next):
     actor = getattr(request.state, 'actor', None)
     if request.method in ('POST', 'PATCH', 'DELETE') and response.status_code < 400:
         clear_reads()
-    if actor and request.method in ('POST', 'PATCH', 'DELETE') and response.status_code < 400:
+    if actor and request.method in ('POST', 'PATCH', 'DELETE') and (response.status_code < 400 or response.status_code >= 500):
         try:
             with Session() as audit_db:
                 parts = [part for part in request.url.path.split('/') if part]
@@ -1231,6 +1231,10 @@ async def execute_job(job_id):
                 message = f'{default_message} {detail}'
                 job.status, job.result = 'failed', {**(job.result or {}), 'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail, 'finished_at': now()}
                 add_notification(db, 'job_failed', 'Задание завершилось с ошибкой', message, 'error', account_id)
+                actor = db.get(User, requested_by) if requested_by else None
+                db.add(Activity(user_id=requested_by or 'system', username=actor.username if actor else 'system',
+                                method='POST', path='/jobs/' + job_id, status=500,
+                                details={'event': 'job_failed', 'job_kind': kind}))
         job.result = {**job_metadata, **(job.result or {}), 'timing': {'queue_seconds': round(queue_seconds, 2), 'processing_seconds': round(time.monotonic() - started_clock, 2)}, 'finished_at': now()}
         db.commit()
 

@@ -56,6 +56,46 @@ class ActivityHistoryTests(unittest.TestCase):
         self.assertEqual(len(result['items']),3)
         self.assertEqual(result['items'][1]['actor_name'],'Коллега')
 
+    def test_technical_noise_is_hidden_without_deleting_audit_records(self):
+        self.seed()
+        noise = ['/stores/owner/activate', '/chat', '/voice/stt', '/voice/tts',
+                 '/voice/wake', '/settings/wb-test', '/settings/telegram/test', '/stores/owner/test',
+                 '/memory/preview', '/fitment/catalogs/preview', '/jobs/single-draft',
+                 '/conversations', '/unknown-operation']
+        with self.factory() as db:
+            db.add_all(Activity(user_id='owner',username='owner',path=path,method='POST',status=200) for path in noise)
+            db.commit()
+        items = self.client.get('/activity/page').json()['items']
+        self.assertEqual(len(items),3)
+        self.assertTrue(all(item['path'] not in noise for item in items))
+        with self.factory() as db:
+            self.assertEqual(len(list(db.scalars(select(Activity)))),3+len(noise))
+
+    def test_important_operations_and_errors_remain_visible(self):
+        paths = ['/jobs/drafts', '/jobs/selected-drafts', '/jobs/sync/reviews',
+                 '/jobs/task/cancel', '/jobs/task/retry', '/actions/publish',
+                 '/actions/action/confirm', '/users', '/settings/wb-token']
+        with self.factory() as db:
+            db.add_all(Activity(user_id='owner',username='owner',path=path,method='POST',status=200) for path in paths)
+            db.add(Activity(user_id='owner',username='owner',path='/settings/wb-test',method='POST',status=500))
+            db.commit()
+        items = self.client.get('/activity/page').json()['items']
+        self.assertEqual(len(items),len(paths)+1)
+        self.assertEqual(items[0]['status'],500)
+
+    def test_filter_runs_before_cursor_limit_and_search(self):
+        self.seed()
+        with self.factory() as db:
+            db.add_all(Activity(user_id='owner',username='owner',path='/chat',method='POST',status=200) for _ in range(60))
+            db.commit()
+        first = self.client.get('/activity/page?limit=2').json()
+        second = self.client.get('/activity/page?limit=2&before='+str(first['next_before'])).json()
+        self.assertEqual(len(first['items']),2)
+        self.assertTrue(first['has_more'])
+        self.assertEqual(len(second['items']),1)
+        self.assertFalse(second['has_more'])
+        self.assertEqual(len(self.client.get('/activity/page?q=уважаемый').json()['items']),1)
+
     def test_colleague_cannot_read_another_users_history(self):
         self.seed()
         self.actor={'role':'manager','user_id':'colleague','username':'colleague','permissions':[],'store_ids':[]}

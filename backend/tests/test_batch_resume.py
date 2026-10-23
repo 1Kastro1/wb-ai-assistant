@@ -102,3 +102,25 @@ def test_long_running_batch_stays_visible_after_many_newer_jobs(client):
         assert response.status_code == 200
         assert len(response.json()) == 100
         assert response.json()[0]['id'] == 'old-active'
+
+
+def test_failed_background_job_records_an_important_error(client, monkeypatch):
+    from app.db import Activity
+    from app.activity_history import activity_page
+    from sqlalchemy import select
+    with Session() as db:
+        db.add(Job(id='failed-import', kind='products', max_attempts=1, result={'account_id': 'owner'}))
+        db.commit()
+
+    class Provider:
+        async def sync_products(self, *args, **kwargs):
+            raise ValueError('Private error detail must not enter activity history')
+
+    monkeypatch.setattr(main, 'provider_for', lambda store: Provider())
+    asyncio.run(main.run_job_queue())
+    with Session() as db:
+        event = db.scalar(select(Activity).where(Activity.path == '/jobs/failed-import'))
+        assert event.status == 500
+        assert event.details == {'event': 'job_failed', 'job_kind': 'products'}
+        items = activity_page(db, {'role': 'owner'})['items']
+        assert items[0]['actor_name'] == 'Система'

@@ -2,6 +2,8 @@ const paths={'/memory/preview':'Проверен пример ответа по 
 const events={product_knowledge_refreshed:'Обновлена проверенная база знаний товаров',rule_enabled:'Правило включено',rule_disabled:'Правило отключено',registration_accepted:'Заявка на регистрацию принята',registration_rejected:'Заявка на регистрацию отклонена',user_deleted:'Пользователь удалён',rule_proposed:'Предложено новое правило',rule_updated:'Предложенное правило изменено',rule_added:'Правило добавлено в память',rule_deleted:'Правило удалено из памяти',rule_rejected:'Предложенное правило отклонено'};
 /** @param {any} item */
 export function activityDescription(item){
+ if(item.details?.event==='job_failed')return ['products','reviews','questions'].includes(item.details.job_kind)?'Синхронизация завершилась с ошибкой':'Подготовка ответов завершилась с ошибкой';
+ if(Number(item.status)>=400)return 'Ошибка выполнения действия';
  const path=item.path||'',event=item.details?.event;
  if(events[event])return events[event];
  if(paths[path])return paths[path];
