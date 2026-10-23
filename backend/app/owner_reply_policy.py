@@ -179,7 +179,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     # Only the exact no-claims templates and audited whole policies qualify.
     # Unknown/edited semantic rules must still reach the model, even on five stars.
     if allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
-        if any(adjusted == positive_template(review, rules, revision) for revision in range(3)) and assess(adjusted)['passed']:
+        if any(adjusted == positive_template(review, rules, revision, product=product) for revision in range(3)) and assess(adjusted)['passed']:
             result.update(verification_method='local_positive', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
             return adjusted, result

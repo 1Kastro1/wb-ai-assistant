@@ -84,13 +84,17 @@ POSITIVE_BODIES = (
 )
 
 
-def positive_template(review, rules, revision=0):
+def positive_template(review, rules, revision=0, *, product=None):
     """A narrow, reviewed no-claims answer; arbitrary semantic rules opt out."""
     from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
     from .safety import validate_reply
     if not rules or not empty_positive(review):
         return None
-    for rule in rules:
+    # Evaluate the same applicable policy as the final verifier. A certified
+    # workflow/category exclusion must not disable the no-claims route, while an
+    # unknown or edited directive must still reach semantic verification.
+    applicable = select_rules(rules, review, product)[0] if product is not None else rules
+    for rule in applicable:
         if not profile(rule).get('local_positive') and constraints([rule])['semantic']:
             return None
     body = POSITIVE_BODIES[max(0, int(revision)) % len(POSITIVE_BODIES)]
