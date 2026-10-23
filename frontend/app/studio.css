@@ -119,6 +119,7 @@ body { color: var(--ink); background: var(--canvas); -webkit-font-smoothing: ant
 .home-store-caption,.home-store-caption b { color: #c7bddb; }
 .shell .home-welcome-actions button:not(.primary) { background: #ffffff0c; color: #e6dff1; border-color: #c8b8e133; }
 .shell .home-welcome-actions button:not(.primary):hover { background: #ffffff17; }
+.shell .home-welcome-actions .action-button { display: inline-grid; }
 .workflow-caption { color: #c1b3d5; font-size: 8px; }
 .workflow-lines { opacity: .7; }
 .workflow-lines path { stroke: #c2a4e9; animation: studio-dash 24s linear infinite; }
@@ -152,6 +153,8 @@ body { color: var(--ink); background: var(--canvas); -webkit-font-smoothing: ant
 
 /* Working lists have stronger hierarchy, selection and real progress feedback. */
 .shell .compact-review.card { border-radius: 19px; border-color: #e0e4ef; border-left-width: 3px; padding: 20px 22px; box-shadow: 0 4px 18px -16px #323c6050; transition: border-color .18s,box-shadow .18s; }
+.shell .compact-review.negative { border-left-color: #dcaa70; }
+.shell .compact-review.positive { border-left-color: #8abda9; }
 .shell .compact-review.card:focus-within { border-top-color: #c6b3e4; border-right-color: #c6b3e4; border-bottom-color: #c6b3e4; box-shadow: 0 5px 20px -15px #5c3b9166; }
 .shell .compact-review.card:has(.review-head>.check>input:checked) { background: #fcfaff; border-color: #b8a0dc; box-shadow: 0 0 0 2px #b8a0dc18; }
 .shell .review-product-copy b { color: #30354b; font-size: 14px; font-weight: 680; line-height: 1.5; }
