@@ -104,6 +104,37 @@ class WorkbenchTests(unittest.TestCase):
             self.assertEqual(db.get(Draft,'d-existing').revision,3)
             self.assertEqual(db.scalar(select(func.count()).select_from(Job)),1)
 
+    def test_check_now_processes_entire_store_without_reusing_limited_jobs(self):
+        partial = self.submit(['r1'])
+        with self.factory() as db:
+            db.add(Job(id='limited-date', kind='drafts', result={'account_id':'owner','since':'2099-01-01'}))
+            for i in range(105):
+                db.add(Review(id='all-'+str(i), wb_review_id='all-'+str(i), product_id='p',
+                              rating=1 if i % 2 else 5, text='' if i % 2 else 'Отзыв',
+                              created_at='2020-01-01T00:00:00+00:00', wb_account_id='owner'))
+            db.add(Review(id='answered',wb_review_id='answered',product_id='p',rating=5,text='',wb_account_id='owner',is_answered=True))
+            db.commit()
+        response = self.client.post('/jobs/drafts', json={'manual_start':True})
+        self.assertEqual(response.status_code,200,response.text)
+        job = response.json()
+        self.assertNotIn(job['id'],[partial['id'],'limited-date'])
+        self.assertEqual(job['result']['total'],107)
+        self.assertTrue(job['result']['manual_batch'])
+        self.assertEqual(self.client.post('/jobs/drafts',json={'manual_start':True}).json()['id'],job['id'])
+        result = self.run_job(job)
+        self.assertEqual(result['result']['processed'],107)
+        with self.factory() as db:
+            self.assertEqual(db.scalar(select(func.count()).select_from(Draft)),108)
+            self.assertEqual(db.get(Draft,'d-existing').revision,3)
+            for rid in ['foreign','question','answered']:
+                self.assertIsNone(db.scalar(select(Draft).where(Draft.review_id==rid)))
+            self.assertEqual(db.scalar(select(func.count()).select_from(Action)),0)
+
+    def test_check_now_requires_enabled_assistant(self):
+        with self.factory() as db:
+            set_setting(db,'assistant_enabled',False);db.commit()
+        self.assertEqual(self.client.post('/jobs/drafts',json={'manual_start':True}).status_code,400)
+
     def test_foreign_unknown_or_question_ids_reject_entire_request(self):
         for rid in ['foreign','unknown','question']:
             self.assertEqual(self.client.post('/jobs/selected-drafts',json={'review_ids':['r1',rid]}).status_code,404)
