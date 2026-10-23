@@ -7,12 +7,13 @@ class ModelRouter:
     PROFILES = {'economy':(2048,256),'normal':(4096,768),'quality':(8192,1536)}
 
     def choose(self, task='STANDARD'):
+        # Policy verification has a fixed profile. Keep it independent of an
+        # extra DB connection (previews may use their own isolated DB session).
+        if task=='OWNER_RULES':
+            return {'model':MODEL,'options':{'num_ctx':16384,'num_predict':512,'temperature':0.2}}
         with Session() as db:
             mode=setting(db,'performance_mode','normal')
         context,predict=self.PROFILES.get(mode,self.PROFILES['normal'])
         if task=='FAST':predict=min(predict,256)
-        # A policy check contains all matched owner rules and may return a full
-        # repaired answer. The short FAST JSON cap can truncate that answer.
-        if task=='OWNER_RULES':context,predict=16384,512
         return {'model':MODEL,'options':{'num_ctx':context,'num_predict':predict,'temperature':0.2}}
 
