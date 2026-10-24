@@ -1,4 +1,4 @@
-"""Server-owned schedules, shared intervals and store-scoped duplicate protection."""
+"""Server-owned schedules with independent review/question controls."""
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from sqlalchemy import select, func
@@ -11,9 +11,14 @@ DEFAULTS = {'enabled': False, 'reviews_hours': 3, 'questions_hours': 3,
 
 
 def normalize_schedule(raw):
-    value = {**DEFAULTS, **(raw or {})}
+    raw = raw or {}
+    value = {**DEFAULTS, **raw}
+    for kind in ('reviews', 'questions'):
+        value[kind + '_hours'] = int(raw.get(kind + '_hours', raw.get('sync_hours', 3)))
+        value[kind + '_sync_enabled'] = bool(raw.get(kind + '_sync_enabled', raw.get('sync_enabled', value['enabled'])))
+    value['question_drafts_hours'] = int(raw.get('question_drafts_hours', value['drafts_hours']))
     value['sync_hours'] = int(value.get('sync_hours', value['reviews_hours']))
-    value['sync_enabled'] = bool(value.get('sync_enabled', value['enabled']))
+    value['sync_enabled'] = value['reviews_sync_enabled'] or value['questions_sync_enabled']
     value['generation_enabled'] = bool(value['drafts_enabled'] or value['question_drafts_enabled']) and bool(value['enabled'])
     return value
 
@@ -30,7 +35,8 @@ def enqueue_generation(db, schedule, store, kind, current):
         return False
     last_key = f'last_{kind}:{store.id}'
     last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
-    if current - last < max(1, int(schedule.get('drafts_hours', 6))) * 3600 or pending(db, kind, store.id):
+    hours = schedule.get('question_drafts_hours', schedule.get('drafts_hours', 6)) if kind == 'question_drafts' else schedule.get('drafts_hours', 6)
+    if current - last < max(1, int(hours)) * 3600 or pending(db, kind, store.id):
         return False
     result = {'account_id': store.id, 'scheduled': True,
               'message': 'Плановая подготовка ответов на вопросы' if kind == 'question_drafts' else 'Плановая подготовка ответов на отзывы'}
@@ -48,8 +54,9 @@ def enqueue_due_jobs(db, schedule, current):
     for store in stores:
         if schedule.get('sync_enabled', True):
             for kind in ('products', 'reviews', 'questions'):
-                # New saves synchronize reviews/questions on exactly one interval.
-                hours = schedule.get('sync_hours', 3) if kind != 'products' else schedule.get('products_hours', 24)
+                if kind != 'products' and not schedule.get(kind + '_sync_enabled', schedule.get('sync_enabled', True)):
+                    continue
+                hours = schedule.get(kind + '_hours', schedule.get('sync_hours', 3)) if kind != 'products' else schedule.get('products_hours', 24)
                 key = f'last_{kind}:{store.id}'
                 last = float(schedule.get(key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
                 if current - last >= max(1, int(hours)) * 3600 and not pending(db, kind, store.id):
