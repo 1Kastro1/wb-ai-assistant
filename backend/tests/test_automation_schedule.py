@@ -87,6 +87,7 @@ def test_pausing_automation_preserves_manual_full_batch(client, monkeypatch):
         set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True, 'question_drafts_enabled': True})
         db.add_all([
             Job(id='manual', kind='drafts', result={'account_id': 'owner', 'manual_batch': True}),
+            Job(id='manual-questions', kind='question_drafts', result={'account_id': 'owner', 'manual_batch': True}),
             Job(id='scheduled', kind='drafts', result={'account_id': 'owner', 'scheduled': True}),
             Job(id='questions', kind='question_drafts', result={'account_id': 'owner', 'scheduled': True}),
         ])
@@ -96,6 +97,7 @@ def test_pausing_automation_preserves_manual_full_batch(client, monkeypatch):
     assert not response.json()['enabled']
     with Session() as db:
         assert db.get(Job, 'manual').status == 'queued'
+        assert db.get(Job, 'manual-questions').status == 'queued'
         assert db.get(Job, 'scheduled').status == db.get(Job, 'questions').status == 'cancelled'
 
 
@@ -135,6 +137,72 @@ def test_invalid_interval_and_disabled_assistant_are_rejected(client, monkeypatc
     monkeypatch.setattr(main, 'run_job_queue', AsyncMock())
     assert client.patch('/settings/schedule', json={'sync_hours': 0}).status_code == 422
     assert client.patch('/settings/schedule', json={'drafts_hours': 169}).status_code == 422
+    assert client.patch('/settings/schedule', json={'question_drafts_hours': 0}).status_code == 422
     client.patch('/settings/assistant', json={'enabled': False})
     response = client.patch('/settings/schedule', json={'generation_enabled': True})
     assert response.status_code == 400
+
+
+def test_independent_intervals_tick_and_reload_without_browser(client, monkeypatch):
+    monkeypatch.setattr(main, 'run_job_queue', AsyncMock())
+    connected_stores()
+    current = time.time()
+    monkeypatch.setattr(main.time, 'time', lambda: current)
+    payload = {'reviews_sync_enabled': True, 'questions_sync_enabled': True,
+               'drafts_enabled': True, 'question_drafts_enabled': True,
+               'reviews_hours': 2, 'questions_hours': 3, 'drafts_hours': 5, 'question_drafts_hours': 7}
+    response = client.patch('/settings/schedule', json=payload)
+    assert response.status_code == 200, response.text
+    saved = client.get('/settings/schedule').json()
+    assert all(saved[key] == value for key, value in payload.items())
+    with Session() as db:
+        for job in db.scalars(select(Job)):
+            job.status = 'completed'
+        db.commit()
+    # Worker ticks independently after the settings request has finished.
+    for hours, kinds in ((2, {'reviews'}), (3, {'questions'}), (5, {'reviews', 'drafts'}),
+                         (7, {'reviews', 'questions', 'question_drafts'})):
+        main.queue_scheduled_jobs(current + hours * 3600)
+        main.queue_scheduled_jobs(current + hours * 3600)
+        with Session() as db:
+            jobs = list(db.scalars(select(Job).where(Job.status == 'queued')))
+            assert {job.kind for job in jobs} == kinds
+            assert len(jobs) == len(kinds) * 2
+            for job in jobs:
+                job.status = 'completed'
+            db.commit()
+
+
+def test_pausing_only_reviews_preserves_questions_and_manual_work(client, monkeypatch):
+    monkeypatch.setattr(main, 'run_job_queue', AsyncMock())
+    with Session() as db:
+        set_setting(db, 'automation_schedule', {'enabled': True, 'sync_enabled': True,
+                    'drafts_enabled': True, 'question_drafts_enabled': True, 'drafts_hours': 4})
+        db.add_all([Job(id='r', kind='drafts', result={'scheduled': True}),
+                    Job(id='q', kind='question_drafts', result={'scheduled': True}),
+                    Job(id='full', kind='drafts', result={'manual_batch': True})])
+        db.commit()
+    response = client.patch('/settings/schedule', json={'reviews_sync_enabled': False, 'drafts_enabled': False})
+    assert response.status_code == 200, response.text
+    value = response.json()
+    assert value['enabled'] and value['questions_sync_enabled'] and value['question_drafts_enabled']
+    assert not value['reviews_sync_enabled'] and not value['drafts_enabled']
+    assert value['question_drafts_hours'] == 4
+    with Session() as db:
+        assert db.get(Job, 'r').status == 'cancelled'
+        assert db.get(Job, 'q').status == db.get(Job, 'full').status == 'queued'
+    # The shortcut in Reviews must not pause question generation either.
+    response = client.post('/auto-replies/pause')
+    assert response.status_code == 200
+    assert client.get('/settings/schedule').json()['question_drafts_enabled']
+
+
+def test_review_start_leaves_questions_paused(client, monkeypatch):
+    monkeypatch.setattr(main, 'run_job_queue', AsyncMock())
+    with Session() as db:
+        set_setting(db, 'automation_schedule', {'enabled': True, 'sync_enabled': False,
+                    'drafts_enabled': False, 'question_drafts_enabled': False})
+        db.commit()
+    assert client.post('/auto-replies/start').status_code == 200
+    value = client.get('/settings/schedule').json()
+    assert value['drafts_enabled'] and not value['question_drafts_enabled']

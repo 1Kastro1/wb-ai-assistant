@@ -767,6 +767,9 @@ class ScheduleInput(Payload):
     sync_hours: int | None = Field(default=None, ge=1, le=168)
     sync_enabled: bool | None = None
     generation_enabled: bool | None = None
+    reviews_sync_enabled: bool | None = None
+    questions_sync_enabled: bool | None = None
+    question_drafts_hours: int | None = Field(default=None, ge=1, le=168)
     enabled: bool = False
     reviews_hours: int = Field(default=3, ge=1, le=168)
     products_hours: int = Field(default=24, ge=1, le=720)
@@ -935,33 +938,40 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
     current = normalize_schedule(row.value if row else {})
     updates = {key: value for key, value in body.model_dump(exclude_unset=True).items() if value is not None}
     value = {**current, **updates}
-    if 'sync_hours' in updates or 'reviews_hours' in updates or 'questions_hours' in updates:
-        hours = updates.get('sync_hours', updates.get('reviews_hours', updates.get('questions_hours')))
+    if 'sync_hours' in updates:
+        hours = updates['sync_hours']
         value.update(sync_hours=hours, reviews_hours=hours, questions_hours=hours)
+    if 'sync_enabled' in updates:
+        value['reviews_sync_enabled'] = value['questions_sync_enabled'] = updates['sync_enabled']
     if 'generation_enabled' in updates:
         value['drafts_enabled'] = value['question_drafts_enabled'] = updates['generation_enabled']
-    if 'sync_enabled' in updates or 'generation_enabled' in updates:
-        value['enabled'] = bool(value['sync_enabled'] or value['generation_enabled'])
+        if 'drafts_hours' in updates and 'question_drafts_hours' not in updates:
+            value['question_drafts_hours'] = updates['drafts_hours']
+    controls = ('reviews_sync_enabled', 'questions_sync_enabled', 'drafts_enabled', 'question_drafts_enabled')
+    if any(key in updates for key in (*controls, 'sync_enabled', 'generation_enabled')):
+        value['enabled'] = any(value[key] for key in controls)
     elif 'enabled' in updates:
-        value['sync_enabled'] = value['enabled']
+        value['reviews_sync_enabled'] = value['questions_sync_enabled'] = value['enabled']
     value = normalize_schedule(value)
     if value.get('generation_enabled') and not setting(db, 'assistant_enabled', True):
         raise ValueError('Сначала включите ассистента для подготовки ответов')
     # Start newly enabled tasks promptly; changing an interval keeps its last run.
     reset_kinds = []
-    if value.get('sync_enabled') and not current.get('sync_enabled'):
-        reset_kinds.extend(('reviews', 'questions'))
-    if value.get('generation_enabled') and not current.get('generation_enabled'):
-        reset_kinds.extend(('drafts', 'question_drafts'))
+    for kind, field in (('reviews', 'reviews_sync_enabled'), ('questions', 'questions_sync_enabled'),
+                        ('drafts', 'drafts_enabled'), ('question_drafts', 'question_drafts_enabled')):
+        if value['enabled'] and value.get(field) and not (current['enabled'] and current.get(field)):
+            reset_kinds.append(kind)
     for key in list(value):
         if any(key == 'last_' + kind or key.startswith('last_' + kind + ':') for kind in reset_kinds):
             value.pop(key)
     if value.get('drafts_enabled'):
         value['drafts_since'] = (datetime.now(timezone.utc) - timedelta(days=int(value.get('drafts_days', 7)))).isoformat()
     value = normalize_schedule(value)
-    if current.get('generation_enabled') and not value.get('generation_enabled'):
+    paused_kinds = [kind for kind, field in (('drafts', 'drafts_enabled'), ('question_drafts', 'question_drafts_enabled'))
+                    if current['enabled'] and current.get(field) and not (value['enabled'] and value.get(field))]
+    if paused_kinds:
         for job in db.scalars(select(Job).where(
-            Job.kind.in_(('drafts', 'question_drafts')), Job.status.in_(('queued', 'running')),
+            Job.kind.in_(paused_kinds), Job.status.in_(('queued', 'running')),
             Job.result['manual_batch'].as_boolean().is_not(True))):
             job.cancel_requested = True
             if job.status == 'queued':
@@ -1013,9 +1023,8 @@ async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR,
     schedule = schedule_get(auth, db)
     since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     current = time.time()
-    schedule.update({'enabled': True, 'drafts_enabled': True, 'question_drafts_enabled': True,
+    schedule.update({'enabled': True, 'drafts_enabled': True,
                      'generation_enabled': True, 'last_drafts': current, f'last_drafts:{store.id}': current, 'drafts_since': since})
-    enqueue_generation(db, schedule, store, 'question_drafts', current)
     set_setting(db, 'automation_schedule', schedule)
     job = db.scalar(select(Job).where(automated_draft_scope(active_store(db,auth)), Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
     if not job:
@@ -1036,12 +1045,11 @@ def pause_auto_replies(auth: MARKET_OPERATOR, db: DB):
     can_operate_store(auth, store)
     schedule = schedule_get(auth, db)
     schedule['drafts_enabled'] = False
-    schedule['question_drafts_enabled'] = False
-    schedule['generation_enabled'] = False
-    schedule['enabled'] = bool(schedule.get('sync_enabled', True))
+    schedule['generation_enabled'] = bool(schedule.get('question_drafts_enabled'))
+    schedule['enabled'] = bool(schedule.get('sync_enabled', True) or schedule.get('question_drafts_enabled'))
     set_setting(db, 'automation_schedule', schedule)
     for job in db.scalars(select(Job).where(
-        Job.kind.in_(('drafts', 'question_drafts')), Job.result['manual_batch'].as_boolean().is_not(True),
+        Job.kind == 'drafts', Job.result['manual_batch'].as_boolean().is_not(True),
         func.coalesce(Job.result['account_id'].as_string(), 'owner') == active_store(db,auth),
         Job.status.in_(['queued', 'running']))):
         job.cancel_requested = True
@@ -2061,7 +2069,7 @@ async def schedule_question_drafts(body: QuestionDraftBatch, background: Backgro
     existing = next((job for job in db.scalars(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued','running']))) if (job.result or {}).get('account_id') == active), None)
     if existing:
         return public(existing)
-    job = Job(id=str(uuid4()), kind='question_drafts', priority=50, result={'account_id': active, 'selected_ids': selected, 'message': 'Подготовка ответов на вопросы поставлена в очередь'})
+    job = Job(id=str(uuid4()), kind='question_drafts', priority=50, result={'account_id': active, 'selected_ids': selected, 'manual_batch': True, 'message': 'Подготовка ответов на вопросы поставлена в очередь'})
     db.add(job); db.commit(); background.add_task(run_job_queue)
     return public(job)
 
