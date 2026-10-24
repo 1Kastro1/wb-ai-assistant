@@ -6,11 +6,23 @@ import time
 import httpx
 from sqlalchemy import select, func, or_
 from sqlalchemy.exc import OperationalError
-from .db import Session, Job, Review, Draft, GenerationOutcome, now
+from .db import Session, Job, Review, Draft, GenerationOutcome, Memory, now
+from . import rule_execution
 from .generation_control import FastPathUnavailable, GenerationBusy, ReviewSkipped, batch_context
 
 POLL_SECONDS = .5
 RETRY_DELAYS = (5, 20)
+
+
+def fast_policy_version(db):
+    """Previously deferred IDs are eligible again after audited policy changes."""
+    import hashlib
+    import json
+    rules = list(db.execute(select(Memory.id, Memory.scope, Memory.kind, Memory.text)
+                           .where(Memory.enabled == True).order_by(Memory.id)))
+    value = [rule_execution.VERSION, rule_execution.PROFILES, rule_execution.POSITIVE_BODIES,
+             [list(row) for row in rules]]
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 def fast_condition():
@@ -60,6 +72,11 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
     failures = list(initial.get('failures') or []) if not single else []
     excluded = set(initial.get('failed_ids') or [x['review_id'] for x in failures]) if not single else set()
     slow_ids = set(initial.get('slow_ids') or [])
+    with session_factory() as db:
+        policy_version = fast_policy_version(db)
+    if initial.get('fast_policy_version') != policy_version:
+        slow_ids.clear()
+    next_policy_check = time.monotonic() + 30
     retries = dict(initial.get('retries') or {})
     active = {}
     between_task = None
@@ -108,6 +125,7 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
                           'failed': failed, 'skipped': skipped, 'attention': attention,
                           'manual_errors': manual_errors, 'failures': failures[-20:],
                           'failed_ids': sorted(excluded), 'slow_ids': sorted(slow_ids),
+                          'fast_policy_version': policy_version,
                           'retries': retries, 'retrying': len(retries), 'current_reviews': running,
                           'remaining': remaining, 'updated_at': now(), 'queue_version': 2,
                           'accounted_outcomes': accounted_outcomes, 'accounted_attention': accounted_attention,
@@ -195,6 +213,13 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
 
     try:
         while True:
+            if time.monotonic() >= next_policy_check:
+                with session_factory() as db:
+                    latest_policy = fast_policy_version(db)
+                if latest_policy != policy_version:
+                    policy_version = latest_policy
+                    slow_ids.clear()
+                next_policy_check = time.monotonic() + 30
             # Drain committed results before cancellation so saved answers retain
             # their counters even when a stop request arrives at the same moment.
             completed_any = False
@@ -220,8 +245,8 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
             started_any = False
             for lane in (('fast', 'model') if fast_supported else ('model',)):
                 if lane not in active:
-                    if lane == 'model' and between_task is not None:
-                        continue
+                    # Imports run in their own session/task. A slow marketplace
+                    # must not stop either generation lane while it awaits I/O.
                     info = next_review(lane)
                     if info:
                         active[lane] = (asyncio.create_task(generate_one(info)), info)

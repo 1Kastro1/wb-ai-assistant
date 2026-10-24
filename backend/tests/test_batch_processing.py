@@ -187,8 +187,13 @@ def test_cancel_is_observed_during_between_review_sync(client, seeded, monkeypat
 
     async def scenario():
         syncing = asyncio.Event()
+        saved_once = False
 
         async def generate(db, rid, instruction=''):
+            nonlocal saved_once
+            if saved_once:
+                await asyncio.sleep(600)
+            saved_once = True
             return save(db, rid)
 
         async def between():
@@ -226,6 +231,63 @@ def test_fast_only_never_calls_model_for_unreviewed_policy(client, seeded, monke
             asyncio.run(generate_draft(db, 'r4', fast_only=True, skip_existing=True))
         assert db.scalar(select(Draft.id).where(Draft.review_id == 'r4')) is None
     calls.assert_not_called()
+
+
+def test_model_lane_continues_while_marketplace_sync_waits(client, seeded, monkeypatch):
+    start_job()
+
+    async def scenario():
+        syncing, release = asyncio.Event(), asyncio.Event()
+
+        async def generate(db, rid, instruction=''):
+            await asyncio.sleep(.01)
+            return save(db, rid)
+
+        async def between():
+            syncing.set()
+            await release.wait()
+
+        monkeypatch.setattr(main, 'generate_draft', generate)
+        monkeypatch.setattr(main, 'run_waiting_sync', between)
+        task = asyncio.create_task(main.run_sync_job('batch'))
+        try:
+            await asyncio.wait_for(syncing.wait(), 2)
+            for _ in range(100):
+                with Session() as db:
+                    if len(list(db.scalars(select(Draft)))) == 4:
+                        break
+                await asyncio.sleep(.01)
+            else:
+                raise AssertionError('Marketplace synchronization blocked generation')
+            assert not task.done(), 'Maintenance protection released before the import ended'
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 2)
+
+    asyncio.run(scenario())
+
+
+def test_resume_reconsiders_slow_ids_when_audited_policy_changes(client, seeded, monkeypatch):
+    with Session() as db:
+        row = db.get(Review, 'r4')
+        row.text, row.rating, row.risk, row.manual = '', 5, 'NORMAL', False
+        db.commit()
+    start_job(selected_ids=['r4'], slow_ids=['r4'], processed=12, fast_policy_version='old-policy')
+    routes = []
+
+    async def generate(db, rid, instruction='', *, fast_only=False):
+        routes.append(fast_only)
+        assert fast_only
+        return save(db, rid)
+
+    monkeypatch.setattr(main, 'generate_draft', generate)
+    asyncio.run(main.run_sync_job('batch'))
+    assert routes == [True]
+    with Session() as db:
+        result = db.get(Job, 'batch').result
+        assert result['processed'] == 13
+        assert result['slow_ids'] == []
+        assert result['fast_policy_version'] == batch.fast_policy_version(db)
 
 
 def test_expired_claim_can_be_recovered_after_worker_crash(client):
@@ -306,3 +368,26 @@ def test_real_fast_route_commits_answer_and_recovery_record_together(client, see
         assert db.get(GenerationOutcome, ('batch', 'r4')) is not None
         assert db.scalar(select(Draft.id).where(Draft.review_id == 'r4')) is not None
     calls.assert_not_called()
+
+
+def test_imported_review_change_cannot_save_an_answer_for_old_text(client, seeded, monkeypatch):
+    from app import services
+    from app.db import Memory
+    with Session() as db:
+        review = db.get(Review, 'r4')
+        review.text, review.rating, review.risk, review.manual = '', 5, 'NORMAL', False
+        db.add(Memory(id='hello', kind='REVIEW_RULE', text='Каждый ответ начинай с «Добрый день!».'))
+        db.commit()
+
+    async def update_during_check(reply, *args, **kwargs):
+        with Session() as imported:
+            review = imported.get(Review, 'r4')
+            review.text, review.rating = 'Товар повреждён', 1
+            imported.commit()
+        return reply, {'passed': True, 'checked': True, 'issues': []}
+
+    monkeypatch.setattr(services, 'enforce_owner_rules', update_during_check)
+    with Session() as db:
+        with pytest.raises(GenerationBusy, match='обновлены синхронизацией'):
+            asyncio.run(services.generate_draft(db, 'r4', fast_only=True))
+        assert db.scalar(select(Draft.id).where(Draft.review_id == 'r4')) is None

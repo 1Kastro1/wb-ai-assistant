@@ -19,6 +19,7 @@ REVIEWED = 'Пиши кратко и доброжелательно, не выд
 PARTS = 'Применяй только к автозапчастям: учитывай ось и сторону установки.'
 UNKNOWN = 'Всегда сообщай точный код упаковки из карточки.'
 CURRENT_POLICIES = json.loads((Path(__file__).parent/'fixtures/positive_rating_rules.json').read_text(encoding='utf-8'))
+NO_DEMANDS = (Path(__file__).parent/'fixtures/positive_no_demands_rule.txt').read_text(encoding='utf-8').strip()
 
 
 @pytest.fixture
@@ -203,7 +204,7 @@ def test_current_category_policies_do_not_send_empty_rating_to_model(client, mon
         monkeypatch.setattr(ollama, method, checker)
     with Session() as db:
         # All current global policies, including the 13 newer recommendations.
-        rules = [row['text'] for row in CURRENT_POLICIES if row['scope'] == 'Все товары']
+        rules = [row['text'] for row in CURRENT_POLICIES if row['scope'] == 'Все товары'] + [NO_DEMANDS]
         db.add_all([Memory(id=f'live-{i}',kind='REVIEW_RULE',text=text) for i,text in enumerate(rules)])
         db.add(Product(id='cleaner',name='Универсальный спрей очиститель с ароматом мяты, 500мл',brand='POLLY ROLLY'))
         db.flush()
@@ -213,7 +214,7 @@ def test_current_category_policies_do_not_send_empty_rating_to_model(client, mon
         for _ in range(3):
             result = asyncio.run(generate_draft(db,'rating'))
             policy = result['quality']['owner_rules']
-            assert policy['matched'] == 25
+            assert policy['matched'] == 26
             assert policy['passed'] and policy['checked']
             assert policy['verification_method'] == 'local_positive'
             assert result['quality']['timing']['model_seconds'] == 0
@@ -235,6 +236,8 @@ def test_audited_recommendation_edits_and_unknown_rules_still_require_model():
     assert execution.positive_template(review,[*rules,UNKNOWN],product=product) is None
     changed = next(row['text'] for row in CURRENT_POLICIES if row['text'].startswith('Рекомендации для отзывов — Очистители'))
     assert execution.positive_template(review,[*rules,changed+' Всегда обещай результат.'],product=product) is None
+    assert execution.positive_template(review,[*rules,NO_DEMANDS],product=product)
+    assert execution.positive_template(review,[*rules,NO_DEMANDS+' Всегда указывай страну производства.'],product=product) is None
 
 
 def test_positive_eligibility_matches_certified_context_exclusions(monkeypatch):
