@@ -6,7 +6,7 @@ from app import main
 from app.db import Account, Draft, Job, Session, StoreProfile, set_setting
 
 
-def test_sync_runs_between_bulk_drafts(client, seeded, monkeypatch):
+def test_sync_starts_during_bulk_and_sees_committed_answers(client, seeded, monkeypatch):
     events = []
 
     async def generate(db, review_id, instruction=''):
@@ -33,7 +33,10 @@ def test_sync_runs_between_bulk_drafts(client, seeded, monkeypatch):
     monkeypatch.setattr(main, 'generate_draft', generate)
     monkeypatch.setattr(main, 'provider_for', lambda store: Provider())
     asyncio.run(main.run_job_queue())
-    assert events == ['draft', 'sync', 'draft', 'draft', 'draft']
+    assert events.count('draft') == 4 and events.count('sync') == 1
+    # Imports start after a committed answer, without requiring the next
+    # generation task to wait for that import's network operations.
+    assert events[0] == events[-1] == 'draft'
     with Session() as db:
         assert db.get(Job, 'bulk').result['processed'] == 4
         assert db.get(Job, 'import').status == 'completed'

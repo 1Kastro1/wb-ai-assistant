@@ -19,7 +19,7 @@ from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
 from .generation_budget import GenerationBudget
-from .generation_control import exclusive_generation, FastPathUnavailable, ReviewSkipped, record_outcome
+from .generation_control import exclusive_generation, FastPathUnavailable, GenerationBusy, ReviewSkipped, record_outcome
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
 from .rule_execution import select_rules, positive_template
@@ -715,6 +715,7 @@ async def generate_question_draft(db, question, instruction=''):
     fallback_reason = ''
     if question.is_answered:
         raise ValueError('На вопрос уже есть ответ')
+    expected_question_input = (question.text, question.rating, question.product_id)
     product = db.get(Product, question.product_id)
     existing = db.scalar(select(Draft).where(Draft.review_id == question.id))
     expected_revision = existing.revision if existing else None
@@ -826,6 +827,8 @@ async def generate_question_draft(db, question, instruction=''):
     db.refresh(question)
     if question.is_answered:
         raise ValueError('Вопрос изменился во время генерации')
+    if (question.text, question.rating, question.product_id) != expected_question_input:
+        raise GenerationBusy('Данные вопроса обновлены синхронизацией; повторяем подготовку')
     draft = db.scalar(select(Draft).where(Draft.review_id == question.id).execution_options(populate_existing=True))
     if (draft.revision if draft else None) != expected_revision:
         raise ValueError('Черновик изменён во время генерации')
@@ -868,6 +871,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         raise ValueError('Отзыв не найден или уже имеет ответ')
     if review.status == 'publishing':
         raise ValueError('Публикация уже выполняется')
+    expected_review_input = (review.text, review.rating, review.product_id)
     initial_draft = db.scalar(select(Draft).where(Draft.review_id == review_id))
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
@@ -1050,6 +1054,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     db.refresh(review)
     if review.is_answered or review.status == 'publishing':
         raise ValueError('Отзыв изменился во время генерации')
+    if (review.text, review.rating, review.product_id) != expected_review_input:
+        raise GenerationBusy('Данные отзыва обновлены синхронизацией; повторяем подготовку')
     draft = db.scalar(select(Draft).where(Draft.review_id == review_id).execution_options(populate_existing=True))
     if (draft.revision if draft else None) != expected_revision:
         raise ValueError('Черновик изменён во время генерации. Правки сохранены; повторите запрос при необходимости')
