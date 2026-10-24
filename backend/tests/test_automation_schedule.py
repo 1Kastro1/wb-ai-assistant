@@ -87,6 +87,7 @@ def test_pausing_automation_preserves_manual_full_batch(client, monkeypatch):
         set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True, 'question_drafts_enabled': True})
         db.add_all([
             Job(id='manual', kind='drafts', result={'account_id': 'owner', 'manual_batch': True}),
+            Job(id='manual-questions', kind='question_drafts', result={'account_id': 'owner', 'manual_batch': True}),
             Job(id='scheduled', kind='drafts', result={'account_id': 'owner', 'scheduled': True}),
             Job(id='questions', kind='question_drafts', result={'account_id': 'owner', 'scheduled': True}),
         ])
@@ -96,6 +97,7 @@ def test_pausing_automation_preserves_manual_full_batch(client, monkeypatch):
     assert not response.json()['enabled']
     with Session() as db:
         assert db.get(Job, 'manual').status == 'queued'
+        assert db.get(Job, 'manual-questions').status == 'queued'
         assert db.get(Job, 'scheduled').status == db.get(Job, 'questions').status == 'cancelled'
 
 

@@ -2069,7 +2069,7 @@ async def schedule_question_drafts(body: QuestionDraftBatch, background: Backgro
     existing = next((job for job in db.scalars(select(Job).where(Job.kind == 'question_drafts', Job.status.in_(['queued','running']))) if (job.result or {}).get('account_id') == active), None)
     if existing:
         return public(existing)
-    job = Job(id=str(uuid4()), kind='question_drafts', priority=50, result={'account_id': active, 'selected_ids': selected, 'message': 'Подготовка ответов на вопросы поставлена в очередь'})
+    job = Job(id=str(uuid4()), kind='question_drafts', priority=50, result={'account_id': active, 'selected_ids': selected, 'manual_batch': True, 'message': 'Подготовка ответов на вопросы поставлена в очередь'})
     db.add(job); db.commit(); background.add_task(run_job_queue)
     return public(job)
 
