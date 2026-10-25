@@ -21,12 +21,12 @@ class PositiveComparisonTests(unittest.TestCase):
         for text in ('Не очищает, другие средства лучше', 'Другие средства не помогли, и этот не помог', 'Не очищает другие поверхности'):
             self.assertIn('NO_RESULT', analyze_customer_message(text, 1)['complaints'])
 
-    def test_blank_positive_reply_names_product_without_invented_properties(self):
+    def test_blank_positive_reply_is_brief_without_product_name_or_invented_properties(self):
         self.product.name, self.product.category = 'Свеча NGK', 'Свечи'
         answers = {rule_reply(self.review, self.product, revision) for revision in range(3)}
         self.assertEqual(len(answers), 3)
         for answer in answers:
-            self.assertIn('Свеча NGK', answer)
+            self.assertNotIn('Свеча NGK', answer)
             self.assertGreaterEqual(len(answer), 120)
             self.assertNotIn('совместим', answer)
             validate_reply(answer)
@@ -35,7 +35,7 @@ class PositiveComparisonTests(unittest.TestCase):
         answer = rule_reply(self.review, self.product, facts=[{'text':'Распылите средство на поверхность. Через 30 секунд протрите тканью.', 'verification_status':'VERIFIED'}])
         self.assertNotIn('30 секунд', answer)
         self.assertNotIn('Распылите', answer)
-        self.assertIn('Profoam', answer)
+        self.assertNotIn('Profoam', answer)
         self.assertNotIn('Извините', answer)
 
     def test_five_star_praise_omits_usage_but_keeps_concrete_detail(self):

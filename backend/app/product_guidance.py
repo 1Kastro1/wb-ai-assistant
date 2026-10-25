@@ -102,9 +102,9 @@ def usage_excerpt(facts):
                 continue
             if not heading and fact.get('kind') != 'instruction' and re.match(r'(?:особенности|форма выпуска|назначение средства|объем|объём|вес|упаковка|прочие характеристики)\s*:', sentence, re.I):
                 continue
-            if not heading and fact.get('kind') != 'instruction' and not re.search(r'нанесите|наносите|распылите|встряхните|протрите|потрите|смойте|оставьте|удалите|смочите|разместите|закрепите|установите|откройте|не используйте', sentence, re.I):
+            if not heading and fact.get('kind') != 'instruction' and not re.search(r'нанесите|наносите|распылите|встряхните|протрите|потрите|смойте|оставьте|удалите|уберите|рекомендуется\s+обработ|смочите|разместите|закрепите|установите|откройте|не используйте', sentence, re.I):
                 continue
-            action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
+            action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|уберите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
             if (action or re.search(r'подожд|смоч|охлад|включ|выключ|\d+\s*(?:[–-]\s*\d+\s*)?(?:секунд|минут)', sentence, re.I)) and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
                 result.append(sentence)
     return '; '.join(sentence.rstrip('.') for sentence in result) + ('.' if result else '')

@@ -73,7 +73,7 @@ def specific_review_case(review, product):
             detail = 'то, что Вы получили не тот товар'
         else:
             detail = 'состояние упаковки' if set(analysis['complaints']) == {'PACKAGING_ISSUE'} else 'повреждение полученного товара'
-        ending = ' Если при проверке заказа в ПВЗ обнаружится повреждение товара, Вы можете отказаться от получения.' if 'LEAKAGE' in analysis['complaints'] or 'DAMAGED_ITEM' in analysis['complaints'] else ''
+        ending = ' Если при получении заказа в ПВЗ обнаружится повреждение или несоответствие заказу, Вы можете отказаться от получения.' if set(analysis['complaints']) & {'LEAKAGE','DAMAGED_ITEM','WRONG_ITEM'} else ''
         return result('pickup_damage', 'Приносим извинения за '+detail+'. Сожалеем, что состояние заказа испортило впечатление от покупки.'+ending)
 
     if 'галоген' in name and 'ламп' in name and re.search(r'прозрачн\w*\s+стекл|прозрачн\w*\s+колб|где\s+там\s+галоген', text):
