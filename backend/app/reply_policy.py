@@ -77,7 +77,7 @@ def buyer_question(text):
 
 def favorable_price(text):
     value = (text or '').lower().replace('ё', 'е')
-    if re.search(r'дорог|завыш|цена\s+(?:высок|куса)|стоимост\w*\s+высок', value):
+    if re.search(r'(?<!\w)дорог|завыш|цена\s+(?:высок|куса)|стоимост\w*\s+высок', value):
         return False
     return bool(re.search(r'недорог|дешев|цен[аыуе][^.!?\n]{0,20}(?:низк|хорош|устра|отлич|подарок)|за такую (?:цену|стоимость)[^.!?\n]{0,30}(?:хорош|супер|отлич)|цена\s*[-—/]?\s*качеств', value))
 
@@ -96,7 +96,7 @@ COMPLAINT_PATTERNS = {
     'WEAK_SCENT': ('запаха почти нет', 'слабый запах', 'слабый аромат', 'слабо пахнет', 'пахнет слабо', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха'),
     'DIM_LIGHT': ('свет тусклый', 'тусклый свет', 'слабо светит', 'свет слабый'),
     'DELIVERY_ISSUE': ('долго достав', 'задержали достав', 'проблема с достав', 'не достав'),
-    'SIZE_ISSUE': ('слишком коротк', 'короткая', 'короткий'),
+    'SIZE_ISSUE': ('слишком коротк',),
 }
 TOPIC_WORDS = {
     'AUTHENTICITY': ('оригинал', 'подлин', 'дистрибьютор', 'поддел'),
@@ -137,6 +137,8 @@ def analyze_customer_message(text, rating=None):
             return any(not re.search(r'(?<!\w)(?:не|без)\s*$', value[:match.start()]) for match in re.finditer(r'(?<!\w)' + re.escape(marker), value))
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
+    if rating is not None and rating <= 3 and re.fullmatch(r'коротк\w*[.!\s]*', value):
+        complaints.append('SIZE_ISSUE')
     extra = {
         'PACKAGING_ISSUE': r'(?:короб\w*|упаков\w*)\s+(?:\w+\s+){0,2}(?:помят|мят|поврежд)|(?:помят|мят)\w*\s+(?:короб|упаков)',
         'WRONG_ITEM': r'прислал\w*\s+(?:две\s+)?разн\w*\s+щетк',

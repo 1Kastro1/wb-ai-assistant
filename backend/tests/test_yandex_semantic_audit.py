@@ -40,6 +40,15 @@ def test_price_and_partial_scent_are_not_fabricated_praise():
     assert 'Вас устроила цена' not in rule_reply(r,p)
 
 
+def test_inexpensive_is_not_misread_as_expensive():
+    assert 'Вас устроила цена' in positive_detail('недорогой, хороший товар')
+    assert 'Вас устроила цена' not in positive_detail('хороший, но дорогой')
+
+
+def test_short_size_is_not_a_complaint_in_positive_context():
+    assert 'SIZE_ISSUE' not in analyze_customer_message('короткая и удобная, отличная щётка',5)['complaints']
+
+
 def test_subjects_are_retained_in_positive_details():
     answer=positive_detail('Добротно сделан, установился плотно')
     assert 'и оценили' not in answer
