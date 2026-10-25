@@ -46,7 +46,12 @@ FAMILIES = {
 def category_evidence(review, product):
     value = ' '.join(str(getattr(obj, field, '') or '') for obj, fields in
                      ((product, ('name', 'category')), (review, ('text',))) for field in fields).lower().replace('ё', 'е')
+    wipers = bool(re.search(r'стеклоочистител|дворник', value))
+    # The stem «очиститель» inside «стеклоочиститель» is not auto chemistry.
+    value = re.sub(r'стеклоочистител\w*', 'дворник', value)
     families = {name for name, pattern in FAMILIES.items() if re.search(pattern, value)}
+    if wipers:
+        families.add('parts')
     # A buyer can ask about another part in an unrelated product card.
     if re.search(r'\bvin\b|\bframe\b|\bвин\b|[a-z]{1,5}\d{1,4}[- ]\d{5,9}', value, re.I):
         families.add('parts')

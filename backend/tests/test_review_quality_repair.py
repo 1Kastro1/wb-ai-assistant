@@ -9,7 +9,7 @@ from app.reply_policy import analyze_customer_message, semantic_reply_issues
 from app.product_guidance import is_cleaner, usage_excerpt
 from app.safety import rule_reply
 from app.services import assess_reply, propose_publish
-from app.rule_execution import positive_body
+from app.rule_execution import positive_body, category_evidence
 from app.draft_audit import repair_step, recheck_step
 
 
@@ -33,6 +33,8 @@ def test_real_contradictions_are_rejected_even_when_courteous(text, rating, name
 def test_wipers_and_holders_never_receive_chemical_dosing(name):
     p=S(name=name,category='',brand='',facts=[])
     assert not is_cleaner(p)
+    if 'стеклоочистител' in name.lower() or 'дворник' in name.lower():
+        assert category_evidence(S(text=''),p)=={'parts'}
     r=S(text='Очень сильно скрипит, плохо чистит',rating=2,risk='NORMAL')
     reply=rule_reply(r,p) or ''
     assert not any(x in reply for x in ('дозировк','выдержки','разных составов'))
