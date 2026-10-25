@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-1'
+VERSION = 'context-rules-2'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -84,6 +84,13 @@ POSITIVE_BODIES = (
 )
 
 
+def positive_body(review, revision=0):
+    # Stable distribution across reviews; regeneration advances independently.
+    identity = str(getattr(review, 'id', '') or getattr(review, 'wb_review_id', ''))
+    seed = int(hashlib.sha256(identity.encode()).hexdigest()[:8], 16)
+    return POSITIVE_BODIES[(seed + max(0, int(revision))) % len(POSITIVE_BODIES)]
+
+
 def positive_template(review, rules, revision=0, *, product=None):
     """A narrow, reviewed no-claims answer; arbitrary semantic rules opt out."""
     from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
@@ -97,7 +104,7 @@ def positive_template(review, rules, revision=0, *, product=None):
     for rule in applicable:
         if not profile(rule).get('local_positive') and constraints([rule])['semantic']:
             return None
-    body = POSITIVE_BODIES[max(0, int(revision)) % len(POSITIVE_BODIES)]
+    body = positive_body(review, revision)
     value, _ = apply_local_preferences('Добрый день! ' + body, review, rules)
     try:
         value = validate_reply(apply_signature(value, rules))

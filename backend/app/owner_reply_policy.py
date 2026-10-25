@@ -38,10 +38,14 @@ def _clauses(rule):
 
 def constraints(rules):
     result = {'greeting': '', 'signature': '', 'banned': [], 'no_reask': False,
-              'no_emoji': False, 'semantic': []}
+              'no_emoji': False, 'no_photos': False, 'no_order_support': False, 'semantic': []}
     for rule in rules:
         for clause in _clauses(rule):
             lower = clause.lower().replace('ё', 'е')
+            if re.search(r'не\s+(?:прос\w*|треб\w*)[^.!?]{0,30}(?:фото|видео)', lower):
+                result['no_photos'] = True
+            if re.search(r'не\s+направля\w*[^.!?]{0,80}через\s+(?:полученный\s+)?заказ', lower):
+                result['no_order_support'] = True
             no_reask = bool(re.search(r'уже\s+(?:опис|указ|назван)|повторно\s+опис|заново\s+опис', lower)) and bool(re.search(r'не\s+(?:спраш|уточн|прос|переспраш)', lower))
             if not no_reask and re.search(r'\b(?:если|когда|при|в случае)\b|(?:позитивн|негативн|положительн|отрицательн)\w*\s+(?:отзыв|ответ)', lower):
                 # Conditional style rules require a context check; they must not
@@ -117,6 +121,11 @@ def apply_local_preferences(reply, review, rules, style_only=False):
     if config['no_emoji']:
         reply = re.sub('[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200D]', '', reply)
         applied.append('без эмодзи')
+    if not style_only:
+        sentences = re.split(r'(?<=[.!?])\s+', reply)
+        reply = ' '.join(sentence for sentence in sentences if not (
+            config['no_photos'] and re.search(r'фотограф|пришлите фото|снимок|видео', sentence, re.I)
+            or config['no_order_support'] and re.search(r'через\s+(?:полученный\s+)?заказ', sentence, re.I)))
     greeting = config['greeting']
     if greeting:
         reply = reply.lstrip(' \t\r\n!.,:;')
@@ -145,6 +154,10 @@ def local_issues(reply, rules, review=None):
     for phrase in config['banned']:
         if re.search(r'(?<!\w)' + re.escape(phrase) + r'(?!\w)', reply, re.I):
             issues.append('В ответе запрещённая фраза: ' + phrase)
+    if config['no_photos'] and re.search(r'фотограф|пришлите фото|снимок|видео', reply, re.I):
+        issues.append('Не просить фотографии или видео')
+    if config['no_order_support'] and re.search(r'через\s+(?:полученный\s+)?заказ', reply, re.I):
+        issues.append('Не направлять через полученный заказ')
     if config['no_reask'] and review is not None and has_redundant_clarification(reply, review.text):
         issues.append('Не переспрашивать уже описанную проблему')
     if rules and review is not None and not (getattr(review, 'marketplace', '') or '').endswith('_question'):

@@ -81,7 +81,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -1080,7 +1080,7 @@ async def run_sync_job(job_id):
         await execute_job(job_id)
 
 
-async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft', 'question_drafts')):
+async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft', 'question_drafts', 'draft_audit', 'draft_recheck')):
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
@@ -1139,7 +1139,11 @@ async def execute_job(job_id):
                           'updated_at': now(), 'message': f'Сохранён прогресс: {value.get("processed", 0)} записей'}
             db.commit()
         try:
-            if kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft'):
+            if kind in ('draft_audit', 'draft_recheck'):
+                from .draft_audit import repair_step, recheck_step
+                await (repair_step(job_id) if kind == 'draft_audit' else recheck_step(job_id))
+                db.refresh(job)
+            elif kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft'):
                 since = (job.result or {}).get('since', '')
                 is_questions = kind in ('question_drafts', 'single_question_draft')
                 is_single = kind in ('single_draft', 'single_question_draft')
@@ -1228,7 +1232,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
