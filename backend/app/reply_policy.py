@@ -67,6 +67,20 @@ def quantity_shortage(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
     return bool(re.search(r'вместо\s+(?:двух|2|трех|3|четырех|4)[^.!?]{0,35}(?:один|одну|1)|(?:пришел|пришла|прислали|отправили|получил\w*)[^.!?]{0,20}(?:один|одну|1)[^.!?]{0,20}(?:вместо|а не)\s+(?:двух|два|две|2)', value))
 
+
+def buyer_question(text):
+    # Comparisons and rhetorical praise are not requests for instructions.
+    value = (text or '').lower().replace('ё', 'е')
+    value = re.sub(r'вроде как|как в описании|как родн\w*|не как все|какие могут быть недостатки[^.!?]*[?]?', ' ', value)
+    return '?' in value or bool(re.search(r'подскажите|можно ли|нужно ли|почему|зачем|как\s+(?:правильно\s+)?(?:примен|использ|установ|нанос|развод|закреп|подключ|выбра)', value))
+
+
+def favorable_price(text):
+    value = (text or '').lower().replace('ё', 'е')
+    if re.search(r'(?<!\w)дорог|завыш|цена\s+(?:высок|куса)|стоимост\w*\s+высок', value):
+        return False
+    return bool(re.search(r'недорог|дешев|цен[аыуе][^.!?\n]{0,20}(?:низк|хорош|устра|отлич|подарок)|за такую (?:цену|стоимость)[^.!?\n]{0,30}(?:хорош|супер|отлич)|цена\s*[-—/]?\s*качеств', value))
+
 COMPLAINT_PATTERNS = {
     'WRONG_ITEM': ('не тот товар', 'другой товар', 'пришел не тот', 'прислали не тот'),
     'MISSING_PARTS': ('не хватает', 'нет детал', 'неполная комплектац', 'не доложили', 'недостает'),
@@ -82,6 +96,7 @@ COMPLAINT_PATTERNS = {
     'WEAK_SCENT': ('запаха почти нет', 'слабый запах', 'слабый аромат', 'слабо пахнет', 'пахнет слабо', 'не пахнет', 'аромат не чувств', 'запах не чувств', 'почти не пах', 'еле пах', 'нет запаха'),
     'DIM_LIGHT': ('свет тусклый', 'тусклый свет', 'слабо светит', 'свет слабый'),
     'DELIVERY_ISSUE': ('долго достав', 'задержали достав', 'проблема с достав', 'не достав'),
+    'SIZE_ISSUE': ('слишком коротк',),
 }
 TOPIC_WORDS = {
     'AUTHENTICITY': ('оригинал', 'подлин', 'дистрибьютор', 'поддел'),
@@ -99,6 +114,7 @@ TOPIC_WORDS = {
     'WEAK_SCENT': ('запах', 'аромат'),
     'DIM_LIGHT': ('свет', 'ламп', 'ярк', 'напряж'),
     'DELIVERY_ISSUE': ('достав', 'получен', 'заказ'),
+    'SIZE_ISSUE': ('длин', 'корот', 'размер'),
 }
 
 COMPLAINT_LABELS = {
@@ -109,6 +125,7 @@ COMPLAINT_LABELS = {
     'FITMENT_PROBLEM':'деталь не подошла', 'NO_RESULT':'нет результата',
     'ODOR_COMPLAINT':'неприятный запах', 'WEAK_SCENT':'слабый аромат',
     'DIM_LIGHT':'тусклый свет', 'DELIVERY_ISSUE':'проблема с доставкой',
+    'SIZE_ISSUE':'размер товара',
 }
 
 
@@ -120,6 +137,8 @@ def analyze_customer_message(text, rating=None):
             return any(not re.search(r'(?<!\w)(?:не|без)\s*$', value[:match.start()]) for match in re.finditer(r'(?<!\w)' + re.escape(marker), value))
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
+    if rating is not None and rating <= 3 and re.fullmatch(r'коротк\w*[.!\s]*', value):
+        complaints.append('SIZE_ISSUE')
     extra = {
         'PACKAGING_ISSUE': r'(?:короб\w*|упаков\w*)\s+(?:\w+\s+){0,2}(?:помят|мят|поврежд)|(?:помят|мят)\w*\s+(?:короб|упаков)',
         'WRONG_ITEM': r'прислал\w*\s+(?:две\s+)?разн\w*\s+щетк',
@@ -127,6 +146,9 @@ def analyze_customer_message(text, rating=None):
         'DIM_LIGHT': r'тусклее|не светят',
         'QUALITY_ISSUE': r'скрип|издают много|нету? захода[^.!?]{0,15}резьб|надписи[^.!?]{0,35}крив',
         'DELIVERY_ISSUE': r'шел долго|шла долго|шло долго',
+        'FITMENT_PROBLEM': r'не\s+подош(?:ло|ла|ли|ел)|не\s+подходит',
+        'MISSING_PARTS': r'нет\s+уплотнител',
+        'ODOR_COMPLAINT': r'(?:аромат|запах)[^.!?\n]{0,25}мне\s+не\s+(?:особо|зашел|нрав)|мне\s+не\s+зашел[^.!?\n]{0,25}(?:аромат|запах)|(?:аромат|запах)[^.!?\n]{0,25}не\s+понрав',
     }
     for kind, pattern in extra.items():
         if re.search(r'(?<!\w)(?:' + pattern + ')', value) and kind not in complaints:
@@ -150,7 +172,7 @@ def analyze_customer_message(text, rating=None):
     if authenticity_concern(text) and 'AUTHENTICITY' not in complaints: complaints.append('AUTHENTICITY')
     positive = any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'\b(?:понравил\w*|отличн\w*|рекомендую|хорош\w*|вкусн\w*|приятн\w*|ненавязчив\w*)', value))
     negative = bool(complaints) or (rating is not None and rating <= 3) or any(x in value for x in ('разочар', 'недовол')) or bool(re.search(r'(?<!\w)не\s+понрав', value))
-    question = '?' in value or bool(re.search(r'\b(?:как|сколько|какой|какая|подойдет|можно ли|где|когда|подскажите)\b', value))
+    question = buyer_question(text)
     financial = bool(re.search(r'(?:верн|возврат)\w*[^.!?]{0,35}(?:деньг|оплат|стоим|средств)|компенсац|возмещ\w*\s+(?:расход|стоим)', value)) or ('деньг' in value and any(x in value for x in ('возврат', 'выплат', 'верн')))
     return {
         'sentiment': 'mixed' if positive and negative else 'negative' if negative else 'positive' if positive or (rating is not None and rating >= 4) else 'unknown',
@@ -215,6 +237,21 @@ def semantic_reply_issues(review, product, reply):
         issues.append('не выдавать рекламное описание за инструкцию')
     if 'аккумулятор' in name and 'протечку средства' in text:
         issues.append('использовать термин электролит для аккумулятора')
+    if buyer.strip() and not analysis['complaints'] and not analysis['is_question'] and re.search(r'по инструкции к этому товару|рекомендуем соблюдать способ применения|притирк', text):
+        issues.append('не добавлять инструкцию без вопроса или жалобы')
+    if 'вас устроила цена' in text and not favorable_price(buyer):
+        issues.append('не считать упоминание цены подтверждением довольства')
+    if 'giga' in text and not re.search(r'giga|стерж|картридж', name):
+        issues.append('не переносить рекомендации GIGA на другой тип ароматизатора')
+    if re.search(r'(?:фиксируется|прошла|порадовал)[^.!?]{0,30}\sи оценили', text):
+        issues.append('исправить согласование частей предложения')
+    partial = re.search(r'\b(\d+)\s+из\s+(\d+)\b', buyer)
+    if partial and 0 < int(partial[1]) < int(partial[2]) and re.search(r'все\s+аромат\w*[^.!?]{0,25}понрав', text):
+        issues.append('не заменять частичное одобрение похвалой всему набору')
+    if buyer.strip() and len(re.findall(r'спасибо|благодарим', text)) > 1:
+        issues.append('убрать повторную благодарность')
+    if analysis.get('resolved') and re.search(r'одобрил\w*\s+возврат', buyer) and not re.search(r'одобр|решен|решён|вопрос.*реш', text):
+        issues.append('учесть уже одобренный возврат')
     return issues
 
 
@@ -243,6 +280,7 @@ def contextual_complaint_reply(analysis, revision=0):
         'WEAK_SCENT': 'аромат оказался слабее ожидаемого',
         'DIM_LIGHT': 'свет оказался тусклым',
         'DELIVERY_ISSUE': 'при доставке заказа возникли затруднения',
+        'SIZE_ISSUE': 'длина товара оказалась для Вас недостаточной',
     }
     details = [clauses[kind] for kind in analysis['complaints']]
     if not details:
@@ -251,5 +289,5 @@ def contextual_complaint_reply(analysis, revision=0):
     if analysis['buyer_asks_about_money']:
         ending = 'Для дополнительной проверки можно обратиться в официальную поддержку маркетплейса.'
     else:
-        ending = 'Сожалеем о доставленных неудобствах.' if analysis.get('resolved') else 'По отзыву установить причину невозможно.'
+        ending = 'Вопрос с возвратом уже решён. Сожалеем о доставленных неудобствах.' if re.search(r'одобрил\w*\s+возврат', analysis['buyer_text'], re.I) else 'Сожалеем о доставленных неудобствах.'
     return 'Здравствуйте! ' + thanks + ' Приносим извинения за то, что ' + '; '.join(details) + '. ' + ending

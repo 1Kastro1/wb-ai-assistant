@@ -51,6 +51,16 @@ test('rule verification status distinguishes checked and unverified answers',()=
 });
 exports.Card=Card;
 
+test('timeout and pending checks are distinct from text violations',()=>{
+ const {OwnerRuleStatus}=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx'));
+ function status(rules){return renderToStaticMarkup(React.createElement(OwnerRuleStatus,{quality:{owner_rules:{matched:3,passed:false,...rules}}}))}
+ const timeout=status({checked:false,technical_error:true,reason:'истекло время проверки',issues:['таймаут'],violations:['Не выполнена подпись ответа']});
+ assert(timeout.includes('Сбой проверки правил'));assert(timeout.includes('Замечания к тексту'));assert(timeout.includes('Не выполнена подпись ответа'));
+ const pending=status({checked:false,issues:['ожидает проверки']});
+ assert(pending.includes('Ожидает проверки правил'));assert(!pending.includes('Найдены замечания по правилам'));
+ assert(status({checked:true,issues:['не учтена упаковка']}).includes('не учтена упаковка'));
+});
+
 const UniqomFitment=loadComponent(path.join(__dirname,'../app/UniqomFitment.tsx')).default;
 const uniqomLinks=loadComponent(path.join(__dirname,'../app/uniqomCatalog.ts'));
 test('Uniqom opens one exact Frame and never embeds an ambiguous vehicle choice',()=>{

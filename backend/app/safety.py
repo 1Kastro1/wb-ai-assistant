@@ -194,7 +194,7 @@ def rule_reply(review, product, revision=0, facts=None):
             f'Здравствуйте! Благодарим за обратную связь о товаре «{product.name}». Сожалеем, что результат использования вас разочаровал и запах средства оставил неприятное впечатление. Приносим извинения за неприятное впечатление от покупки. Спасибо, что рассказали о своём опыте.',
             f'Здравствуйте! Спасибо, что поделились мнением о товаре «{product.name}». Нам очень жаль, что средство вам не понравилось, в том числе из-за его запаха. Приносим извинения за разочарование от покупки. Благодарим за честную обратную связь.',
         ], revision)
-    if any(kind in analysis['complaints'] for kind in ('MISSING_PARTS', 'DAMAGED_ITEM', 'QUALITY_ISSUE', 'PACKAGING_ISSUE', 'DELIVERY_ISSUE', 'FITMENT_PROBLEM')):
+    if analysis['complaints']:
         return contextual_complaint_reply(analysis, revision)
     if review.rating >= 4 and any(x in review.text.lower() for x in ('смол', 'гудрон')) and 'очист' in product_text:
         return safe_fallback_reply(review, product)
@@ -211,7 +211,7 @@ def safe_fallback_reply(review, product, revision=0, facts=None):
     if guidance:
         return guidance
     analysis = analyze_customer_message(review.text, review.rating)
-    if getattr(review,'risk','NORMAL') == 'NORMAL' and (analysis['buyer_asks_about_money'] or len(analysis['complaints']) > 1):
+    if getattr(review,'risk','NORMAL') == 'NORMAL' and (analysis['buyer_asks_about_money'] or analysis['complaints']):
         return contextual_complaint_reply(analysis, revision) or official_support_reply()
     if review_intent(review.text) == 'DESCRIPTION_MISMATCH' and getattr(review,'risk','NORMAL') == 'NORMAL':
         return description_mismatch_reply(revision, review.text)

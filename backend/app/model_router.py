@@ -10,7 +10,9 @@ class ModelRouter:
         # Policy verification has a fixed profile. Keep it independent of an
         # extra DB connection (previews may use their own isolated DB session).
         if task=='OWNER_RULES':
-            return {'model':MODEL,'options':{'num_ctx':16384,'num_predict':512,'temperature':0.2}}
+            # OllamaProvider grows this to the measured request size, up to
+            # 16K. Small checks need not allocate the maximum KV context.
+            return {'model':MODEL,'options':{'num_ctx':4096,'num_predict':512,'temperature':0.2}}
         with Session() as db:
             mode=setting(db,'performance_mode','normal')
         context,predict=self.PROFILES.get(mode,self.PROFILES['normal'])
