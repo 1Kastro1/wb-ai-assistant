@@ -3,6 +3,8 @@ import asyncio
 import hashlib
 import json
 import re
+from copy import deepcopy
+from functools import lru_cache
 from time import monotonic
 
 from .plain_text import plain_text
@@ -37,6 +39,13 @@ def _clauses(rule):
 
 
 def constraints(rules):
+    # This caches syntax only, never a compliance verdict or a buyer context.
+    # Exact ordered rule texts are the key; callers cannot mutate shared state.
+    return deepcopy(_parsed_constraints(tuple(rules)))
+
+
+@lru_cache(maxsize=256)
+def _parsed_constraints(rules):
     result = {'greeting': '', 'signature': '', 'banned': [], 'no_reask': False,
               'no_emoji': False, 'no_photos': False, 'no_order_support': False, 'semantic': []}
     for rule in rules:
