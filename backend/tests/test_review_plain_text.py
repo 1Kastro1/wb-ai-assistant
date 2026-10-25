@@ -39,9 +39,9 @@ class ReviewPlainTextTests(unittest.TestCase):
         review = SimpleNamespace(text='Изготовлено 26.07.21. Срок годности 5 лет. Отправили просроченное средство', rating=1, risk='NORMAL')
         product = SimpleNamespace(name='Очиститель Profoam 2000', brand='KANGAROO', category='')
         answer = rule_reply(review, product)
-        for token in ('год–месяц–день', 'Если', '21 июля 2026', 'фото'):
+        for token in ('год–месяц–день', 'Если', '21 июля 2026', 'Сверьте'):
             self.assertIn(token, answer)
-        for token in ('Распылите', 'годен до', 'точно', 'просрочен'):
+        for token in ('Распылите', 'годен до', 'точно', 'просрочен', 'фото'):
             self.assertNotIn(token, answer)
         validate_reply(answer)
         product.brand = 'OTHER'

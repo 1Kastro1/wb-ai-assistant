@@ -1,6 +1,6 @@
 from .review_cases import specific_review_case
 from .fitment_catalog import VIN, vehicle_identifiers, fitment_answer, oem_numbers
-from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer
+from .product_guidance import usage_excerpt, product_usage_reply, battery_voltage_answer, is_cleaner
 from .plain_text import plain_text
 from .verified_instructions import prefer_manufacturer_instructions
 from .assortment_questions import assortment_question_answer, review_vent_holder
@@ -23,7 +23,7 @@ from .generation_control import exclusive_generation, FastPathUnavailable, Gener
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
 from .rule_execution import select_rules, positive_template
-from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply, has_redundant_clarification
+from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply, has_redundant_clarification, semantic_reply_issues
 from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '3.0'
+QUALITY_EVALUATOR_VERSION = '4.0'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -116,7 +116,15 @@ def _addresses_review_topic(review_text, reply_text):
     review_value = review_text.lower().replace('ё', 'е')
     reply_value = reply_text.lower().replace('ё', 'е')
     topic_groups = (
-        (('очистител', 'чистит', 'отмыл', 'пятн', 'гудрон', 'смол'), ('очист', 'загряз', 'пятн', 'гудрон', 'смол')),
+        (('очистител', 'чистит', 'чистят', 'отмыл', 'пятн', 'гудрон', 'смол'), ('очист', 'загряз', 'пятн', 'гудрон', 'смол')),
+        (('установ', 'встал', 'подходит'), ('установ', 'подош', 'подбор')),
+        (('упаков', 'короб'), ('упаков', 'короб')),
+        (('заряжен', 'аккумулятор'), ('заряд', 'аккумулятор')),
+        (('добротно', 'прочно', 'аккуратно'), ('исполнен', 'качеств')),
+        (('цена', 'недорог', 'дешев', 'стоимост'), ('цен', 'стоимост')),
+        (('полиру',), ('полиров',)),
+        (('перевозк', 'багажник', 'прицеп'), ('перевозк', 'ремн')),
+        (('держател', 'держит', 'креплен'), ('держател', 'фиксир', 'креплен')),
         (('не оправдал', 'разочаров'), ('ожидан', 'разочаров', 'извин')),
         (('свет', 'тускл', 'слабо свет'), ('свет', 'ламп', 'ярк', 'напряж')),
         (('производител', 'маркиров', 'происхожд'), ('маркиров', 'расхожд', 'соответств')),
@@ -125,7 +133,7 @@ def _addresses_review_topic(review_text, reply_text):
         (('качеств', 'на совесть', 'клапан', 'резьба'), ('качеств', 'клапан', 'резьба')),
         (('подош', 'встали как родные'), ('установ', 'подош', 'подбор')),
         (('отработал', 'работает', 'рабочими'), ('работ', 'результат')),
-        (('третий раз', 'пользуюсь давно', 'не первый раз'), ('снова', 'повторн', 'доверие')),
+        (('третий раз', 'второй раз', 'пользуюсь давно', 'не первый раз', 'только этого бренда'), ('снова', 'повторн', 'доверие')),
         (('вовремя', 'во время'), ('вовремя', 'достав')),
         (('пенится',), ('пенообраз', 'пенится')),
         (('соответствует описанию',), ('соответств', 'описан')),
@@ -208,12 +216,8 @@ def needs_usage_instruction(review, product=None):
 
 def positive_rating_reply(product, revision=1):
     """Useful rotating replies for ratings that do not contain review text."""
-    variants = [
-        f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали товар «{product.name}». Надеемся, покупка будет радовать вас при использовании. Будем рады видеть вас снова!',
-        f'Здравствуйте! Благодарим вас за хорошую оценку товара «{product.name}»! 😊 Для нас очень ценно ваше доверие. Желаем, чтобы покупка приносила только положительные впечатления. Возвращайтесь к нам снова!',
-        f'Здравствуйте! Спасибо, что оценили товар «{product.name}»! 😊 Рады, что покупка заслужила вашу высокую оценку. Пользуйтесь с удовольствием, а мы будем стараться и дальше радовать вас качественными товарами!',
-    ]
-    return variants[max(0, int(revision)) % len(variants)]
+    from .rule_execution import positive_body
+    return 'Добрый день! ' + positive_body(product, revision)
 
 
 def cached_web_instruction_sources(product):
@@ -403,7 +407,7 @@ def assess_reply(review, product, reply, verified_facts=None):
         'relevance': {'label': 'Соответствие отзыву', 'score': 0, 'max': 12},
         'resolution': {'label': 'Полезность решения', 'score': 0, 'max': 18},
     }
-    if 120 <= len(reply) <= 900:
+    if (60 if review.rating >= 4 else 120) <= len(reply) <= 900:
         score += 15
         breakdown['substance']['score'] = 15
     else:
@@ -422,7 +426,10 @@ def assess_reply(review, product, reply, verified_facts=None):
         score += 10
         breakdown['empathy']['score'] = 10
     overlap = review_words & reply_words
-    if overlap or len(review_words) <= 1 or _addresses_review_topic(review.text, reply) or (specific_review_case(review, product) or {}).get('answer') == reply:
+    analysis = analyze_customer_message(review.text, review.rating)
+    acknowledged = bool(analysis['complaints']) and not missing_complaints(analysis, reply)
+    simple_praise = len(review.text.split()) <= 5 and analysis['sentiment'] == 'positive' and not analysis['complaints']
+    if overlap or len(review_words) <= 1 or acknowledged or simple_praise or _addresses_review_topic(review.text, reply) or (specific_review_case(review, product) or {}).get('answer') == reply:
         score += 12
         breakdown['relevance']['score'] = 12
     else:
@@ -446,7 +453,7 @@ def assess_reply(review, product, reply, verified_facts=None):
             breakdown['resolution']['score'] = 18
         else:
             issues.append('извиниться за получение неверного товара')
-    elif intent == 'NO_RESULT' or combined_cleaner_complaint:
+    elif (intent == 'NO_RESULT' and is_cleaner(product)) or combined_cleaner_complaint:
         if any(x in lowered for x in ('инструкц', 'нанес', 'обработ', 'примен', 'распыл', 'протр')):
             score += 18
             breakdown['resolution']['score'] = 18
@@ -493,6 +500,11 @@ def assess_reply(review, product, reply, verified_facts=None):
         if not facts_text or not any(x in facts_text for x in ('распыл', 'выдерж', '30 секунд', 'потоку воздуха')):
             score = min(score, 75)
             issues.append('способ применения не подтверждён сведениями о товаре')
+    contradictions = semantic_reply_issues(review, product, reply)
+    if contradictions:
+        issues.extend(contradictions)
+        score = min(score, 70)
+        breakdown['relevance']['score'] = 0
     return {
         'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
         'issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
@@ -1024,7 +1036,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             reply = best_reply
             selection_note = f'Выбран лучший из {max(1, len(valid_candidates))} безопасных вариантов'
         if initial_draft and reply.strip() == initial_draft.text.strip() and not review.text.strip() and review.rating >= 4:
-            reply = f'Здравствуйте! Большое спасибо за высокую оценку! 😊 Нам очень приятно, что вы выбрали {product.name}. Надеемся, товар будет радовать вас при использовании. Будем рады видеть вас снова!'
+            reply = positive_rating_reply(product, initial_draft.revision + 1)
     try:
         reply = validate_reply(mask_vin(reply))
     except ValueError:
@@ -1125,6 +1137,11 @@ def propose_publish(db, review_ids):
         rule_quality = saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'), review=review)
         if not rule_quality['passed']:
             raise ValueError('Перед публикацией проверьте правила магазина: ' + '; '.join(rule_quality['issues']))
+        if not is_question:
+            from .reply_policy import semantic_reply_issues
+            semantic_issues = semantic_reply_issues(review, product, draft.text)
+            if semantic_issues:
+                raise ValueError('Ответ не соответствует отзыву: ' + '; '.join(semantic_issues))
         if is_question and (draft.quality or {}).get('fitment',{}).get('status') in ('NEEDS_CATALOG','CONFLICT'):
             raise ValueError('Сначала подтвердите подбор по каталогу в разделе Товары')
         if len(ids) > 1 and not is_question and (review.rating <= 3 or review.manual):
@@ -1180,6 +1197,10 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
         rules = matching_owner_rules(db, db.get(Product, review.product_id), for_questions=review.marketplace.endswith('_question'))
         if not saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'), review=review)['passed']:
             raise ValueError('Правила магазина изменились или не выполнены. Подготовьте ответ и подтверждение заново.')
+        if not review.marketplace.endswith('_question'):
+            from .reply_policy import semantic_reply_issues
+            if semantic_reply_issues(review, db.get(Product, review.product_id), draft.text):
+                raise ValueError('Ответ не соответствует отзыву. Подготовьте ответ и подтверждение заново.')
         if review.manual and not manual_ack:
             raise ValueError('Нужно отдельное подтверждение ручной проверки опасного отзыва')
         if validate_reply(draft.text) != draft.text:

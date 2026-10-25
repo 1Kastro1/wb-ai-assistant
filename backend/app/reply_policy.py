@@ -2,6 +2,16 @@ import re
 from pathlib import Path
 
 
+def complaint_text(text):
+    """Remove explicit denials of faults, not the buyer's genuine complaints."""
+    value = (text or '').lower().replace('ё', 'е')
+    value = re.sub(r'(?:ни разу[^.!?\n]{0,35}не|не)\s+(?:попал\w*|встретил\w*|заметил\w*|обнаружил\w*)[^.!?\n]{0,20}неприятн\w*\s+(?:запах|аромат)\w*', ' приятный аромат ', value)
+    value = re.sub(r'(?:нет|без|не было)\s+(?:никакого\s+)?(?:неприятн\w*|резк\w*|посторонн\w*)\s+(?:запах|аромат)\w*', ' ', value)
+    value = re.sub(r'(?:неприятн\w*|резк\w*|посторонн\w*)\s+(?:запах|аромат)\w*\s+нет', ' ', value)
+    value = re.sub(r'(?<!\w)(?:не|без)\s+(?:скрип\w*|шум\w*|воня\w*|помят\w*|поврежд\w*)', ' ', value)
+    return value
+
+
 def strip_other_product_comparisons(text):
     """Ignore failures attributed to other cleaners, retaining this item's complaints."""
     effect = r'(?:помог\w*|очист\w*|отмы\w*|справ\w*)'
@@ -29,11 +39,11 @@ def authenticity_concern(text):
 
 def faded_scent(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
-    pattern = r'перестал[аио]?\s+пахн\w*|(?:запах|аромат)\w*[^.!?;]{0,35}?(?:исчез|пропал|выветрил)\w*|(?:исчез|пропал|выветрил)\w*[^.!?;]{0,35}?(?:запах|аромат)\w*'
+    pattern = r'перестал[аио]?\s+пахн\w*|(?:запах|аромат)\w*[^.!?;]{0,35}?(?:исчез|пропал|выветри[лв])\w*|(?:исчез|пропал|выветри[лв])\w*[^.!?;]{0,35}?(?:запах|аромат)\w*'
     for match in re.finditer(pattern, value):
         context = value[max(0,match.start()-25):match.end()]
         if re.search(r'(?<!\w)не\s+(?:перестал|исчез|пропал|выветрил)', context):continue
-        if re.search(r'неприятн|посторонн|плохой запах|запах (?:табака|сырости|пота)', context):continue
+        if re.search(r'неприятн|посторонн|хими|плохой запах|запах (?:табака|сырости|пота)', context):continue
         return True
     return False
 
@@ -41,6 +51,8 @@ def faded_scent(text):
 
 def yellow_light_complaint(text):
     value = ' '.join((text or '').lower().replace('ё','е').split())
+    if re.search(r'светят?\s+(?:хорошо|отлично)|хорош\w*\s+ламп', value) and not re.search(r'тускл|слишком|не понрав|ожидал|не соответствует|вместо|не бел|желтит', value):
+        return False
     return bool(re.search(r'свет[^.!?]{0,35}(?:желт|с\s*желта)|(?:желт\w*|с\s*желта)[^.!?]{0,20}свет|\bжелтит\b',value))
 
 
@@ -61,7 +73,7 @@ COMPLAINT_PATTERNS = {
     'DAMAGED_ITEM': ('сломал', 'сломан', 'разбит', 'товар поврежд', 'товар помят', 'трещин'),
     'QUALITY_ISSUE': ('плохое качество', 'не работает', 'нерабоч', 'неисправ', 'дефект', 'слабая искра', 'криво бьет', 'быстро выш'),
     'PACKAGING_ISSUE': ('упаковка поврежд', 'упаковка помят', 'коробка помят', 'плохо упакован', 'упаковали плохо', 'упаковка вскрыт', 'крышка без заводской защиты', 'одета криво'),
-    'LEAKAGE': ('протек', 'потек', 'протеч'),
+    'LEAKAGE': ('протек', 'потек', 'протеч', 'вытек', 'утек'),
     'RESIDUE': ('белые разводы', 'жирный слой', 'вазелиновое состояние'),
     'DESCRIPTION_MISMATCH': ('не соответствует описанию', 'не как на фото', 'отличается от описания', 'характеристики не совпадают'),
     'FITMENT_PROBLEM': ('не подошел', 'не подходит', 'несовместим'),
@@ -76,13 +88,13 @@ TOPIC_WORDS = {
     'WRONG_ITEM': ('не тот', 'другой товар', 'выбранный товар'),
     'MISSING_PARTS': ('комплект', 'недоста', 'не хватает', 'элемент', 'детал'),
     'DAMAGED_ITEM': ('поврежд', 'разбит', 'сломан', 'сломал', 'поломк', 'трещин'),
-    'QUALITY_ISSUE': ('качеств', 'неисправ', 'дефект', 'искр', 'работ', 'поломк'),
+    'QUALITY_ISSUE': ('качеств', 'неисправ', 'дефект', 'искр', 'работ', 'поломк', 'шум', 'скрип', 'щетк'),
     'PACKAGING_ISSUE': ('упаков', 'коробк'),
     'LEAKAGE': ('протеч', 'протек', 'потек'),
     'RESIDUE': ('развод', 'жирный слой'),
     'DESCRIPTION_MISMATCH': ('описан', 'характеристик', 'производител', 'маркиров'),
     'FITMENT_PROBLEM': ('совместим', 'подбор', 'подош', 'подход'),
-    'NO_RESULT': ('результат', 'эффект', 'очищ', 'применен', 'инструкц'),
+    'NO_RESULT': ('результат', 'эффект', 'очищ', 'очист', 'применен', 'инструкц'),
     'ODOR_COMPLAINT': ('запах', 'аромат'),
     'WEAK_SCENT': ('запах', 'аромат'),
     'DIM_LIGHT': ('свет', 'ламп', 'ярк', 'напряж'),
@@ -102,12 +114,29 @@ COMPLAINT_LABELS = {
 
 def analyze_customer_message(text, rating=None):
     """Conservative internal hints; the complete buyer text remains model input."""
-    value = ' '.join(strip_other_product_comparisons(text or '').lower().replace('ё', 'е').split())
+    value = ' '.join(complaint_text(strip_other_product_comparisons(text or '')).split())
     def matches(marker):
-        if marker in ('сломал','сломан','протек','потек','протеч'):
+        if marker in ('сломал','сломан','протек','потек','протеч','вытек','утек'):
             return any(not re.search(r'(?<!\w)(?:не|без)\s*$', value[:match.start()]) for match in re.finditer(r'(?<!\w)' + re.escape(marker), value))
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
+    extra = {
+        'PACKAGING_ISSUE': r'(?:короб\w*|упаков\w*)\s+(?:\w+\s+){0,2}(?:помят|мят|поврежд)|(?:помят|мят)\w*\s+(?:короб|упаков)',
+        'WRONG_ITEM': r'прислал\w*\s+(?:две\s+)?разн\w*\s+щетк',
+        'NO_RESULT': r'слабоват|плохо чист|через день[^.!?]{0,20}мутн',
+        'DIM_LIGHT': r'тусклее|не светят',
+        'QUALITY_ISSUE': r'скрип|издают много|нету? захода[^.!?]{0,15}резьб|надписи[^.!?]{0,35}крив',
+        'DELIVERY_ISSUE': r'шел долго|шла долго|шло долго',
+    }
+    for kind, pattern in extra.items():
+        if re.search(r'(?<!\w)(?:' + pattern + ')', value) and kind not in complaints:
+            complaints.append(kind)
+    if re.search(r'ломанн\w*\s+мелк|пришло в ужас\w*\s+состояни', value) and 'DAMAGED_ITEM' not in complaints:
+        complaints.append('DAMAGED_ITEM')
+    if re.search(r'химозн|душноват', value) and 'ODOR_COMPLAINT' not in complaints:
+        complaints.append('ODOR_COMPLAINT')
+    if re.search(r'отсутствует[^.!?]{0,25}запах|запах ощущается только', value) and 'WEAK_SCENT' not in complaints:
+        complaints.append('WEAK_SCENT')
     if re.search(r'упакован\w*\s+(?:отвратительн\w*|плохо|ужасн\w*)|дран\w*\s+пакет', value) and 'PACKAGING_ISSUE' not in complaints:
         complaints.append('PACKAGING_ISSUE')
     if quantity_shortage(text) and 'MISSING_PARTS' not in complaints:
@@ -132,6 +161,7 @@ def analyze_customer_message(text, rating=None):
         'buyer_asks_about_money': financial,
         'cause_confirmed': False,
         'sprayer_replaced': bool(re.search(r'(?:поменял\w*|заменил\w*)\s+(?:(?:его|распылитель)\s+)?на\s+нов\w*|(?:поменял\w*|заменил\w*)\s+распылитель', value)) and 'распылител' in value,
+        'resolved': bool(re.search(r'(?:поменял\w*|заменил\w*)[^.!?]{0,30}(?:распылител|на нов)|перезаказал|одобрил\w*\s+возврат|проблем\w*\s+реш', value)),
         'buyer_text': text,
     }
 
@@ -157,6 +187,35 @@ def remove_redundant_clarification(reply, buyer_text):
 def missing_complaints(analysis, reply):
     value = reply.lower().replace('ё', 'е')
     return [kind for kind in analysis['complaints'] if not any(x in value for x in TOPIC_WORDS[kind])]
+
+
+def semantic_reply_issues(review, product, reply):
+    """Independent hard checks: a high courtesy score cannot hide a contradiction."""
+    from .product_guidance import is_cleaner, positive_detail
+    analysis = analyze_customer_message(review.text, review.rating)
+    text = reply.lower().replace('ё', 'е')
+    buyer = (review.text or '').lower().replace('ё', 'е')
+    name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower().replace('ё', 'е')
+    issues = []
+    if buyer.strip() and not analysis['complaints'] and analysis['sentiment'] == 'positive' and re.search(r'жаль|сожале|извин|не оправдал|не подош[её]л|не понравил|разочар', text):
+        issues.append('не трактовать положительный отзыв как жалобу')
+    if analysis['complaints'] and analysis['sentiment'] == 'negative' and re.search(r'рады, что (?:покупка|товар|аромат).*понравил', text):
+        issues.append('не благодарить за довольство при жалобе')
+    if 'аромат вам понравился' in text and 'аромат Вам понравился' not in positive_detail(buyer):
+        issues.append('не приписывать покупателю положительное впечатление об аромате')
+    if not is_cleaner(product) and re.search(r'дозировк|время выдержки|разных состав|какую поверхность и загрязнение', text):
+        issues.append('совет по чистящей химии не относится к этому товару')
+    if set(analysis['complaints']) == {'PACKAGING_ISSUE'} and re.search(r'повреждение (?:полученного )?товара|товар оказался поврежд', text):
+        issues.append('не подменять повреждение упаковки повреждением товара')
+    if analysis.get('resolved') and re.search(r'пришлите|приложите|фотограф|через полученный заказ|повторно описывать', text):
+        issues.append('учесть, что покупатель уже решил проблему; не добавлять требования')
+    if not buyer.strip() and re.search(r'по инструкции|распылите|дозировк|время выдержки|«.{60}', text):
+        issues.append('для оценки без текста нужна краткая благодарность без инструкции и полного названия')
+    if re.search(r'мы используем передовые технологии|не нанося.*вреда природе', text):
+        issues.append('не выдавать рекламное описание за инструкцию')
+    if 'аккумулятор' in name and 'протечку средства' in text:
+        issues.append('использовать термин электролит для аккумулятора')
+    return issues
 
 
 def customer_reply_policy():
@@ -191,12 +250,6 @@ def contextual_complaint_reply(analysis, revision=0):
     thanks = ('Спасибо за обратную связь.', 'Благодарим, что рассказали о ситуации.', 'Спасибо за Ваш отзыв.')[revision % 3]
     if analysis['buyer_asks_about_money']:
         ending = 'Для дополнительной проверки можно обратиться в официальную поддержку маркетплейса.'
-    elif set(analysis['complaints']) & {'DAMAGED_ITEM','QUALITY_ISSUE','PACKAGING_ISSUE','LEAKAGE','WRONG_ITEM','MISSING_PARTS'}:
-        ending = 'Если фотографии товара, маркировки и упаковки сохранились, приложите их к обращению через полученный заказ для проверки ситуации.'
-        if analysis.get('sprayer_replaced'):
-            ending = 'Вы уже заменили распылитель; повторять эту проверку не нужно. ' + ending
-        if 'LEAKAGE' in analysis['complaints']:
-            ending += ' Повреждённый или продолжающий протекать флакон не используйте до проверки.'
     else:
-        ending = 'Для проверки обращения можно передать маркировку товара и имеющиеся фотографии через полученный заказ в официальную поддержку маркетплейса.'
+        ending = 'Сожалеем о доставленных неудобствах.' if analysis.get('resolved') else 'По отзыву установить причину невозможно.'
     return 'Здравствуйте! ' + thanks + ' Приносим извинения за то, что ' + '; '.join(details) + '. ' + ending

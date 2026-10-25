@@ -39,7 +39,7 @@ def test_screenshot_reply_is_rejected_even_with_an_old_passed_model_verdict(mark
     assert case['key'] == 'replaced_sprayer'
     for detail in ('поломку', 'протечку', 'упаковки', 'уже заменили', 'хороший результат очистки'):
         assert detail in case['answer']
-    assert 'фотографии' in case['answer']
+    assert 'фотографии' not in case['answer']
     assert 'ПВЗ' not in case['answer']
     assert assess_reply(review,product,case['answer'],[])['passed']
 
@@ -89,7 +89,7 @@ def test_fallback_addresses_known_complaints_without_retelling_request(text):
     analysis=analyze_customer_message(text,2)
     answer=contextual_complaint_reply(analysis)
     assert not has_redundant_clarification(answer,text)
-    assert 'фотографии' in answer.lower()
+    assert 'фотографии' not in answer.lower()
 
 
 @pytest.mark.parametrize('marketplace', ['wb','ozon','yandex'])
