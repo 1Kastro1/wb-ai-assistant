@@ -299,7 +299,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 applied.append('исправление по правилам магазина')
         except Exception as error:
             from .batch_processing import transient
-            result['technical_error'] = transient(error)
+            result['technical_error'] = transient(error) or isinstance(error, (ValueError, KeyError, TypeError))
             result.update(checked=False)
             reason = 'истекло время проверки' if isinstance(error, TimeoutError) else 'модель вернула некорректную проверку' if isinstance(error, (ValueError, KeyError, TypeError)) else 'сервис проверки недоступен'
             if isinstance(error, ValueError) and str(error).startswith(('Правила слишком длинные', 'Контекст модели переполнен')):
@@ -309,6 +309,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             result['reason'] = reason
             result['issues'].append('Не удалось проверить правила: ' + reason + '. Ответ сохранён; повторите подготовку.')
     result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules, review)))
+    result['violations'] = local_issues(adjusted, rules, review) if result.get('checked') is False else list(result['issues'])
     result['passed'] = not result['issues']
     result['applied_preferences'] = list(dict.fromkeys(applied))
     result['verification_method'] = 'model' if semantic else 'local_constraints'
@@ -324,7 +325,19 @@ def _new_numbers(candidate, original, facts):
 
 
 def attach_rule_quality(quality, rule_quality):
+    # Keep content defects separate from verification availability. A timeout
+    # must never be displayed as evidence of a text violation, or as approval.
+    previous = quality.get('owner_rules') or {}
+    text_issues = quality.get('text_issues')
+    if text_issues is None:
+        text_issues = [issue for issue in quality.get('issues', []) if issue not in previous.get('issues', [])]
+    quality['text_issues'] = list(text_issues)
+    rule_quality = dict(rule_quality)
+    rule_quality['status'] = ('verified' if rule_quality.get('passed') else
+                              'error' if rule_quality.get('technical_error') else
+                              'pending' if rule_quality.get('checked') is False else 'violation')
     quality['owner_rules'] = rule_quality
+    quality['issues'] = list(dict.fromkeys([*text_issues, *rule_quality.get('issues', [])]))
     if not rule_quality['passed']:
         quality['passed'] = False
         quality['issues'] = list(dict.fromkeys([*quality.get('issues', []), *rule_quality['issues']]))
@@ -335,11 +348,14 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=Non
     """A saved/manual draft cannot inherit a rule check for different text/rules."""
     previous = previous or {}
     issues = local_issues(reply, rules, review)
+    violations = list(issues)
     current = fingerprint(rules)
     if rules and (changed or previous.get('fingerprint') != current) and constraints(rules)['semantic']:
-        issues.append('Правила магазина изменились или ответ отредактирован. Подготовьте ответ заново для проверки всех правил.')
+        issues.append('Ответ ожидает проверки по текущим правилам магазина.')
+        previous = {key: value for key, value in previous.items() if key not in ('technical_error', 'reason', 'verification_seconds', 'verification_method', 'status')}
     elif rules and previous.get('fingerprint') == current and not changed and not previous.get('passed', True):
         issues.extend(previous.get('issues') or ['Выполнение правил магазина не подтверждено. Подготовьте ответ заново.'])
     return {**previous, 'matched': len(rules), 'fingerprint': current,
-            'checked': not issues, 'passed': not issues, 'issues': list(dict.fromkeys(issues))}
+            'checked': not issues, 'passed': not issues, 'issues': list(dict.fromkeys(issues)),
+            'violations': list(dict.fromkeys(violations + ([] if changed else previous.get('violations', []))))}
 

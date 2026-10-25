@@ -504,10 +504,11 @@ def assess_reply(review, product, reply, verified_facts=None):
     if contradictions:
         issues.extend(contradictions)
         score = min(score, 70)
-        breakdown['relevance']['score'] = 0
+        if any(issue not in ('убрать повторную благодарность', 'исправить согласование частей предложения') for issue in contradictions):
+            breakdown['relevance']['score'] = 0
     return {
         'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
-        'issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
+        'issues': list(dict.fromkeys(issues)), 'text_issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
         'intent': intent, 'intent_label': 'недовольство результатом и неприятный запах' if combined_cleaner_complaint and any(x in review.text.lower() for x in ('воня', 'запах', 'аромат', 'пах')) else INTENT_LABELS.get(intent, INTENT_LABELS['GENERAL']),
         'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION,
     }

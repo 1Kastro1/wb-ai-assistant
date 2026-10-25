@@ -6,7 +6,7 @@ from sqlalchemy import select
 from .db import Session, Job, Draft, Review, Product, GenerationClaim, now
 from .generation_control import exclusive_generation, FastPathUnavailable
 
-VERSION = 'review-repair-2026-10-25-v1'
+VERSION = 'review-repair-2026-10-25-v2'
 
 
 def manually_edited(draft):
@@ -126,7 +126,7 @@ async def recheck_step(job_id, session_factory=Session):
             facts, rules = trusted_product_facts(db, product), matching_owner_rules(db, product)
             protected = manually_edited(draft)
             answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
-                lambda value: assess_reply(review, product, value, facts), protected=review.risk != 'NORMAL', check_seconds=90)
+                lambda value: assess_reply(review, product, value, facts), protected=review.risk != 'NORMAL', check_seconds=600)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())

@@ -15,7 +15,8 @@ def positive_detail(text):
     value = text.lower().replace('ё', 'е')
     details = []
     if re.search(r'(?:приятн\w*|понравил\w*|отличн\w*)[^.!?\n]{0,20}(?:аромат|запах)|(?:аромат|запах)[^.!?\n]{0,20}(?:приятн|понравил|отличн)|долго пахнет', value) and not re.search(r'(?<!\w)не\s+понрав|неприятн|запаха нет|запах.*неприят', value):
-        details.append('аромат Вам понравился')
+        partial = re.search(r'\b(\d+)\s+из\s+(\d+)\b', value)
+        details.append('часть ароматов из набора Вам понравилась' if partial and 0 < int(partial[1]) < int(partial[2]) else 'аромат Вам понравился')
     if 'пенится' in value:
         details.append('Вы отметили хорошее пенообразование')
     if any(x in value for x in ('отмывает', 'отмыл', 'чистит', 'очистил', 'чистят')) and not re.search(r'не\s+(?:отмы|чист|очист)|плохо\s+чист', value):
@@ -48,9 +49,14 @@ def positive_detail(text):
         details.append('Вы отметили заряд аккумулятора при получении')
     if re.search(r'добротно|прочно|аккуратно', value):
         details.append('Вы оценили исполнение товара')
-    if re.search(r'недорог|дешев|цена|стоимост', value):
+    from .reply_policy import favorable_price
+    if favorable_price(value):
         details.append('Вас устроила цена покупки')
-    return 'Рады, что ' + ' и '.join(details[:2]) + '.' if details else 'Рады, что покупка Вам понравилась.'
+    # Each clause retains its own subject. Joining after deleting «Вы» breaks
+    # sentences such as «держатель фиксируется и оценили исполнение».
+    if not details:
+        return 'Рады, что покупка Вам понравилась.'
+    return 'Рады, что ' + details[0] + '.' + (' Приятно, что ' + details[1] + '.' if len(details) > 1 else '')
 
 
 def positive_review_reply(review, product, revision=0):
@@ -59,9 +65,9 @@ def positive_review_reply(review, product, revision=0):
     if not review.text.strip() or review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed'):
         return None
     thanks = ['Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.'][int(revision) % 3]
-    detail = positive_detail(review.text).replace(' и Вы ', ' и ')
+    detail = positive_detail(review.text)
     if re.search(r'запаха нет|нет запаха|нейтральн', review.text.lower()):
-        detail = 'Спасибо, что поделились впечатлением о нейтральном запахе товара.'
+        detail = 'Вы отметили нейтральный запах товара.'
     return 'Здравствуйте! ' + thanks + ' ' + detail
 
 
@@ -113,7 +119,7 @@ def usage_excerpt(facts):
 def eikosha_placement(product, facts):
     name = product.name.lower()
     giga = bool(re.search(r'картридж|стерж|giga|\bv-?\d+', name))
-    can = not giga and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+', name))
+    can = not giga and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+|\br90\b', name))
     if not (giga or can): return ''
     holder = next((fact for fact in facts or [] if fact.get('kind') == 'vent_holder'
                    and fact.get('verification_status') == 'VERIFIED'), None)
@@ -138,6 +144,9 @@ def product_usage_reply(review, product, facts, revision=0):
         return positive_review_reply(review, product, revision)
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     text = review.text.lower().replace('ё', 'е')
+    if analysis.get('resolved') and re.search(r'одобрил\w*\s+возврат', text):
+        from .reply_policy import contextual_complaint_reply
+        return contextual_complaint_reply(analysis, revision)
     if 'AUTHENTICITY' in complaints and getattr(product, 'brand', '').strip().casefold() == 'eikosha':
         parts = ['Добрый день! Спасибо за отзыв. Сожалеем, что товар вызвал у Вас сомнения.']
         if any(f.get('policy') == 'eikosha_distributor' and f.get('verification_status') == 'VERIFIED' for f in facts or []):
@@ -159,8 +168,8 @@ def product_usage_reply(review, product, facts, revision=0):
         if 'ODOR_COMPLAINT' in complaints:
             details.append('неприятный запах')
         parts.append('Приносим извинения за ' + (', '.join(details[:-1]) + ' и ' + details[-1] if len(details) > 1 else details[0]) + '.')
-        if 'LEAKAGE' in complaints and not analysis.get('resolved'):
-            parts.append('Если при получении заказа в ПВЗ обнаружится повреждение товара, Вы можете отказаться от его получения.')
+        if 'LEAKAGE' in complaints and not analysis.get('resolved') and not re.search(r'заряжа|пользу|использ|установ', text):
+            parts.append('Если повреждение обнаружено до получения заказа в ПВЗ, Вы можете отказаться от его получения.')
         return ' '.join(parts)
     halogen = 'ламп' in name and 'галоген' in name
     if 'ламп' in name and not halogen and 'DIM_LIGHT' in complaints:
@@ -218,7 +227,7 @@ def product_usage_reply(review, product, facts, revision=0):
         if 'WEAK_SCENT' in complaints:
             faded = faded_scent(review.text)
             parts.append('Извините, что аромат перестал ощущаться уже через неделю.' if faded and re.search(r'через\s+(?:одну\s+)?неделю\b', text) else 'Извините, что аромат быстро перестал ощущаться.' if faded else 'Сожалеем, что аромат ощущается слабее, чем Вы ожидали.')
-            can = getattr(product,'brand','').upper()=='EIKOSHA' and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+',name,re.I)) and not re.search(r'giga|стерж|\bv-?\d+',name,re.I)
+            can = getattr(product,'brand','').upper()=='EIKOSHA' and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+|\br90\b',name,re.I)) and not re.search(r'giga|стерж|\bv-?\d+',name,re.I)
             if can:
                 parts.append('Меловая основа отдаёт аромат постепенно: такой ароматизатор рассчитан на тонкий, ненавязчивый аромат, а его интенсивность зависит от температуры и движения воздуха.')
                 holder = next((f for f in facts or [] if f.get('kind')=='vent_holder' and f.get('verification_status')=='VERIFIED'),None)
@@ -226,10 +235,13 @@ def product_usage_reply(review, product, facts, revision=0):
                     parts.append('Попробуйте разместить баночку на дефлекторе с помощью совместимого держателя — '+holder.get('article_label', 'артикул Wildberries '+holder['wb_nm_id'])+': поток воздуха поможет аромату равномернее распространяться по салону. Перед выбором держателя сверьте форму ламелей дефлектора с его инструкцией.')
                 else:
                     parts.append(eikosha_placement(product, facts).replace('Меловая основа отдаёт аромат постепенно, создавая тонкий, ненавязчивый запах. ', ''))
-            else:
+            elif re.search(r'giga|стерж|картридж', name):
                 parts.append('Попробуйте расположить ароматизатор ближе к потоку воздуха согласно его инструкции; сменные стержни GIGA устанавливаются в предназначенный для них корпус.')
+            else:
+                parts.append('Если инструкция Вашей модели допускает размещение ближе к потоку воздуха, можно выбрать такое положение; требования к корпусу и креплению сверяйте с её инструкцией.')
         if 'ODOR_COMPLAINT' in complaints:
-            parts.append('Нам жаль, что запах Вам не подошёл; восприятие ароматов индивидуально, поэтому можно выбрать другую композицию по Вашим предпочтениям.')
+            feeling = 'аромат не вполне Вам подошёл' if re.search(r'не\s+особо', text) else 'запах Вам не подошёл'
+            parts.append('Нам жаль, что ' + feeling + '. Восприятие запахов индивидуально; можно выбрать другую композицию по Вашим предпочтениям.')
         return ' '.join(parts)
     if is_cleaner(product) and (complaints or analysis['is_question'] or re.search(r'не оправдал|разочар|недовол', text)) and not (analysis['sentiment'] == 'positive' and complaints == {'WEAK_SCENT'}):
         if 'набор' in name:

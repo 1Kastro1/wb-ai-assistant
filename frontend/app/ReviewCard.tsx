@@ -7,7 +7,11 @@ type Row=Record<string,any>;
 export function OwnerRuleStatus({quality}:{quality:Row}){
  const rules=quality.owner_rules;
  if(!rules?.matched)return null;
- return <div className={rules.passed?'muted':'orange'} role="status"><p>{rules.passed?'Правила магазина выполнены':rules.checked===false?'Проверка правил не завершена':'Найдены замечания по правилам'} · Правил: {rules.matched}</p>{!rules.passed&&<ul>{(rules.issues?.length?rules.issues:['Выполнение правил не подтверждено. Подготовьте ответ заново.']).map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul>}</div>;
+ const technical=rules.technical_error||rules.status==='error';
+ const pending=!rules.passed&&!technical&&(rules.status==='pending'||rules.checked===false);
+ const label=rules.passed?'Правила магазина выполнены':technical?'Сбой проверки правил':pending?'Ожидает проверки правил':'Найдены замечания по правилам';
+ const defects=rules.violations||(technical||pending?[]:rules.issues||[]);
+ return <div className={rules.passed?'muted':'orange'} role="status"><p>{label} · Правил: {rules.matched}</p>{technical?<p>Текст сохранён. {rules.reason||'Сервис проверки не ответил.'} Ошибка проверки не означает, что ответ нарушает правила; публикация требует успешной проверки.</p>:pending?<p>Подтверждение всех правил ещё не получено. Сохранённый ответ не потерян.</p>:null}{!rules.passed&&defects.length>0&&<div><b>Замечания к тексту</b><ul>{defects.map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul></div>}</div>;
 }
 
 export function GenerationProgress({phase='running'}:{phase?:string}={}){
