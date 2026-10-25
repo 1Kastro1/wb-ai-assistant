@@ -79,6 +79,18 @@ def test_faded_scent_and_led_failure_are_answered_without_generic_reasking():
     assert 'уточните' not in answer.lower()
 
 
+def test_rule_parse_cache_is_isolated_and_rule_edits_take_effect_immediately():
+    from app.owner_reply_policy import constraints, local_issues
+    rules=['Не писать «проверено».']
+    first=constraints(rules)
+    first['banned'].clear()
+    assert local_issues('проверено',rules)
+    rules[0]='Не писать «готово». Не просить фотографии товара.'
+    assert not local_issues('проверено',rules)
+    assert local_issues('готово',rules)
+    assert local_issues('Пришлите фотографии товара.',rules)
+
+
 def seed_audit():
     with Session() as db:
         db.add(Memory(id='style',text='Каждый ответ начинай с «Добрый день!». В конце ответа добавляй подпись «С уважением ГК Юником.».'))
