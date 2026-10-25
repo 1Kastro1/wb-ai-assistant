@@ -160,7 +160,7 @@ def product_usage_reply(review, product, facts, revision=0):
             details.append('неприятный запах')
         parts.append('Приносим извинения за ' + (', '.join(details[:-1]) + ' и ' + details[-1] if len(details) > 1 else details[0]) + '.')
         if 'LEAKAGE' in complaints and not analysis.get('resolved'):
-            parts.append('Если при получении заказа в ПВЗ обнаружится повреждение товара, Вы можете отказаться от получения.')
+            parts.append('Если при получении заказа в ПВЗ обнаружится повреждение товара, Вы можете отказаться от его получения.')
         return ' '.join(parts)
     halogen = 'ламп' in name and 'галоген' in name
     if 'ламп' in name and not halogen and 'DIM_LIGHT' in complaints:

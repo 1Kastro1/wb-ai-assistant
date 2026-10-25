@@ -23,7 +23,7 @@ from .generation_control import exclusive_generation, FastPathUnavailable, Gener
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
 from .rule_execution import select_rules, positive_template
-from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply, has_redundant_clarification
+from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply, has_redundant_clarification, semantic_reply_issues
 from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
 from .config import MODEL, REAL_PUBLISH
@@ -500,7 +500,6 @@ def assess_reply(review, product, reply, verified_facts=None):
         if not facts_text or not any(x in facts_text for x in ('распыл', 'выдерж', '30 секунд', 'потоку воздуха')):
             score = min(score, 75)
             issues.append('способ применения не подтверждён сведениями о товаре')
-    from .reply_policy import semantic_reply_issues
     contradictions = semantic_reply_issues(review, product, reply)
     if contradictions:
         issues.extend(contradictions)
