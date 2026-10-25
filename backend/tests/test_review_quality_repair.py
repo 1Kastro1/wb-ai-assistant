@@ -66,6 +66,17 @@ def test_denied_faults_do_not_create_complaints(text):
     assert not analyze_customer_message(text,5)['complaints']
 
 
+def test_faded_scent_and_led_failure_are_answered_without_generic_reasking():
+    r=S(text='Запах выветривается буквально через неделю',rating=2,risk='NORMAL')
+    p=S(name='Ароматизатор GIGA',brand='EIKOSHA',category='',facts=[])
+    assert 'WEAK_SCENT' in analyze_customer_message(r.text,2)['complaints']
+    assert 'через неделю' in rule_reply(r,p)
+    r.text='Не светят';p.name='Светодиодные LED лампы';p.brand='TEST'
+    answer=rule_reply(r,p)
+    assert 'свет' in answer and 'сервисе' in answer
+    assert 'уточните' not in answer.lower()
+
+
 def seed_audit():
     with Session() as db:
         db.add(Memory(id='style',text='Каждый ответ начинай с «Добрый день!». В конце ответа добавляй подпись «С уважением ГК Юником.».'))

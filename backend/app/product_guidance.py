@@ -26,10 +26,12 @@ def positive_detail(text):
         details.append('установка прошла успешно по Вашему опыту')
     if any(x in value for x in ('качеств', 'на совесть', 'клапан', 'резьба')):
         details.append('Вы оценили качество товара')
-    if 'соответствует описанию' in value:
+    if 'соответствует описанию' in value or 'как в описании' in value:
         details.append('товар соответствует Вашим ожиданиям и описанию')
-    if any(x in value for x in ('третий раз', 'не первый раз', 'пользуюсь давно')):
+    if any(x in value for x in ('третий раз', 'второй раз', 'не первый раз', 'пользуюсь давно', 'только этого бренда')):
         details.append('Вы снова выбираете этот товар')
+    if re.search(r'перевозк|багажник|прицеп', value):
+        details.append('Вы оценили удобство ремня при перевозке')
     if any(x in value for x in ('вовремя', 'во время')):
         details.append('заказ пришёл вовремя')
     if re.search(r'светят?\s+(?:хорошо|отлично)', value):
@@ -100,6 +102,8 @@ def usage_excerpt(facts):
                 continue
             if not heading and fact.get('kind') != 'instruction' and re.match(r'(?:особенности|форма выпуска|назначение средства|объем|объём|вес|упаковка|прочие характеристики)\s*:', sentence, re.I):
                 continue
+            if not heading and fact.get('kind') != 'instruction' and not re.search(r'нанесите|наносите|распылите|встряхните|протрите|потрите|смойте|оставьте|удалите|смочите|разместите|закрепите|установите|откройте|не используйте', sentence, re.I):
+                continue
             action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
             if (action or re.search(r'подожд|смоч|охлад|включ|выключ|\d+\s*(?:[–-]\s*\d+\s*)?(?:секунд|минут)', sentence, re.I)) and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
                 result.append(sentence)
@@ -159,6 +163,8 @@ def product_usage_reply(review, product, facts, revision=0):
             parts.append('Если при получении заказа в ПВЗ обнаружится повреждение товара, Вы можете отказаться от получения.')
         return ' '.join(parts)
     halogen = 'ламп' in name and 'галоген' in name
+    if 'ламп' in name and not halogen and 'DIM_LIGHT' in complaints:
+        return 'Добрый день! Спасибо за отзыв. Извините, что свет ламп Вас разочаровал. По отзыву установить причину невозможно. Рекомендуем в сервисе проверить соответствие ламп оптике автомобиля, их установку и питание.'
     if halogen and yellow_light_complaint(text) and not complaints - {'DESCRIPTION_MISMATCH','NO_RESULT','DIM_LIGHT'}:
         temperatures = set(re.findall(r'\b([2-9][0-9]{3})\s*[кk]\b', name, re.I))
         for fact in facts or []:

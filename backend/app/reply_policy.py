@@ -39,11 +39,11 @@ def authenticity_concern(text):
 
 def faded_scent(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
-    pattern = r'перестал[аио]?\s+пахн\w*|(?:запах|аромат)\w*[^.!?;]{0,35}?(?:исчез|пропал|выветрил)\w*|(?:исчез|пропал|выветрил)\w*[^.!?;]{0,35}?(?:запах|аромат)\w*'
+    pattern = r'перестал[аио]?\s+пахн\w*|(?:запах|аромат)\w*[^.!?;]{0,35}?(?:исчез|пропал|выветри[лв])\w*|(?:исчез|пропал|выветри[лв])\w*[^.!?;]{0,35}?(?:запах|аромат)\w*'
     for match in re.finditer(pattern, value):
         context = value[max(0,match.start()-25):match.end()]
         if re.search(r'(?<!\w)не\s+(?:перестал|исчез|пропал|выветрил)', context):continue
-        if re.search(r'неприятн|посторонн|плохой запах|запах (?:табака|сырости|пота)', context):continue
+        if re.search(r'неприятн|посторонн|хими|плохой запах|запах (?:табака|сырости|пота)', context):continue
         return True
     return False
 
