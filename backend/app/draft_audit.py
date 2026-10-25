@@ -6,7 +6,7 @@ from sqlalchemy import select
 from .db import Session, Job, Draft, Review, Product, GenerationClaim, now
 from .generation_control import exclusive_generation, FastPathUnavailable
 
-VERSION = 'review-repair-2026-10-25-v2'
+VERSION = 'review-repair-2026-10-25-v3'
 
 
 def manually_edited(draft):
