@@ -2012,7 +2012,11 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
     draft_exists = select(Draft.id).where(Draft.review_id == Review.id).correlate(Review).exists()
     if view == 'recent': conditions.append(Review.created_at >= cutoff)
     if view == 'backlog': conditions.append(Review.created_at < cutoff)
-    if view == 'manual': conditions.append(Review.manual == True)
+    if view == 'manual':
+        draft_attention = select(Draft.id).where(Draft.review_id == Review.id,
+            (Draft.quality['passed'].as_boolean() == False) | Draft.model.startswith('safety-fallback')).correlate(Review).exists()
+        conditions.append((Review.manual == True) | (Review.status == 'manual_review') | (Review.risk != 'NORMAL') |
+                          ((~Review.marketplace.like('%_question')) & (Review.rating <= 3)) | draft_attention)
     if view == 'missing': conditions.append(~draft_exists)
     if view == 'ready': conditions.extend([Review.manual == False, Review.status == 'draft_ready', select(Draft.id).where(Draft.review_id == Review.id, Draft.quality['passed'].as_boolean() == True).correlate(Review).exists()])
     limit, offset = min(100, max(1, limit)), max(0, offset)

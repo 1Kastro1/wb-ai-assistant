@@ -65,6 +65,19 @@ def test_negated_faults_do_not_hide_real_danger():
         assert classify(text,'тормозные колодки')['manual'],text
 
 
+def test_manual_queue_includes_complaints_failed_checks_and_fallbacks(client):
+    with Session() as db:
+        db.add(Product(id='attention-product',name='Товар'));db.flush()
+        for rid,rating,market,passed,model in [('negative',2,'wb',None,''),('failed',5,'wb',False,'rules-v1'),
+                ('fallback',5,'wb',True,'safety-fallback-v1'),('good',5,'wb',True,'rules-v1'),('question',0,'wb_question',None,'')]:
+            db.add(Review(id=rid,wb_review_id=rid,product_id='attention-product',rating=rating,text='Текст',marketplace=market,manual=False));db.flush()
+            if passed is not None:db.add(Draft(id='attention-'+rid,review_id=rid,text='Ответ',original='Ответ',model=model,quality={'passed':passed}))
+        db.commit()
+    result=client.get('/work-queue?view=manual').json()
+    assert result['total']==3
+    assert {item['id'] for item in result['items']}=={'negative','failed','fallback'}
+
+
 def test_quality_excludes_automation_edits_from_owner_rate(client):
     from app.services import QUALITY_EVALUATOR_VERSION
     with Session() as db:

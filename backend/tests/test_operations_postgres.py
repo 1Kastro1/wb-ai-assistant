@@ -5,13 +5,39 @@ from uuid import uuid4
 from sqlalchemy import create_engine, select, delete
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
-from app.db import Base, Product, Setting, Job, set_setting
+from app.db import Base, Product, Setting, Job, StoreProfile, Review, Draft, set_setting
 from app.product_search import knowledge_condition
 from app.queue_policy import next_job
 
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_manual_queue_counts_match_rows_without_a_cartesian_join(self):
+        from app.main import work_queue
+        url=make_url(os.environ['DATABASE_URL'])
+        self.assertEqual(url.database,'wb_workbench_tests')
+        self.assertTrue(url.drivername.startswith('postgresql'))
+        engine=create_engine(url);Base.metadata.create_all(engine);factory=sessionmaker(engine)
+        prefix='manual-queue-'+uuid4().hex
+        try:
+            with factory() as db:
+                db.add(StoreProfile(id=prefix,name='Test',provider='wb'))
+                db.add(Product(id=prefix,name='Test'));db.flush()
+                for suffix,rating,market,passed in [('negative',2,'wb',None),('failed',5,'wb',False),('good',5,'wb',True),('question',0,'wb_question',None)]:
+                    db.add(Review(id=prefix+suffix,wb_review_id=prefix+suffix,wb_account_id=prefix,product_id=prefix,rating=rating,text='',marketplace=market,manual=False));db.flush()
+                    if passed is not None:db.add(Draft(id=prefix+suffix,review_id=prefix+suffix,text='Reply',original='Reply',quality={'passed':passed}))
+                db.commit()
+                result=work_queue({'role':'owner'},db,store_id=prefix,view='manual')
+                self.assertEqual(result['total'],2)
+                self.assertEqual({row['id'] for row in result['items']},{prefix+'negative',prefix+'failed'})
+        finally:
+            with factory() as db:
+                db.execute(delete(Draft).where(Draft.id.startswith(prefix)))
+                db.execute(delete(Review).where(Review.id.startswith(prefix)))
+                db.execute(delete(Product).where(Product.id==prefix))
+                db.execute(delete(StoreProfile).where(StoreProfile.id==prefix));db.commit()
+            engine.dispose()
+
     def test_catalog_trust_and_queue_json(self):
         url = make_url(os.environ['DATABASE_URL'])
         self.assertEqual(url.database, 'wb_workbench_tests')
