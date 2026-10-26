@@ -70,6 +70,23 @@ class AnalyticsCases:
                 self.assertEqual(result[key],0)
             self.assertEqual(result['topics'],{})
 
+    def test_quality_summary_reads_saved_data_on_both_databases(self):
+        from app.services import quality_report, QUALITY_EVALUATOR_VERSION
+        self.seed()
+        with self.factory() as db:
+            draft = db.get(Draft, self.scope+'0')
+            draft.quality = {'score': 96, 'passed': True, 'evaluator_version': QUALITY_EVALUATOR_VERSION}
+            draft.edits = [{'by': 'automation'}]
+            db.get(Draft, self.scope+'1').edits = [{'by': 'employee'}]
+            db.commit()
+            result = quality_report(db, account_id=self.scope)
+            self.assertEqual(result['scored'], 1)
+            self.assertEqual(result['average_score'], 96)
+            self.assertEqual(result['passed'], 1)
+            self.assertEqual(result['edited'], 1)
+            self.assertEqual(result['automated_changes'], 1)
+            self.assertEqual(db.get(Draft, self.scope+'0').quality['score'], 96)
+
 
 class SQLiteDashboardAnalytics(AnalyticsCases,unittest.TestCase):
     def setUp(self):

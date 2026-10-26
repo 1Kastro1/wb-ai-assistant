@@ -40,15 +40,17 @@ def test_quality_includes_explainable_breakdown():
     assert result['evaluator_version'] == QUALITY_EVALUATOR_VERSION
 
 
-def test_quality_report_rechecks_old_scores(client, seeded):
+def test_quality_report_preserves_old_checks_and_marks_them_for_recheck(client, seeded):
     with Session() as db:
-        db.add(Draft(id='old-score', review_id='r1', text='Спасибо за отзыв.', original='Спасибо за отзыв.', quality={'score': 99, 'passed': True}))
+        db.add(Draft(id='old-score', review_id='r1', text='Спасибо за отзыв.', original='Спасибо за отзыв.', quality={'score': 99, 'passed': True, 'owner_rules': {'fingerprint': 'saved-verdict'}}))
         db.commit()
-    assert client.get('/quality-report').status_code == 200
+    response = client.get('/quality-report')
+    assert response.status_code == 200
+    assert response.json()['needs_recheck'] == 1
+    assert response.json()['scored'] == response.json()['passed'] == 0
     with Session() as db:
         quality = db.get(Draft, 'old-score').quality
-        assert quality['evaluator_version'] == QUALITY_EVALUATOR_VERSION
-        assert quality['score'] < 99
+        assert quality == {'score': 99, 'passed': True, 'owner_rules': {'fingerprint': 'saved-verdict'}}
 
 
 def test_owner_feedback_is_saved_for_learning(client, seeded):

@@ -1,7 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {batchProgressJob,batchProgress} from '../app/batch-progress.mjs';
+import {batchProgressJob,batchProgress,batchWaitReason} from '../app/batch-progress.mjs';
 const job=(id,status,result={})=>({id,kind:'drafts',status,result:{account_id:'shop',...result}});
+
+test('queued batches explain active work and retries without stale running rows',()=>{
+ assert.match(batchWaitReason(job('one','queued'),[{id:'other',kind:'question_drafts',status:'running'}]),/ответы на вопросы/);
+ assert.match(batchWaitReason(job('one','queued',{retry_at:100}),[],1000),/Повтор после временной ошибки/);
+ assert.match(batchWaitReason(job('one','queued'),[]),/Повторно запускать.*не нужно/);
+ assert.equal(batchWaitReason(job('one','running')), '');
+});
 
 test('a queued page selection cannot hide the running all-store job',()=>{
  const selected=job('selected','queued',{selected_ids:['one'],total:30});

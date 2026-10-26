@@ -1555,10 +1555,10 @@ def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
         if request.headers.get('if-none-match') == etag:
             return Response(status_code=304, headers={'ETag': etag})
         return JSONResponse(rows, headers={'ETag': etag})
-    rows = list(db.scalars(select(Job).order_by(active_first, Job.created_at.desc()).limit(100)))
+    query = select(Job)
     if auth['role'] != 'owner':
-        active = active_store(db, auth)
-        rows = [job for job in rows if (job.result or {}).get('account_id') == active]
+        query = query.where(Job.result['account_id'].as_string() == active_store(db, auth))
+    rows = list(db.scalars(query.order_by(active_first, Job.created_at.desc()).limit(100)))
     return [public(j) for j in rows]
 
 
@@ -1693,6 +1693,19 @@ def current_draft(did: str, auth: AUTH, db: DB):
     if not review or review.wb_account_id != active_store(db, auth):
         raise HTTPException(404, 'Черновик не найден')
     return draft_public(db, item)
+
+
+@app.get('/drafts/{did}/rules')
+def current_draft_rules(did: str, auth: AUTH, db: DB):
+    item = db.get(Draft, did)
+    review = db.get(Review, item.review_id) if item else None
+    if not review or review.wb_account_id != active_store(db, auth):
+        raise HTTPException(404, 'Черновик не найден')
+    product = db.get(Product, review.product_id)
+    if not product:
+        raise HTTPException(404, 'Товар не найден')
+    from .rule_report import draft_rule_report
+    return draft_rule_report(db, item, review, product)
 
 
 @app.get('/questions/page')
@@ -2037,7 +2050,8 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
 
 @app.get('/quality-report')
 def reply_quality(auth: AUTH, db: DB, days: int = 30):
-    return quality_report(db, days, active_store(db, auth))
+    store = active_store(db, auth)
+    return cached_read(db, ('quality', store, days), lambda: quality_report(db, days, store))
 
 
 class DraftInput(Payload):

@@ -26,3 +26,13 @@ export function batchProgress(job) {
  return {processed, failed, skipped, attention, total, attempted, percent,
   remaining: total == null ? null : Math.max(0, total - attempted)};
 }
+
+export function batchWaitReason(job, jobs = [], now = Date.now()) {
+ if (!job || job.status !== 'queued') return '';
+ if (Number(job.result?.retry_at || 0) * 1000 > now)
+  return 'Задание сохранено. Повтор после временной ошибки: ' + new Date(job.result.retry_at * 1000).toLocaleTimeString('ru-RU') + '.';
+ const labels={products:'обновление товаров',reviews:'обновление отзывов',questions:'обновление вопросов',drafts:'ответы на отзывы',question_drafts:'ответы на вопросы',single_draft:'ответ на отзыв',single_question_draft:'ответ на вопрос',draft_audit:'перепроверка черновиков',draft_recheck:'проверка правил',knowledge_research:'поиск инструкций'};
+ const running=jobs.filter(item=>item.id!==job.id&&item.status==='running');
+ const names=[...new Set(running.map(item=>labels[item.kind]||'другое задание'))];
+ return names.length?'Сейчас выполняется: '+names.join(', ')+'. Ваш прогресс сохранён; пакет продолжится при следующем переходе очереди.':'Задание сохранено и ожидает обработчика. Повторно запускать подготовку не нужно.';
+}
