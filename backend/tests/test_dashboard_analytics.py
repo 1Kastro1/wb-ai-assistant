@@ -98,6 +98,31 @@ class SQLiteDashboardAnalytics(AnalyticsCases,unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST')=='1','Disposable PostgreSQL database required')
 class PostgresDashboardAnalytics(AnalyticsCases,unittest.TestCase):
+    def test_existing_quality_json_migrates_without_changing_values(self):
+        import importlib.util
+        from pathlib import Path
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        from sqlalchemy import text
+        spec = importlib.util.spec_from_file_location('quality_migration', Path(__file__).parents[1] / 'migrations/versions/0014_quality_jsonb.py')
+        migration = importlib.util.module_from_spec(spec); spec.loader.exec_module(migration)
+        schema = 'quality_migration_' + uuid4().hex
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql('CREATE SCHEMA ' + schema)
+            connection.exec_driver_sql('SET LOCAL search_path TO ' + schema)
+            connection.exec_driver_sql('CREATE TABLE generated_answers (id text PRIMARY KEY, quality json NOT NULL)')
+            connection.execute(text('INSERT INTO generated_answers VALUES (:id, CAST(:quality AS json))'),
+                               {'id':'saved','quality':'{"passed":true,"score":96,"owner_rules":{"fingerprint":"preserved"}}'})
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.upgrade()
+                migration.upgrade()
+                self.assertEqual(connection.exec_driver_sql('SELECT pg_typeof(quality)::text FROM generated_answers').scalar(), 'jsonb')
+                self.assertEqual(connection.exec_driver_sql("SELECT quality->'owner_rules'->>'fingerprint' FROM generated_answers").scalar(), 'preserved')
+                migration.downgrade()
+                self.assertEqual(connection.exec_driver_sql('SELECT pg_typeof(quality)::text FROM generated_answers').scalar(), 'json')
+            connection.exec_driver_sql('SET LOCAL search_path TO public')
+            connection.exec_driver_sql('DROP SCHEMA ' + schema + ' CASCADE')
+
     def setUp(self):
         url=make_url(os.environ['DATABASE_URL'])
         self.assertEqual(url.database,'wb_workbench_tests','Never run this against production')
