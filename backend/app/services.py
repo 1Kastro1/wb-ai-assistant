@@ -546,32 +546,10 @@ def learn_from_edit(db, draft, old, new):
 
 
 def quality_report(db, days=30, account_id=''):
-    filters = [~Review.marketplace.like('%_question')]
-    if days:
-        filters.append(Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
-    if account_id:
-        filters.append(Review.wb_account_id == account_id)
-    drafts = list(db.scalars(select(Draft).join(Review).where(*filters)))
-    changed = False
-    for draft in drafts:
-        if not draft.quality or draft.quality.get('evaluator_version') != QUALITY_EVALUATOR_VERSION:
-            review = db.get(Review, draft.review_id)
-            product = db.get(Product, review.product_id)
-            draft.quality = assess_reply(review, product, draft.text, trusted_product_facts(db, product))
-            changed = True
-    if changed:
-        db.commit()
-    scores = [int((d.quality or {}).get('score', 0)) for d in drafts if (d.quality or {}).get('score') is not None]
-    edited = [d for d in drafts if any(e.get('by') not in (None, '', 'automation') for e in d.edits or []) or (d.updated_by and d.text != d.original)]
-    return {
-        'scope': 'review_created_at', 'store_id': account_id, 'scored': len(scores),
-        'automated_changes': sum(any(e.get('by') == 'automation' for e in d.edits or []) for d in drafts),
-        'period_days': days, 'drafts': len(drafts), 'passed': sum(bool((d.quality or {}).get('passed')) for d in drafts),
-        'average_score': round(sum(scores) / len(scores), 1) if scores else 0,
-        'edited': len(edited), 'edit_rate': round(len(edited) / len(drafts) * 100, 1) if drafts else 0,
-        'fallbacks': sum('fallback' in d.model for d in drafts),
-        'learned_preferences': shared_counters(db, 'learned_edit_preferences:'),
-    }
+    from .quality_summary import quality_summary
+    result = quality_summary(db, days, account_id, QUALITY_EVALUATOR_VERSION)
+    result['learned_preferences'] = shared_counters(db, 'learned_edit_preferences:')
+    return result
 
 
 def analytics(db, days=0, product_id='', account_id=''):

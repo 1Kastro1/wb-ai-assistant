@@ -114,7 +114,7 @@ async def repair_step(job_id, session_factory=Session, limit=25):
 
 
 async def recheck_step(job_id, session_factory=Session):
-    from .services import assess_reply, trusted_product_facts
+    from .services import assess_reply, assess_question_answer, trusted_product_facts
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     with session_factory() as db:
@@ -130,10 +130,13 @@ async def recheck_step(job_id, session_factory=Session):
                 return False
             expected = (draft.revision, draft.text, review.text, review.rating, review.product_id)
             product = db.get(Product, review.product_id)
-            facts, rules = trusted_product_facts(db, product), matching_owner_rules(db, product)
+            question = review.marketplace.endswith('_question')
+            facts = trusted_product_facts(db, product)
+            rules = matching_owner_rules(db, product, for_questions=question)
+            assess = (lambda value: assess_question_answer(review, product, value, facts, owner_rules=rules)) if question else (lambda value: assess_reply(review, product, value, facts))
             protected = manually_edited(draft)
             answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
-                lambda value: assess_reply(review, product, value, facts), protected=review.risk != 'NORMAL', check_seconds=600)
+                assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')), check_seconds=600)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
@@ -141,7 +144,7 @@ async def recheck_step(job_id, session_factory=Session):
                 return False
             # Never apply a model rewrite to an employee's/manual answer, nor
             # allow a model repair that fails the independent semantic checks.
-            checked = assess_reply(review, product, answer, facts)
+            checked = assess(answer)
             if answer != draft.text and (protected or not checked['passed']):
                 verdict = {**verdict, 'passed': False, 'checked': False,
                            'issues': ['Предложенный вариант требует ручной проверки; исходный текст сохранён']}
@@ -149,7 +152,7 @@ async def recheck_step(job_id, session_factory=Session):
             if answer != draft.text:
                 draft.edits = [*(draft.edits or []), {'old': draft.text, 'new': answer, 'at': now(), 'by': 'automation', 'reason': VERSION + '-rules'}]
                 draft.text, draft.revision = answer, draft.revision + 1
-            quality = attach_rule_quality({**(draft.quality or {}), **assess_reply(review, product, answer, facts)}, verdict)
+            quality = attach_rule_quality({**(draft.quality or {}), **assess(answer)}, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
             review.status = 'manual_review' if review.manual or not quality['passed'] else 'draft_ready'

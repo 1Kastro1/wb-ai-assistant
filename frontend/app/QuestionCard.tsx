@@ -4,6 +4,7 @@ import DraftEditor from './DraftEditor';
 import ProductThumbnail from './ProductThumbnail';
 import InternetFitment from './InternetFitment';
 import {GenerationProgress,OwnerRuleStatus} from './ReviewCard';
+import RuleDetails from './RuleDetails';
 import {vehicleIdentifiers} from './vehicleIdentifiers';
 type Row=Record<string,any>;
 export default function QuestionCard({question:q,checked,toggle,busy,assistantEnabled,canManage,generating,generationError,generate,save,publish,onRegister,storageKey,generationPhase='running'}:{question:Row;checked:boolean;toggle:()=>void;busy:boolean;assistantEnabled:boolean;canManage:boolean;generating:boolean;generationError:string;generate:(instruction?:string)=>void;save:(text:string,revision:number)=>Promise<Row>;publish:()=>Promise<void>;onRegister?:(id:string,flush:(()=>Promise<any>)|null)=>void|(()=>void);storageKey:string;generationPhase?:string}){
@@ -20,7 +21,7 @@ export default function QuestionCard({question:q,checked,toggle,busy,assistantEn
     <div className="review-content has-text"><div className="customer-review"><small>ВОПРОС ПОКУПАТЕЛЯ</small><p className="review-text">{q.text}</p>{ids.length>0&&<div className="identifier-chips">{ids.map(id=><button key={id} onClick={()=>void copyId(id)} title="Скопировать номер автомобиля"><span>{id.length===17?'VIN':'Frame'}</span><code>{id}</code><small>{copy===id?'Скопировано':'Копировать'}</small></button>)}</div>}</div>
     {q.is_answered?<blockquote className="published-reply">{q.existing_answer}</blockquote>:<div className="draft">
      {q.draft?<DraftEditor draft={q.draft} disabled={generating||!canManage} storageKey={storageKey} onSave={save} onDirty={setDirty} onRegister={register}/>:<p className="muted">Подготовьте короткий ответ на вопрос покупателя.</p>}
-     <OwnerRuleStatus quality={quality}/>
+     <OwnerRuleStatus quality={quality}/>{q.draft&&<RuleDetails draftId={q.draft.id} revision={q.draft.revision}/>}
      {generationError&&<div className="generation-notice" role="status">{generationError}{q.draft&&<small>Предыдущий текст сохранён.</small>}</div>}{localError&&<div className="save-error" role="alert">{localError}</div>}
      <div className="draft-actions primary-actions"><button className={q.draft?'new-variant':'primary'} disabled={busy||generating||dirty||!canManage||!assistantEnabled} onClick={()=>generate()}>{generating?'Готовим…':generationError?(/готовится|ожидание|связь|Связь/.test(generationError)?'Продолжить ожидание':'Повторить попытку'):q.draft?'Новый вариант':'Подготовить ответ'}</button>{q.draft&&<button className="primary" disabled={busy||generating||!canManage||['NEEDS_CATALOG','CONFLICT'].includes(fit.status)} onClick={()=>void preparePublication()}>Подготовить публикацию</button>}</div>
      {generating&&<GenerationProgress phase={generationPhase}/>}

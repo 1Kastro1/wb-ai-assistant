@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import re
 from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint, Float
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.dialects.postgresql import JSONB
 from .config import DATABASE, DATABASE_URL
 
 
@@ -161,7 +162,7 @@ class Draft(Base):
     revision: Mapped[int] = mapped_column(Integer, default=1)
     model: Mapped[str] = mapped_column(String, default='rules-v1')
     prompt_version: Mapped[str] = mapped_column(String, default='1.0')
-    quality: Mapped[dict] = mapped_column(JSON, default=dict)
+    quality: Mapped[dict] = mapped_column(JSON().with_variant(JSONB(), 'postgresql'), default=dict)
     created_by: Mapped[str] = mapped_column(String, default='')
     updated_by: Mapped[str] = mapped_column(String, default='')
 
