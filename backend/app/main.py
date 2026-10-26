@@ -1087,10 +1087,13 @@ async def run_sync_job(job_id):
         await execute_job(job_id)
 
 
-async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft', 'question_drafts', 'draft_audit', 'draft_recheck')):
+async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft')):
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
+    # Bulk generation and audits must return to the outer dispatcher. Nesting
+    # them here suspends the parent batch until every descendant finishes and
+    # defeats its cooperative time slice, starving queued review batches.
     await asyncio.sleep(0)  # Let HTTP requests run even when no interactive job is queued.
     with Session() as db:
         pending = next_job(db, kinds)
