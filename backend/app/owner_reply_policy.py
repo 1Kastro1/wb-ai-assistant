@@ -183,7 +183,7 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
     'required': ['compliant', 'violations', 'revised_answer'], 'additionalProperties': False}
 
 
-async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=600,
+async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=None,
                               allow_fast_positive=False, instruction='', local_only=False):
     """Return text and an honest verification result, including outages/conflicts.
 
@@ -260,7 +260,8 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         try:
             # One deadline for the check, optional repair and recheck together.
             from .generation_budget import GenerationBudget
-            budget = GenerationBudget(check_seconds)
+            from .generation_budget import OWNER_RULE_CHECK_SECONDS
+            budget = GenerationBudget(OWNER_RULE_CHECK_SECONDS if check_seconds is None else check_seconds)
             for attempt in range(2):
                 result['verified_groups'] = 0
                 for group in groups:

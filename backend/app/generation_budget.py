@@ -2,6 +2,7 @@ import asyncio
 
 
 MODEL_GENERATION_SECONDS = 30
+OWNER_RULE_CHECK_SECONDS = 45
 
 
 class GenerationBudget:
