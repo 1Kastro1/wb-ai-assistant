@@ -38,7 +38,8 @@ class OllamaProvider:
         body['options']['num_ctx'] = max(body['options']['num_ctx'], ((needed + 1023) // 1024) * 1024)
         if schema:
             body['format'] = schema
-        request_options = {'timeout_seconds': 600} if task == 'OWNER_RULES' else {}
+        from .generation_budget import OWNER_RULE_CHECK_SECONDS
+        request_options = {'timeout_seconds': OWNER_RULE_CHECK_SECONDS} if task == 'OWNER_RULES' else {}
         result = await guard.request('ollama', 'chat', body=body, **request_options)
         if result.get('prompt_eval_count', 0) >= body['options']['num_ctx'] - 8:
             raise ValueError('Контекст модели переполнен; сократите повторяющиеся правила или их область применения')

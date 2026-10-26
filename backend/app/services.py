@@ -1036,8 +1036,10 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         lambda value: assess_reply(review, product, value, verified_facts),
         protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
         local_only=fast_only)
-    if retry_outages and rule_quality.get('technical_error'):
-        raise ConnectionError(rule_quality.get('reason', 'Сервис проверки недоступен'))
+    # A reply already exists. Preserve it as an explicitly unverified manual
+    # draft when the rule checker fails, instead of discarding it and spending
+    # several full checker deadlines on the same review. Publication still
+    # requires a current, successful owner-rule verdict.
     quality = attach_rule_quality(assess_reply(review, product, reply, verified_facts), rule_quality)
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note

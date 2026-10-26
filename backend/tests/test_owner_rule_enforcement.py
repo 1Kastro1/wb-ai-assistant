@@ -181,6 +181,57 @@ def test_semantic_check_shares_a_bounded_deadline(models):
     assert not quality['checked'] and not quality['passed']
 
 
+@pytest.mark.parametrize('marketplace', ['wb', 'ozon', 'yandex'])
+def test_batch_checker_timeout_keeps_draft_and_continues_without_retry(client, models, marketplace):
+    from app import main
+    from app.db import Job, GenerationOutcome
+    models[2].side_effect = TimeoutError('checker deadline')
+    with Session() as db:
+        row, product = seed(db, marketplace=marketplace, text='Хороший товар, доставка вовремя')
+        second = Review(id='next-review', wb_review_id='next-remote', wb_account_id='owner',
+                        product_id=product.id, text='Хороший товар, доставка вовремя', rating=5,
+                        marketplace=marketplace)
+        db.add_all([second, Memory(id='custom', text=SEMANTIC, kind='REVIEW_RULE'),
+                    Job(id='checker-outage-batch', kind='drafts', result={'account_id': 'owner'})])
+        db.commit()
+    asyncio.run(main.run_sync_job('checker-outage-batch'))
+    with Session() as db:
+        job = db.get(Job, 'checker-outage-batch')
+        assert job.status == 'completed'
+        assert job.result['processed'] == job.result['attention'] == 2
+        assert job.result['failed'] == job.result['retrying'] == 0
+        assert db.scalar(select(func.count()).select_from(GenerationOutcome)) == 2
+        for rid in (row.id, 'next-review'):
+            draft = db.scalar(select(Draft).where(Draft.review_id == rid))
+            assert draft.text
+            assert not draft.quality['passed']
+            assert not draft.quality['owner_rules']['checked']
+            assert db.get(Review, rid).status == 'manual_review'
+            with pytest.raises(ValueError, match='правила магазина'):
+                services.propose_publish(db, [rid])
+    assert models[2].await_count == 2
+
+
+def test_default_checker_deadline_is_bounded_even_during_model_repair(models, monkeypatch):
+    from app.generation_budget import GenerationBudget
+    budgets = []
+    real_init = GenerationBudget.__init__
+    def record_budget(self, seconds):
+        budgets.append(seconds)
+        real_init(self, seconds)
+    monkeypatch.setattr(GenerationBudget, '__init__', record_budget)
+    models[2].side_effect = [
+        {'compliant': False, 'violations': ['Нужна благодарность'],
+         'revised_answer': 'Здравствуйте! Спасибо за подробное описание доставки.'},
+        dict(PASS),
+    ]
+    _, quality = asyncio.run(enforce_owner_rules('Здравствуйте! Спасибо за отзыв.',
+        SimpleNamespace(text='Доставка вовремя', rating=5, marketplace='wb'),
+        SimpleNamespace(name='Товар'), [SEMANTIC], [], lambda value: {'passed': True}))
+    assert quality['passed']
+    assert budgets == [45]
+
+
 @pytest.mark.parametrize('candidate', [
     'Здравствуйте! Вернём деньги за товар.',
     'Здравствуйте! Используйте 999 мл средства для дома. Спасибо за отзыв.',
