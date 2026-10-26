@@ -31,11 +31,18 @@ test('question section displays Uniqom rule and a question example without stars
  assert(!html.includes(' ★'));
  assert(html.includes('новый поиск в Uniqom в этом примере не запускается'));
 });
-test('legacy common rules remain visible during the migration and are explicitly labelled',()=>{
- const html=renderToStaticMarkup(React.createElement(Rules,{items:[{id:'legacy',text:'Старое правило',kind:'GLOBAL_RULE',scope:'brand:EIKOSHA',enabled:false}],products:[],owner:false,onRefresh(){},onPropose(){},onDelete(){}}));
+test('enabled legacy common rules remain visible and explicitly labelled',()=>{
+ const html=renderToStaticMarkup(React.createElement(Rules,{items:[{id:'legacy',text:'Старое правило',kind:'GLOBAL_RULE',scope:'brand:EIKOSHA',enabled:true}],products:[],owner:false,onRefresh(){},onPropose(){},onDelete(){}}));
  assert(html.includes('Старое правило'));
  assert(html.includes('Отзывы и вопросы (старое правило)'));
  assert(html.includes('EIKOSHA'));
  assert(html.includes('disabled'));
  assert(html.includes('Предложить сохранение'));
+});
+
+test('disabled historical rules are hidden by default without hiding the archive selector',()=>{
+ const html=renderToStaticMarkup(React.createElement(Rules,{items:[{id:'old',text:'ARCHIVED_TEXT',kind:'REVIEW_RULE',scope:'global',enabled:false}],products:[],owner:true,onRefresh(){},onPropose(){},onDelete(){}}));
+ assert(!html.includes('ARCHIVED_TEXT'));
+ assert(html.includes('Отключённые'));
+ assert(html.includes('Все, включая историю'));
 });

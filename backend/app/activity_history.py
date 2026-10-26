@@ -43,7 +43,7 @@ def rule_details(payload, event):
             'kind':str(payload.get('kind') or 'GLOBAL_RULE')[:100]}
 
 
-def activity_page(db, auth, q='', user_id='', before=0, limit=50):
+def activity_page(db, auth, q='', user_id='', before=0, limit=50, category='all'):
     limit = max(1,min(int(limit),100))
     statement = select(Activity,User.display_name).outerjoin(User,User.id==Activity.user_id).where(important_activity())
     if auth['role'] != 'owner':
@@ -52,10 +52,16 @@ def activity_page(db, auth, q='', user_id='', before=0, limit=50):
         statement = statement.where(Activity.user_id==user_id)
     if before:
         statement = statement.where(Activity.id<before)
+    if category == 'errors': statement = statement.where(Activity.status >= 400)
+    elif category == 'rules': statement = statement.where(Activity.path.startswith('/memory'))
+    elif category == 'answers': statement = statement.where(or_(Activity.path.startswith('/drafts/'), Activity.path.startswith('/actions/')))
+    elif category == 'jobs': statement = statement.where(or_(Activity.path.startswith('/jobs/'), Activity.path.startswith('/auto-replies/')))
+    elif category == 'settings': statement = statement.where(or_(Activity.path.startswith('/settings/'), Activity.path.startswith('/users'), Activity.path.startswith('/stores')))
     if q.strip():
         term = q.strip()[:200]
         statement = statement.where(or_(Activity.username.contains(term,autoescape=True),
-            User.display_name.contains(term,autoescape=True),Activity.details['rule'].as_string().contains(term,autoescape=True)))
+            User.display_name.contains(term,autoescape=True),Activity.details['rule'].as_string().contains(term,autoescape=True),
+            Activity.path.contains(term,autoescape=True),Activity.details['event'].as_string().contains(term,autoescape=True)))
     rows = db.execute(statement.order_by(Activity.id.desc()).limit(limit+1)).all()
     items = [{**public(row),'actor_name':name or ('Система' if row.user_id == 'system' else row.username)} for row,name in rows[:limit]]
     return {'items':items,'has_more':len(rows)>limit,'next_before':items[-1]['id'] if items else None}

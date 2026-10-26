@@ -11,6 +11,7 @@ from . import rule_execution
 from .generation_control import FastPathUnavailable, GenerationBusy, ReviewSkipped, batch_context
 
 POLL_SECONDS = .5
+BATCH_SLICE_SECONDS = 60
 RETRY_DELAYS = (5, 20)
 
 
@@ -80,6 +81,8 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
     retries = dict(initial.get('retries') or {})
     active = {}
     between_task = None
+    slice_started = time.monotonic()
+    yielded = False
     last_draft = None
     support = inspect.signature(generate).parameters
     fast_supported = not single and not questions and 'fast_only' in support
@@ -242,9 +245,15 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
                 break
             if completed_any and (completed_model or 'model' not in active) and not single and between_task is None:
                 between_task = asyncio.create_task(between_reviews())
+            from .queue_policy import other_waiting
+            with session_factory() as db:
+                yield_due = not single and time.monotonic() - slice_started >= BATCH_SLICE_SECONDS and other_waiting(db, job_id)
+            if yield_due and not active and between_task is None:
+                yielded = True
+                break
             started_any = False
             for lane in (('fast', 'model') if fast_supported else ('model',)):
-                if lane not in active:
+                if lane not in active and (not yield_due or lane == 'fast' and 'model' in active):
                     # Imports run in their own session/task. A slow marketplace
                     # must not stop either generation lane while it awaits I/O.
                     info = next_review(lane)
@@ -286,7 +295,7 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
         raise ValueError('Отзыв или вопрос изменился. Обновите страницу')
     with session_factory() as db:
         result = dict(db.get(Job, job_id).result)
-    return result, last_draft
+    return {**result, 'yielded': yielded}, last_draft
 
 
 async def cancellable_batch(job_id, generate, between_reviews, session_factory=Session):

@@ -14,7 +14,6 @@ def test_single_question_runs_before_import_finishes(client, monkeypatch):
         db.add(Review(id='interactive-q', wb_review_id='question:q', product_id='interactive-product', wb_account_id='owner', marketplace='wb_question', text='Как применять?', rating=0))
         db.add_all([
             Job(id='catalog', kind='products', priority=10, result={'account_id': 'owner'}),
-            Job(id='single', kind='single_question_draft', priority=40, result={'account_id': 'owner', 'selected_ids': ['interactive-q']}),
         ])
         db.commit()
 
@@ -28,6 +27,7 @@ def test_single_question_runs_before_import_finishes(client, monkeypatch):
     class Provider:
         async def sync_products(self, db, account_id, *args, between_pages=None, **kwargs):
             events.append('page-one')
+            db.add(Job(id='single', kind='single_question_draft', priority=40, result={'account_id':'owner', 'selected_ids':['interactive-q']}))
             db.commit()
             assert between_pages is not None
             await between_pages()

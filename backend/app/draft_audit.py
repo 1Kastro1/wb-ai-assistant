@@ -2,7 +2,7 @@
 import asyncio
 import time
 from uuid import uuid4
-from sqlalchemy import select
+from sqlalchemy import select, func
 from .db import Session, Job, Draft, Review, Product, GenerationClaim, now
 from .generation_control import exclusive_generation, FastPathUnavailable
 
@@ -14,7 +14,7 @@ def manually_edited(draft):
                 or (draft.updated_by and draft.text != draft.original))
 
 
-async def repair_step(job_id, session_factory=Session, limit=100):
+async def repair_step(job_id, session_factory=Session, limit=25):
     from .services import assess_reply, trusted_product_facts
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import apply_local_preferences, apply_signature, saved_rule_quality, attach_rule_quality, enforce_owner_rules
@@ -24,6 +24,12 @@ async def repair_step(job_id, session_factory=Session, limit=100):
         job = db.get(Job, job_id)
         state = dict(job.result or {})
         account = state['account_id']
+        if not state.get('total'):
+            state['total'] = db.scalar(select(func.count()).select_from(Draft).join(Review, Review.id == Draft.review_id).where(
+                Review.wb_account_id == account, Review.marketplace == 'yandex',
+                Review.is_answered == False, Review.status != 'publishing')) or 0
+            job.result = state
+            db.commit()
         ids = list(db.scalars(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
             Review.wb_account_id == account, Review.marketplace == 'yandex',
             Review.is_answered == False, Review.status != 'publishing', Draft.id > state.get('cursor', ''),
@@ -83,8 +89,9 @@ async def repair_step(job_id, session_factory=Session, limit=100):
                     pending = state.get('recheck_ids', [])
                     if did not in pending:
                         state['recheck_ids'] = [*pending, did]
-            state.update(cursor=did, updated_at=now(), message='Перепроверка сохранённых ответов')
+            state.update(cursor=did, updated_at=now(), last_served_at=now(), message=f"Перепроверено ответов: {state.get('checked', 0)}")
             job.result = state
+            job.progress = min(99, round(100 * state.get('checked', 0) / max(1, state.get('total', 0))))
             db.commit()
         await asyncio.sleep(0)
     with session_factory() as db:

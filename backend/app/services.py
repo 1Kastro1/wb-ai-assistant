@@ -562,8 +562,10 @@ def quality_report(db, days=30, account_id=''):
     if changed:
         db.commit()
     scores = [int((d.quality or {}).get('score', 0)) for d in drafts if (d.quality or {}).get('score') is not None]
-    edited = [d for d in drafts if d.edits]
+    edited = [d for d in drafts if any(e.get('by') not in (None, '', 'automation') for e in d.edits or []) or (d.updated_by and d.text != d.original)]
     return {
+        'scope': 'review_created_at', 'store_id': account_id, 'scored': len(scores),
+        'automated_changes': sum(any(e.get('by') == 'automation' for e in d.edits or []) for d in drafts),
         'period_days': days, 'drafts': len(drafts), 'passed': sum(bool((d.quality or {}).get('passed')) for d in drafts),
         'average_score': round(sum(scores) / len(scores), 1) if scores else 0,
         'edited': len(edited), 'edit_rate': round(len(edited) / len(drafts) * 100, 1) if drafts else 0,
@@ -587,8 +589,10 @@ def analytics(db, days=0, product_id='', account_id=''):
         func.sum(case((manual_review_condition(), 1), else_=0)),
         func.sum(case((Review.is_answered == True, 1), else_=0)),
         func.avg(Review.rating),
+        func.sum(case(((Review.is_answered == False) & (Draft.id.is_(None)), 1), else_=0)),
+        func.sum(case(((Review.is_answered == False) & (Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()), 1), else_=0)),
     ).select_from(Review).outerjoin(Draft,Draft.review_id==Review.id).where(*filters)
-    total, unanswered, negative, manual, published, average = db.execute(aggregate).one()
+    total, unanswered, negative, manual, published, average, without_draft, recent_unanswered = db.execute(aggregate).one()
     topic_where = ["r.marketplace NOT LIKE '%_question'"]
     topic_params = {}
     if days:
@@ -617,6 +621,8 @@ def analytics(db, days=0, product_id='', account_id=''):
     return {
         'total': total or 0,
         'unanswered': unanswered or 0,
+        'without_draft': without_draft or 0,
+        'recent_unanswered': recent_unanswered or 0,
         'negative': negative or 0,
         'manual': manual or 0,
         'published': published or 0,
