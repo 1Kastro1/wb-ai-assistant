@@ -1,16 +1,16 @@
 import {normalizeReviewFilters} from './review-filters.mjs';
 /** Load only the visible section. Keys are stable; URLs reflect current filters. */
-export function workspaceResources({page='shell',settingsTab='connections',owner=false,days=0,productQuery=''}={}){
+export function workspaceResources({page='shell',settingsTab='connections',owner=false,days=0,productQuery='',productKnowledge='all'}={}){
  const common=[['stores','/stores'],['actions','/actions'],['assistant','/settings/assistant'],['notifications','/notifications'],...(owner?[['security','/security']]:[])];
  const sections={
   'Ассистент':[['conversations','/conversations'],['voice','/voice/status'],['ai','/ollama'],['stats','/analytics'],['questionStats','/questions/stats']],
   'Главная':[['stats','/analytics'],['system','/system/status'],['quality','/quality-report'],['overview','/analytics/marketplaces?days='+days],['sync','/sync/status']],
   'Отзывы':[['jobs','/jobs'],['auto','/auto-replies/status']],
   'Вопросы':[['jobs','/jobs'],['questionStats','/questions/stats']],
-  'Товары':[['products','/products/page?limit=60&q='+encodeURIComponent(productQuery)]],
+  'Товары':[['products','/products/page?limit=60&knowledge='+encodeURIComponent(productKnowledge)+'&q='+encodeURIComponent(productQuery)]],
   'Память':[['memory','/memory'],['products','/products/page?limit=60&q=']],
   'Уведомления':[],
-  'Настройки':({connections:[['sync','/sync/status'],['jobs','/jobs'],['performance','/settings/performance']],answers:[['search','/settings/search'],['brands','/brands'],['memory','/memory'],['metrics','/generation/metrics']],voice:[['voice','/voice/status']],security:[],automation:[['schedule','/settings/schedule'],['auto','/auto-replies/status']],data:[['portable','/settings/portable-sync']],team:owner?[['users','/users'],['teamDashboard','/team/dashboard'],['telegram','/settings/telegram']]:[]})[settingsTab]||[]
+  'Настройки':({connections:[['sync','/sync/status'],['jobs','/jobs'],['performance','/settings/performance']],answers:[['search','/settings/search'],['brands','/brands'],['memory','/memory'],['metrics','/generation/metrics']],voice:[['voice','/voice/status']],security:[],automation:[['schedule','/settings/schedule'],['auto','/auto-replies/status']],data:[['portable','/settings/portable-sync'],['system','/system/status']],team:owner?[['users','/users'],['teamDashboard','/team/dashboard'],['telegram','/settings/telegram']]:[]})[settingsTab]||[]
  };
  return [...common,...(sections[page]||[])].filter(([key])=>owner||!['metrics','portable','search'].includes(key));
 }

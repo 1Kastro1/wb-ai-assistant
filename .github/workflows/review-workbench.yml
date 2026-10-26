@@ -69,6 +69,7 @@ jobs:
         run: |
           python -m unittest discover -s backend/tests -p 'test_postgres_draft_conflicts.py'
           python -m unittest discover -s backend/tests -p 'test_dashboard_analytics.py'
+          python -m unittest discover -s backend/tests -p 'test_operations_postgres.py'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22'

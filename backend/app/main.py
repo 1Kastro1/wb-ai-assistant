@@ -43,6 +43,9 @@ from .read_cache import cached_read, clear_reads
 from .process_lock import ProcessLock
 from .batch_processing import cancellable_batch
 from .automation_schedule import normalize_schedule, enqueue_due_jobs, enqueue_generation
+from .queue_policy import next_job, other_waiting, QueueYield
+from .queue_overview import queue_overview
+from .product_search import knowledge_condition, priority_products
 from .reviewed_knowledge import product_scope,product_owned,knowledge_report,refresh_reviewed_knowledge
 from .fitment_catalog import import_cross_catalog, catalog_summary, VIN as FITMENT_VIN, vehicle_identifiers, vin_key, oem_numbers, fitment_answer, save_question_evidence
 
@@ -81,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -543,8 +546,10 @@ def team_activity(auth: OWNER, db: DB):
 
 
 @app.get('/activity/page')
-def user_activity(auth: AUTH, db: DB, q: str = '', user_id: str = '', before: int = 0, limit: int = 50):
-    return activity_page(db,auth,q,user_id,before,limit)
+def user_activity(auth: AUTH, db: DB, q: str = '', user_id: str = '', before: int = 0, limit: int = 50, category: str = 'all'):
+    if category not in ('all', 'errors', 'rules', 'answers', 'jobs', 'settings'):
+        raise HTTPException(422, 'Неизвестный тип события')
+    return activity_page(db,auth,q,user_id,before,limit,category)
 
 
 @app.get('/team/dashboard')
@@ -646,7 +651,7 @@ def own_password(body: OwnPassword, auth: AUTH, db: DB):
 def security(auth: OWNER, db: DB):
     audit = db.scalars(select(Audit).order_by(Audit.id.desc()).limit(30)).all()
     active = active_store(db, auth)
-    return {'privacy_mode': 'SERVER_SHARED', 'safe_mode': setting(db, 'safe_mode', False), 'test_mode': setting(db, 'test_mode', True), 'cloud_ai': False, 'web_research': True, 'search_provider': setting(db, 'search_provider', 'duckduckgo'), 'search_configured': bool(db.get(Account, 'search:tavily')), 'telemetry': False, 'database': 'POSTGRESQL' if DATABASE_URL.startswith('postgresql') else 'SQLITE', 'token': 'ENCRYPTED' if db.get(Account, active) else 'NOT_CONNECTED', 'active_store': active, 'backend': 'server', 'model': MODEL, 'real_publish_enabled': REAL_PUBLISH, 'audit': [public(a) for a in audit], 'backups': sorted(p.name for p in (DATA / 'backups').glob('*.db'))[-10:]}
+    return {'privacy_mode': 'SERVER_SHARED', 'safe_mode': setting(db, 'safe_mode', False), 'test_mode': setting(db, 'test_mode', True), 'cloud_ai': False, 'web_research': True, 'search_provider': setting(db, 'search_provider', 'duckduckgo'), 'search_configured': bool(db.get(Account, 'search:tavily')), 'telemetry': False, 'database': 'POSTGRESQL' if DATABASE_URL.startswith('postgresql') else 'SQLITE', 'token': 'ENCRYPTED' if db.get(Account, active) else 'NOT_CONNECTED', 'active_store': active, 'backend': 'server', 'model': MODEL, 'real_publish_enabled': REAL_PUBLISH, 'audit': [public(a) for a in audit], 'backups': sorted(p.name for p in (DATA / 'backups').glob('*.db' if DATABASE_URL.startswith('sqlite:') else '*.dump'))[-10:]}
 
 
 @app.get('/system/status')
@@ -654,13 +659,14 @@ def system_status(auth: AUTH, db: DB):
     schedule = setting(db, 'automation_schedule', {})
     latest = {}
     for kind in ('reviews', 'questions', 'products', 'drafts'):
-        job = db.scalar(select(Job).where(Job.kind == kind, Job.status == 'completed').order_by(Job.created_at.desc()))
+        job = db.scalar(select(Job).where(Job.kind == kind, Job.status == 'completed', Job.result['account_id'].as_string() == active_store(db, auth)).order_by(Job.created_at.desc()))
         latest[kind] = public(job) if job else None
-    backups = sorted((DATA / 'backups').glob('*.db'), key=lambda path: path.stat().st_mtime, reverse=True)[:10]
+    backups = sorted((DATA / 'backups').glob('*.db' if DATABASE_URL.startswith('sqlite:') else '*.dump'), key=lambda path: path.stat().st_mtime, reverse=True)[:10]
     try: health = database_health()
     except Exception as error: health = {'status':'failed','detail':type(error).__name__}
     database_bytes = (db.scalar(select(func.pg_database_size(func.current_database()))) or 0) if DATABASE_URL.startswith('postgresql') else (DATABASE.stat().st_size if DATABASE.exists() else 0)
     return {
+        **queue_overview(db, auth, active_store(db, auth)),
         'database_mb': round(database_bytes / 1024 / 1024, 1),
         'automation_enabled': bool(schedule.get('enabled')),
         'auto_replies_enabled': bool(schedule.get('enabled') and schedule.get('drafts_enabled')),
@@ -880,7 +886,8 @@ def stores(auth: AUTH, db: DB):
     return {'active': active, 'items': [{**public(s), 'config': {k:v for k,v in (s.config or {}).items() if k in ('client_id','business_id')} if assigned(s) else {},
                                       'connected': bool(db.get(Account, s.id)), 'accessible': True,
                                       'can_operate': assigned(s) and ('*' in auth.get('permissions', []) or s.provider + ':operate' in auth.get('permissions', [])),
-                                      'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id)) or 0} for s in rows]}
+                                      'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id, ~Review.marketplace.like('%_question'))) or 0,
+                                      'questions': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id, Review.marketplace.like('%_question'))) or 0} for s in rows]}
 
 
 @app.post('/stores')
@@ -1086,10 +1093,7 @@ async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_dr
     # back with a later generation failure or overlap restore/maintenance.
     await asyncio.sleep(0)  # Let HTTP requests run even when no interactive job is queued.
     with Session() as db:
-        pending = db.scalar(select(Job).where(
-            Job.kind.in_(kinds),
-            Job.status == 'queued', Job.cancel_requested == False,
-        ).order_by(Job.priority.asc(), Job.created_at.asc()))
+        pending = next_job(db, kinds)
         pending_id = pending.id if pending else None
     if pending_id:
         await execute_job(pending_id)
@@ -1120,7 +1124,7 @@ async def execute_job(job_id):
         manual_batch = bool((job.result or {}).get('manual_batch'))
         requested_by = (job.result or {}).get('requested_by', '')
         job_metadata = {key: job.result[key] for key in ('operation_key', 'operation_requested_ids', 'skipped') if key in (job.result or {})}
-        job.result = {**(job.result or {}), 'started_at': now()}
+        job.result = {**(job.result or {}), 'started_at': (job.result or {}).get('started_at') or now(), 'last_served_at': now(), 'retry_at': 0}
         job.status, job.progress, job.attempts = 'running', 1, job.attempts + 1
         kind = job.kind
         account_id = (job.result or {}).get('account_id') or setting(db, 'active_store', 'owner')
@@ -1138,8 +1142,14 @@ async def execute_job(job_id):
             job.result = {**(job.result or {}), 'checkpoint': value, 'account_id': account_id,
                           'updated_at': now(), 'message': f'Сохранён прогресс: {value.get("processed", 0)} записей'}
             db.commit()
+            if time.monotonic() - started_clock >= 30 and other_waiting(db, job_id):
+                raise QueueYield()
         try:
-            if kind in ('draft_audit', 'draft_recheck'):
+            if kind == 'knowledge_research':
+                from .knowledge_queue import research_step
+                await research_step(job_id)
+                db.refresh(job)
+            elif kind in ('draft_audit', 'draft_recheck'):
                 from .draft_audit import repair_step, recheck_step
                 await (repair_step(job_id) if kind == 'draft_audit' else recheck_step(job_id))
                 db.refresh(job)
@@ -1177,7 +1187,7 @@ async def execute_job(job_id):
                 job = db.get(Job, job_id)
                 if is_single and (total != 1 or single_draft is None):
                     raise ValueError('Отзыв или вопрос изменился. Обновите страницу')
-                job.status, job.progress = 'completed', 100
+                job.status, job.progress = ('queued', job.progress) if batch_result.get('yielded') else ('completed', 100)
                 job.result = {
                     **batch_result,
                     'processed': processed,
@@ -1187,7 +1197,7 @@ async def execute_job(job_id):
                     'since': since,
                     'failures': failures,
                     'failed_ids': failed_ids,
-                    'message': f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
+                    'message': 'Прогресс сохранён; обработка продолжится по очереди' if batch_result.get('yielded') else f'Подготовлено ответов на вопросы: {processed}. Ошибок: {failed}.' if is_questions else f'Подготовлено черновиков: {processed}. Требуют ручной проверки: {failed}.',
                     'proposal_id': proposal_id, 'selected_ids': selected_ids, 'manual_batch': manual_batch, 'requested_by': requested_by,
                     **({'draft': single_draft} if is_single else {}),
                 }
@@ -1225,6 +1235,10 @@ async def execute_job(job_id):
                 if kind in ('reviews', 'questions'):
                     enqueue_generation(db, schedule, store, 'drafts' if kind == 'reviews' else 'question_drafts', time.time())
                     set_setting(db, 'automation_schedule', schedule)
+        except QueueYield:
+            db.refresh(job)
+            job.status = 'queued'
+            job.result = {**(job.result or {}), 'last_served_at': now(), 'message': 'Прогресс сохранён; очередь передана следующему заданию'}
         except asyncio.CancelledError:
             db.rollback()
             db.expire_all()
@@ -1232,7 +1246,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -1242,8 +1256,10 @@ async def execute_job(job_id):
             db.rollback()
             db.expire_all()
             job = db.get(Job, job_id)
-            if job.attempts < job.max_attempts and not job.cancel_requested:
-                job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Повтор после ошибки', 'account_id': account_id}
+            failure_attempts = int((job.result or {}).get('failure_attempts', 0)) + 1
+            job.result = {**(job.result or {}), 'failure_attempts': failure_attempts}
+            if failure_attempts < job.max_attempts and not job.cancel_requested:
+                job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Ожидает повторной попытки', 'account_id': account_id, 'detail': (str(error) or type(error).__name__)[:500], 'retry_at': time.time() + min(300, 30 * 2 ** min(job.attempts - 1, 3))}
             else:
                 default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'
                 detail = (str(error) or type(error).__name__)[:500]
@@ -1254,7 +1270,7 @@ async def execute_job(job_id):
                 db.add(Activity(user_id=requested_by or 'system', username=actor.username if actor else 'system',
                                 method='POST', path='/jobs/' + job_id, status=500,
                                 details={'event': 'job_failed', 'job_kind': kind}))
-        job.result = {**job_metadata, **(job.result or {}), 'timing': {'queue_seconds': round(queue_seconds, 2), 'processing_seconds': round(time.monotonic() - started_clock, 2)}, 'finished_at': now()}
+        job.result = {**job_metadata, **(job.result or {}), 'last_served_at': now(), 'timing': {'queue_seconds': round(queue_seconds, 2), 'processing_seconds': round(time.monotonic() - started_clock, 2)}, 'finished_at': now()}
         db.commit()
 
 
@@ -1264,7 +1280,7 @@ async def run_job_queue():
     async with job_dispatch_lock:
         while True:
             with Session() as db:
-                job = db.scalar(select(Job).where(Job.status == 'queued').order_by(Job.priority.asc(), Job.created_at.asc()))
+                job = next_job(db)
                 job_id = job.id if job else None
             if not job_id:
                 return
@@ -1522,7 +1538,7 @@ def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
     active_first = case((Job.status.in_(['queued', 'running']), 0), else_=1)
     if compact:
         fields = ('account_id', 'requested_by', 'manual_batch', 'operation_key', 'total', 'processed', 'failed',
-                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since',
+                  'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since', 'last_served_at', 'retry_at', 'detail', 'checked', 'changed', 'manual_preserved',
                   'skipped', 'attention', 'manual_errors', 'remaining', 'retrying', 'current_reviews', 'queue_version')
         columns = [column for column in Job.__table__.columns if column.name != 'result']
         query = select(*columns, *(Job.result[key].label('r_' + key) for key in fields))
@@ -1742,13 +1758,37 @@ async def product_knowledge_refresh(request: Request,auth: OWNER,db: DB):
     return result
 
 
+@app.post('/products/knowledge/research')
+async def urgent_knowledge_research(background: BackgroundTasks, auth: OWNER, db: DB):
+    from .knowledge_queue import urgent_product_ids
+    store_id = active_store(db, auth)
+    existing = db.scalar(select(Job).where(Job.kind == 'knowledge_research', Job.status.in_(('queued', 'running')),
+                                         Job.result['account_id'].as_string() == store_id))
+    if not existing:
+        ids = urgent_product_ids(db, store_id)
+        existing = Job(id=str(uuid4()), kind='knowledge_research', priority=150, max_attempts=1000,
+                       result={'account_id': store_id, 'product_ids': ids, 'total': len(ids), 'cursor': 0,
+                               'message': 'Поиск инструкций для товаров с неотвеченными вопросами и жалобами'})
+        db.add(existing); db.commit()
+    background.add_task(run_job_queue)
+    return public(existing)
+
+
 @app.get('/products/page')
-def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset: int = 0):
+def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset: int = 0, knowledge: str = 'all'):
     limit, offset = min(200, max(1, limit)), max(0, offset)
     store = db.get(StoreProfile, active_store(db, auth))
     scope = product_scope(store)
-    query = select(Product).where(scope)
-    count_query = select(func.count()).select_from(Product).where(scope)
+    if knowledge not in ('all', 'ready', 'missing', 'priority'):
+        raise HTTPException(422, 'Неизвестный фильтр сведений')
+    conditions = [scope]
+    if knowledge in ('ready', 'missing'):
+        trusted = knowledge_condition(db)
+        conditions.append(trusted if knowledge == 'ready' else ~trusted)
+    if knowledge == 'priority':
+        conditions.extend([~knowledge_condition(db), Product.id.in_(priority_products(store.id))])
+    query = select(Product).where(*conditions)
+    count_query = select(func.count()).select_from(Product).where(*conditions)
     if q:
         condition = product_search_condition(q)
         query, count_query = query.where(condition), count_query.where(condition)
@@ -1756,7 +1796,7 @@ def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset:
     items = [{**public(p), 'official_domain': domains.get(p.id, '')}
              for p in db.scalars(query.order_by(Product.name, Product.id).offset(offset).limit(limit))]
     total = db.scalar(count_query) or 0
-    return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total}
+    return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total, 'knowledge': knowledge}
 
 
 from .verified_instructions import attach_verified_instructions
@@ -1957,7 +1997,7 @@ def _marketplace_stats(auth, db, days=0):
 
 
 @app.get('/work-queue')
-def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: int = 50, offset: int = 0):
+def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: int = 50, offset: int = 0, view: str = 'all'):
     if kind not in ('', 'reviews', 'questions'):
         raise HTTPException(422, 'Неизвестный тип обращения')
     ids = [s.id for s in db.scalars(select(StoreProfile)) if not store_id or s.id == store_id]
@@ -1966,14 +2006,25 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
     conditions = [Review.wb_account_id.in_(ids), Review.is_answered == False]
     if kind:
         conditions.append(Review.marketplace.like('%_question') if kind == 'questions' else ~Review.marketplace.like('%_question'))
+    if view not in ('all', 'recent', 'backlog', 'manual', 'ready', 'missing'):
+        raise HTTPException(422, 'Неизвестный вид очереди')
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    draft_exists = select(Draft.id).where(Draft.review_id == Review.id).correlate(Review).exists()
+    if view == 'recent': conditions.append(Review.created_at >= cutoff)
+    if view == 'backlog': conditions.append(Review.created_at < cutoff)
+    if view == 'manual': conditions.append(Review.manual == True)
+    if view == 'missing': conditions.append(~draft_exists)
+    if view == 'ready': conditions.extend([Review.manual == False, Review.status == 'draft_ready', select(Draft.id).where(Draft.review_id == Review.id, Draft.quality['passed'].as_boolean() == True).correlate(Review).exists()])
     limit, offset = min(100, max(1, limit)), max(0, offset)
     total = db.scalar(select(func.count()).select_from(Review).where(*conditions)) or 0
-    rows = db.execute(select(Review, Product.name, StoreProfile.name, StoreProfile.provider, Draft.id).join(Product, Product.id == Review.product_id).join(StoreProfile, StoreProfile.id == Review.wb_account_id).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions).order_by(Review.manual.desc(), Review.created_at.desc(), Review.id).offset(offset).limit(limit)).all()
+    rows = db.execute(select(Review, Product.name, StoreProfile.name, StoreProfile.provider, Draft.id, Draft.quality).join(Product, Product.id == Review.product_id).join(StoreProfile, StoreProfile.id == Review.wb_account_id).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions).order_by(Review.manual.desc(), Review.created_at.desc(), Review.id).offset(offset).limit(limit)).all()
     return {'items': [{'id': review.id, 'store_id': review.wb_account_id, 'store_name': name, 'provider': provider,
                        'kind': 'questions' if review.marketplace.endswith('_question') else 'reviews',
                        'product': product, 'text': review.text, 'rating': review.rating, 'created_at': review.created_at,
-                       'manual': review.manual, 'status': review.status, 'has_draft': draft_id is not None}
-                      for review, product, name, provider, draft_id in rows],
+                       'manual': review.manual, 'status': review.status, 'has_draft': draft_id is not None,
+                       'verification_passed': bool((quality or {}).get('passed')),
+                       'reasons': list(dict.fromkeys(([{'HIGH': 'Описан опасный симптом', 'CAUTION': 'Шум или скрип требуют внимания'}.get(review.risk, 'Отмечено для ручной проверки')] if review.manual else []) + list((quality or {}).get('issues') or [])))[:5]}
+                      for review, product, name, provider, draft_id, quality in rows],
             'total': total, 'limit': limit, 'offset': offset}
 
 

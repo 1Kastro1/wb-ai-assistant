@@ -155,13 +155,15 @@ class EgressGuard:
                         await asyncio.sleep(min(8, 2 ** (attempt + 1)))
                         continue
                     status = str(response.status_code)
-                    if response.status_code in (429, 502, 503, 504) and attempt + 1 < attempts:
+                    if response.status_code in (429, 500, 502, 503, 504) and attempt + 1 < attempts:
                         import asyncio
-                        await asyncio.sleep(min(4, 2 ** attempt))
+                        retry_after = response.headers.get('Retry-After', '')
+                        await asyncio.sleep(min(60, max(1, int(retry_after))) if retry_after.isdigit() else min(8, 2 ** (attempt + 1)))
                         continue
                     break
                 if not response.is_success:
-                    raise ValueError(f'{provider}: HTTP {response.status_code}. Проверьте доступ и повторите позже.')
+                    advice = 'Сервис временно недоступен; повторите позже.' if response.status_code >= 500 else 'Превышен лимит запросов; повтор будет выполнен позже.' if response.status_code == 429 else 'Проверьте ключ и права доступа.' if response.status_code in (401, 403) else 'Проверьте параметры запроса.'
+                    raise ValueError(f'{provider}: HTTP {response.status_code}. {advice}')
                 if return_text:
                     return response.text
                 return response.json() if response.content else {}

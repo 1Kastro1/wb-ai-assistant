@@ -88,10 +88,22 @@ def mask_vin(text):
 def classify(text, category=''):
     value = (text + ' ' + category).lower()
     critical = any(x in value for x in CRITICAL)
-    high = critical and any(x in text.lower() for x in HIGH)
-    caution = critical and any(x in text.lower() for x in ('скрип', 'свист', 'шум'))
+    symptoms = safety_symptoms(text)
+    high = critical and (any(x in symptoms for x in HIGH if x != 'сильн') or bool(re.search(r'сильн\w*\s+(?:биен|вибрац|нагрев|скрип|скрежет|увод)', symptoms)))
+    caution = critical and any(x in symptoms for x in ('скрип', 'свист', 'шум'))
     return {'risk': 'HIGH' if high else 'CAUTION' if caution else 'NORMAL', 'manual': high, 'safety_critical': critical,
             'topics': [x for x in ('упаков', 'достав', 'запах', 'скрип', 'вибрац', 'тормоз', 'подбор', 'совместим') if x in value] or ['другое']}
+
+
+def safety_symptoms(text):
+    """Ignore explicit absence of a fault; retain denials of braking itself."""
+    value = (text or '').lower().replace('ё', 'е')
+    faults = r'(?:биени\w*|вибрац\w*|перегрев\w*|дым\w*|утеч\w*|скрежет\w*|скрип\w*|шум\w*|свист\w*)'
+    value = re.sub(r'(?<!\w)(?:нет|без|не было)\s+(?:ни\s+)?' + faults + r'(?:\s*[,и]?\s*ни\s+' + faults + r')*', ' ', value)
+    value = re.sub(faults + r'\s+не\s+(?:чувств\w*|замет\w*|наблюд\w*|было)', ' ', value)
+    value = re.sub(faults + r'\s+нет', ' ', value)
+    value = re.sub(r'(?<!\w)не\s+(?:скрип\w*|шум\w*|свист\w*|перегрева\w*|дым\w*|заклинива\w*)', ' ', value)
+    return value
 
 
 def validate_reply(text):
