@@ -5,10 +5,17 @@ from pathlib import Path
 def complaint_text(text):
     """Remove explicit denials of faults, not the buyer's genuine complaints."""
     value = (text or '').lower().replace('ё', 'е')
+    faults = r'(?:протек\w*|потек\w*|вытек\w*|утек\w*|протеч\w*|утеч\w*|трещин\w*|поврежд\w*|дефект\w*|полом\w*|разбит\w*|сломан\w*|сломал\w*|треснул\w*|свист\w*)'
+    fault_list = faults + r'\b(?:\s*(?:,|и|ни)\s*' + faults + r'\b)*'
+    value = re.sub(r'(?<!\w)без\s+(' + fault_list + r')\s+не\s+обошл\w*', r'\1', value)
+    value = re.sub(r'(?<!\w)не\s+без\s+(' + faults + r')\b', r'\1', value)
     value = re.sub(r'(?:ни разу[^.!?\n]{0,35}не|не)\s+(?:попал\w*|встретил\w*|заметил\w*|обнаружил\w*)[^.!?\n]{0,20}неприятн\w*\s+(?:запах|аромат)\w*', ' приятный аромат ', value)
     value = re.sub(r'(?:нет|без|не было)\s+(?:никакого\s+)?(?:неприятн\w*|резк\w*|посторонн\w*)\s+(?:запах|аромат)\w*', ' ', value)
     value = re.sub(r'(?:неприятн\w*|резк\w*|посторонн\w*)\s+(?:запах|аромат)\w*\s+нет', ' ', value)
     value = re.sub(r'(?<!\w)(?:не|без)\s+(?:скрип\w*|шум\w*|воня\w*|помят\w*|поврежд\w*)', ' ', value)
+    value = re.sub(r'(?<!\w)(?:не было|нет|без)\s+(?:(?:никаких|никакого|видимых)\s+)?' + fault_list, ' ', value)
+    value = re.sub(r'(?<!\w)' + faults + r'\s+(?:нет|не было|не обнаруж\w*|отсутств\w*)', ' ', value)
+    value = re.sub(r'(?<!\w)не\s+' + faults, ' ', value)
     return value
 
 
@@ -219,6 +226,9 @@ def semantic_reply_issues(review, product, reply):
     buyer = (review.text or '').lower().replace('ё', 'е')
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower().replace('ё', 'е')
     issues = []
+    for kind, defect in (('LEAKAGE', r'протеч\w*'), ('PACKAGING_ISSUE', r'повреждени\w*\s+упаковк\w*')):
+        if kind not in analysis['complaints'] and re.search(r'извин\w*\s+за\s+[^.!?]{0,100}' + defect, text):
+            issues.append('не извиняться за неописанную протечку' if kind == 'LEAKAGE' else 'не придумывать повреждение упаковки')
     if buyer.strip() and not analysis['complaints'] and analysis['sentiment'] == 'positive' and re.search(r'жаль|сожале|извин|не оправдал|не подош[её]л|не понравил|разочар', text):
         issues.append('не трактовать положительный отзыв как жалобу')
     if analysis['complaints'] and analysis['sentiment'] == 'negative' and re.search(r'рады, что (?:покупка|товар|аромат).*понравил', text):

@@ -1,6 +1,6 @@
 """Specific owner-approved replies; technical statements remain conditional."""
 import re
-from .reply_policy import analyze_customer_message, quantity_shortage
+from .reply_policy import analyze_customer_message, quantity_shortage, complaint_text
 
 HELLA = 'https://www.hella.com/partnerworld/us/Product-range/Lighting/Bulbs-3277/'
 BREMBO = 'https://asia.bremboparts.com/america/en/support/car/maintenance/noises-and-vibrations-113941'
@@ -12,6 +12,7 @@ def specific_review_case(review, product):
     text = ' '.join((review.text or '').lower().replace('ё', 'е').split())
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     analysis = analyze_customer_message(review.text, review.rating)
+    faults = ' '.join(complaint_text(review.text).split())
     thanks = 'Добрый день! Спасибо за отзыв. '
     def result(key, answer, url='', evidence=''):
         sources = [{'text': evidence, 'source': url, 'verification_status': 'VERIFIED', 'source_type': 'technical_reference'}] if url else []
@@ -22,7 +23,7 @@ def specific_review_case(review, product):
 
     # Never turn braking failure, overheating or grinding into a bedding-in reply.
     braking_failure = re.search(r'не тормоз|плохо тормоз|хуже тормоз|перегрев|дым|заклини|скрежет|провалива|вибрац|биени', text)
-    if 'колод' in name and re.search(r'скрип|свист', text) and not braking_failure:
+    if 'колод' in name and re.search(r'скрип|свист', faults) and not braking_failure:
         return result('pad_squeal', 'Извините, что колодки сильно скрипят. После установки новым колодкам требуется притирка к поверхности диска; скрип также может быть связан с состоянием дисков, креплений или работой суппорта. По отзыву нельзя определить причину, поэтому при сильном скрипе рекомендуем сначала проверить тормозную систему и установку в сервисе; после проверки соблюдать порядок притирки производителя. При ухудшении торможения или перегреве прекратите эксплуатацию до диагностики.', BREMBO, 'Общие рекомендации Brembo: шум может быть связан с дисками, креплениями и суппортом; после установки требуется корректная притирка. Это не диагноз для ADVICS и не обещание исчезновения скрипа.')
 
     if 'наконечник' in name and re.search(r'рулев|тяги', name) and re.search(r'гайк|шплинт|палец|конус', text) and re.search(r'ниже|выше|тоньше|не совп|болта|люфт', text):
@@ -59,17 +60,19 @@ def specific_review_case(review, product):
     if can_fragrance and re.search(r'(?:прислал\w*|пришел|пришла|получил\w*)[^.!?]{0,45}держател',text):
         gift = ' Особенно жаль, что ароматизатор предназначался в подарок и эта ситуация испортила впечатление от покупки.' if 'подар' in text and not re.search(r'не\s+(?:в\s+)?подар',text) else ''
         return result('wrong_fragrance_holder','Приносим извинения за то, что вместо ароматизатора Вам пришёл держатель.'+gift+' Если при получении заказа в ПВЗ Вы обнаружите, что пришёл не тот товар, Вы можете отказаться от его получения.')
-    if re.search(r'сломал\w*|отлом\w*|лопнул\w*|треснул\w*',text) and not re.search(r'не\s+(?:слом|отлом|лопнул|треснул)',text) and not set(analysis['complaints'])-{'DAMAGED_ITEM','QUALITY_ISSUE'}:
+    if re.search(r'сломал\w*|отлом\w*|лопнул\w*|треснул\w*',faults) and not re.search(r'не\s+(?:слом|отлом|лопнул|треснул)',faults) and not set(analysis['complaints'])-{'DAMAGED_ITEM','QUALITY_ISSUE'}:
         detail = 'крепёж держателя сломался' if re.search(r'держател|креплен',name) and re.search(r'крепеж|креплен|защелк|клипс',text) else 'товар сломался'
         return result('broken_item','Извините, что '+detail+' и товар не оправдал Ваших ожиданий. Сожалеем, что Вам пришлось столкнуться с такой поломкой.')
 
     if re.search(r'\b(?:быушн\w*|бэушн\w*|б\s*/\s*у|бу)\b|использованн|бывш\w*\s+в\s+употреблении|следы\s+(?:использования|установки)', text) and not re.search(r'не\s+(?:использованн|быушн|бэушн|б\s*/\s*у)|без\s+следов', text):
         return result('used_goods', 'Приносим извинения за состояние полученного товара. Мы продаём только новый товар, бывшие в употреблении товары не реализуем. Если при получении в ПВЗ Вы обнаружите следы использования или несоответствие заказу, Вы можете отказаться от получения товара.')
 
-    if analysis['sentiment'] != 'mixed' and not set(analysis['complaints']) - {'DAMAGED_ITEM','PACKAGING_ISSUE','LEAKAGE','WRONG_ITEM'} and re.search(r'помят|поврежд|разбит|протек|вытек|утек|пришел не тот|прислали не тот|не тот товар|получил\w* другой товар', text):
-        if re.search(r'вытек|протек|утек', text):
-            detail = 'повреждение упаковки и протечку электролита' if 'аккумулятор' in name else 'повреждение упаковки и протечку масла' if 'масл' in name else 'повреждение упаковки и протечку средства'
-        elif re.search(r'пришел не тот|прислали не тот|не тот товар|получил\w* другой товар', text):
+    if analysis['complaints'] and analysis['sentiment'] != 'mixed' and not set(analysis['complaints']) - {'DAMAGED_ITEM','PACKAGING_ISSUE','LEAKAGE','WRONG_ITEM'} and re.search(r'помят|поврежд|разбит|протек|вытек|утек|пришел не тот|прислали не тот|не тот товар|получил\w* другой товар', faults):
+        if 'LEAKAGE' in analysis['complaints']:
+            detail = 'протечку электролита' if 'аккумулятор' in name else 'протечку масла' if 'масл' in name else 'протечку средства'
+            if 'PACKAGING_ISSUE' in analysis['complaints']:
+                detail = 'повреждение упаковки и ' + detail
+        elif 'WRONG_ITEM' in analysis['complaints']:
             detail = 'то, что Вы получили не тот товар'
         else:
             detail = 'состояние упаковки' if set(analysis['complaints']) == {'PACKAGING_ISSUE'} else 'повреждение полученного товара'
