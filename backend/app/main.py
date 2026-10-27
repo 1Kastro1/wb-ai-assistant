@@ -84,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -1148,10 +1148,13 @@ async def execute_job(job_id):
             if time.monotonic() - started_clock >= 30 and other_waiting(db, job_id):
                 raise QueueYield()
         try:
-            if kind in ('wb_publish_prepare', 'wb_publish_send'):
+            if kind in ('wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit'):
                 from .bulk_publication import prepare_step, send_step
                 if kind == 'wb_publish_prepare':
                     await asyncio.to_thread(prepare_step, job_id)
+                elif kind == 'wb_exclusions_audit':
+                    from .bulk_exclusions import audit_step
+                    await asyncio.to_thread(audit_step, job_id)
                 else:
                     await send_step(job_id)
                 db.refresh(job)
@@ -1256,7 +1259,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -2270,6 +2273,30 @@ def wb_bulk_confirm(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db:
     from .bulk_publication import confirm, view
     parent = wb_bulk_parent(db, auth, body.store_id, aid)
     return view(db, confirm(db, parent, auth['user_id'], REAL_PUBLISH))
+
+
+@app.post('/publications/wb/all/{aid}/exclusions/audit')
+def wb_bulk_exclusions_audit(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_exclusions import start_audit, summary
+    parent = wb_bulk_parent(db, auth, body.store_id, aid)
+    start_audit(db, parent, auth['user_id'])
+    return summary(db, parent)
+
+
+@app.get('/publications/wb/all/{aid}/exclusions')
+def wb_bulk_exclusions(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB,
+                       reason: str = '', q: str = '', sort: str = 'newest', offset: int = 0):
+    from .bulk_exclusions import page, summary
+    if offset < 0 or len(q) > 300:
+        raise HTTPException(422, 'Недопустимый фильтр')
+    parent = wb_bulk_parent(db, auth, store_id, aid)
+    return {**page(db, parent, reason, q, sort, offset), **summary(db, parent)}
+
+
+@app.get('/publications/wb/all/{aid}/exclusions/summary')
+def wb_bulk_exclusions_summary(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_exclusions import summary
+    return summary(db, wb_bulk_parent(db, auth, store_id, aid))
 
 
 @app.post('/publications/wb/all/{aid}/cancel')

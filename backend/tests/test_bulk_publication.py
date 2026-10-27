@@ -315,3 +315,139 @@ def test_foreign_manifest_cannot_be_previewed_or_confirmed(client, prepared):
     assert client.get(f'/publications/wb/all/{aid}/items?store_id=owner').status_code == 404
     assert client.post(f'/publications/wb/all/{aid}/confirm', json={'store_id': 'owner'}).status_code == 404
     prepared.publish.assert_not_awaited()
+
+
+def test_exclusion_filters_reasons_sort_and_pagination(client, prepared):
+    with Session() as db:
+        for i in range(30):
+            db.get(Review, f'bulk-{i:04}').rating = 2 if i < 25 else 3
+        db.get(Draft, 'draft-bulk-0030').quality = {'passed': False, 'owner_rules': {
+            'checked': False, 'passed': False, 'technical_error': True, 'reason': 'истекло время проверки'}}
+        db.get(Review, 'bulk-0031').manual = True
+        db.commit()
+    aid = prepare(client)
+    path = f'/publications/wb/all/{aid}/exclusions?store_id=owner'
+    result = client.get(path).json()
+    assert result['total'] == result['diagnosed'] == 32
+    assert result['counts'] == {'low_rating': 30, 'check_timeout': 1, 'safety': 1}
+    assert result['audit_status'] == 'not_needed'
+    assert len(result['items']) == 20 and result['has_more']
+    result = client.get(path+'&reason=low_rating&offset=20&sort=rating_desc').json()
+    assert result['total'] == 30 and len(result['items']) == 10
+    assert all(row['exclusion']['reason'] == 'low_rating' for row in result['items'])
+    timed_out = client.get(path+'&reason=check_timeout').json()['items']
+    assert [item['id'] for item in timed_out] == ['bulk-0030']
+    assert timed_out[0]['draft']['text'] and not timed_out[0]['exclusion']['retrospective']
+    assert client.get(path+'&q=%25').json()['total'] == 0
+    assert client.get(path+'&reason=invalid').status_code == 400
+    assert client.get(path+'&offset=-1').status_code == 422
+    prepared.publish.assert_not_awaited()
+
+
+def test_legacy_exclusion_audit_keeps_approved_manifest_and_is_idempotent(client, prepared):
+    from sqlalchemy import delete
+    from app import bulk_exclusions as exclusions
+    with Session() as db:
+        db.get(Review, 'bulk-0000').rating = 1
+        db.get(Review, 'bulk-0001').rating = 1
+        db.commit()
+    aid = prepare(client)
+    with Session() as db:
+        db.execute(delete(Action).where(Action.kind == exclusions.KIND))
+        parent = db.get(Action, aid)
+        parent.payload = {key: value for key, value in parent.payload.items()
+                          if key not in ('exclusion_legacy_cursor', 'exclusion_counts')}
+        db.get(Review, 'bulk-0001').rating = 5  # State changed since old preparation.
+        db.commit()
+    path = f'/publications/wb/all/{aid}/exclusions'
+    assert client.get(path+'?store_id=owner').json()['audit_status'] == 'not_started'
+    for _ in range(2):
+        assert client.post(path+'/audit', json={'store_id': 'owner'}).status_code == 200
+    with Session() as db:
+        jid = db.get(Action, aid).payload['exclusions_job_id']
+        assert db.scalar(select(func.count()).select_from(Job).where(Job.kind == exclusions.AUDIT_KIND)) == 1
+    asyncio.run(main.run_sync_job(jid))
+    result = client.get(path+'?store_id=owner').json()
+    assert result['audit_status'] == 'completed'
+    assert result['counts'] == {'low_rating': 1, 'changed_since_scan': 1}
+    assert result['total'] == 2 and all(item['exclusion']['retrospective'] for item in result['items'])
+    with Session() as db:
+        parent = db.get(Action, aid)
+        assert parent.payload['total'] == 103 and parent.payload['excluded'] == 2
+        assert parent.status == 'pending'
+    prepared.publish.assert_not_awaited()
+
+
+def test_exclusion_endpoints_enforce_parent_scope(client, prepared):
+    aid = prepare(client)
+    with Session() as db:
+        parent = db.get(Action, aid)
+        parent.payload = {**parent.payload, 'account_id': 'other'}
+        db.commit()
+    path = f'/publications/wb/all/{aid}/exclusions'
+    assert client.get(path+'?store_id=owner').status_code == 404
+    assert client.get(path+'/summary?store_id=owner').status_code == 404
+    assert client.post(path+'/audit', json={'store_id': 'owner'}).status_code == 404
+
+
+def test_legacy_prefix_and_new_preparation_pages_do_not_duplicate_exclusions(client, prepared, monkeypatch):
+    from sqlalchemy import delete
+    from app import bulk_exclusions as exclusions
+    with Session() as db:
+        for review in db.scalars(select(Review)):
+            review.rating = 1
+        db.commit()
+    aid = client.post('/publications/wb/all', json={'store_id': 'owner'}).json()['id']
+    with Session() as db:
+        jid = db.get(Action, aid).payload['prepare_job_id']
+    original, calls = bulk.eligible, [0]
+    def pause(*args):
+        calls[0] += 1
+        if calls[0] == 101:
+            raise RuntimeError('old worker stopped after first page')
+        return original(*args)
+    monkeypatch.setattr(bulk, 'eligible', pause)
+    with pytest.raises(RuntimeError):
+        bulk.prepare_step(jid)
+    with Session() as db:
+        db.execute(delete(Action).where(Action.kind == exclusions.KIND))
+        parent = db.get(Action, aid)
+        parent.payload = {key: value for key, value in parent.payload.items()
+                          if key not in ('exclusion_legacy_cursor', 'exclusion_counts')}
+        db.commit()
+    path = f'/publications/wb/all/{aid}/exclusions'
+    client.post(path+'/audit', json={'store_id': 'owner'})
+    monkeypatch.setattr(bulk, 'eligible', original)
+    bulk.prepare_step(jid)
+    with Session() as db:
+        audit_id = db.get(Action, aid).payload['exclusions_job_id']
+    exclusions.audit_step(audit_id)
+    result = client.get(path+'?store_id=owner').json()
+    assert result['counts'] == {'low_rating': 105}
+    assert result['total'] == result['diagnosed'] == 105
+    prepared.publish.assert_not_awaited()
+
+
+def test_missing_global_verdict_diagnosis_does_not_query_each_product_catalog(client, prepared, monkeypatch):
+    from sqlalchemy import delete
+    from app import bulk_exclusions as exclusions, owner_reply_rules
+    with Session() as db:
+        db.add(Memory(id='global-policy', text='Начинай с «Добрый день!».', kind='REVIEW_RULE', scope='global'))
+        db.commit()
+    aid = prepare(client)
+    with Session() as db:
+        db.execute(delete(Action).where(Action.kind == exclusions.KIND))
+        parent = db.get(Action, aid)
+        parent.payload = {key: value for key, value in parent.payload.items()
+                          if key not in ('exclusion_legacy_cursor', 'exclusion_counts')}
+        db.commit()
+    client.post(f'/publications/wb/all/{aid}/exclusions/audit', json={'store_id': 'owner'})
+    def unnecessary_lookup(*args, **kwargs):
+        raise AssertionError('Missing global verdict needs no catalog lookup')
+    monkeypatch.setattr(owner_reply_rules, 'matching_owner_rules', unnecessary_lookup)
+    with Session() as db:
+        jid = db.get(Action, aid).payload['exclusions_job_id']
+    exclusions.audit_step(jid)
+    with Session() as db:
+        assert db.get(Action, aid).payload['exclusion_counts'] == {'rules_changed': 105}
+    prepared.publish.assert_not_awaited()

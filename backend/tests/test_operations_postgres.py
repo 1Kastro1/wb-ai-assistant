@@ -53,6 +53,13 @@ class PostgresOperations(unittest.TestCase):
                 page = bulk.preview(db, parent, 100)
                 self.assertEqual(len(page['items']), 5)
                 self.assertEqual(page['items'][0]['review_id'], prefix+'100')
+                from app import bulk_exclusions as exclusions
+                exclusions.save_chunk(db, parent, [{'review_id': prefix+'100', 'reason': 'check_timeout',
+                    'at': '2026-10-27T00:00:00+00:00', 'retrospective': True}])
+                db.commit()
+                filtered = exclusions.page(db, parent, reason='check_timeout', sort='rating_desc')
+                self.assertEqual(filtered['total'], 1)
+                self.assertEqual(filtered['items'][0]['id'], prefix+'100')
         finally:
             with factory() as db:
                 if aid:
