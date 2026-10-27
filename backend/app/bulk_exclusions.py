@@ -1,7 +1,7 @@
 """Inspectable exclusion records. Diagnostics never approve or publish a reply."""
 import time
 from uuid import uuid4
-from sqlalchemy import select, func, text, String
+from sqlalchemy import select, func, text, String, bindparam
 from .db import Session, Action, Job, Review, Draft, Product, Publication, Memory, now
 
 KIND = 'wb_publish_excluded'
@@ -104,7 +104,7 @@ def audit_step(job_id):
         job.status = 'queued'; db.commit()
 
 
-def exclusion_rows(db, parent_id):
+def exclusion_rows(db, parent_id, kind=KIND):
     # Only fixed SQL fragments vary by dialect; IDs and filters are bound values.
     if db.bind.dialect.name == 'postgresql':
         sql = """select e.value->>'review_id' as review_id, e.value->>'reason' as reason,
@@ -117,7 +117,7 @@ def exclusion_rows(db, parent_id):
             json_extract(e.value,'$.retrospective') as retrospective
             from actions a, json_each(a.payload,'$.items') e
             where a.kind=:excluded_kind and json_extract(a.payload,'$.parent_id')=:parent_id"""
-    return text(sql).bindparams(excluded_kind=KIND, parent_id=parent_id).columns(
+    return text(sql).bindparams(bindparam('excluded_kind', kind, unique=True), bindparam('parent_id', parent_id, unique=True)).columns(
         review_id=String, reason=String, checked_at=String, retrospective=String).subquery('exclusions')
 
 
@@ -146,11 +146,12 @@ def page(db, parent, reason='', q='', sort='newest', offset=0):
 
 
 def summary(db, parent):
+    from .bulk_recovery import recovery_view
     jid = parent.payload.get('exclusions_job_id')
     job = db.get(Job, jid) if jid else None
     counts = parent.payload.get('exclusion_counts', {})
     preparation = db.get(Job, parent.payload['prepare_job_id'])
     legacy = parent.payload.get('exclusion_legacy_cursor', (preparation.result or {}).get('cursor', '') if preparation else '')
-    return {'counts': counts, 'labels': LABELS, 'diagnosed': sum(counts.values()),
+    return {'recovery': recovery_view(db, parent), 'counts': counts, 'labels': LABELS, 'diagnosed': sum(counts.values()),
         'audit_status': job.status if job else 'not_started' if legacy else 'not_needed',
         'audit_error': (job.result or {}).get('detail', '') if job and job.status == 'failed' else ''}

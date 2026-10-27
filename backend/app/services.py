@@ -841,20 +841,25 @@ async def generate_question_draft(db, question, instruction=''):
     return public(draft)
 
 
-async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip_existing=False):
+async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip_existing=False, recovery=False):
     async def operation():
         # Re-read after acquiring the cross-process claim. Bulk work never overwrites edits.
         db.expire_all()
+        if recovery:
+            from .bulk_recovery import protected_draft
+            recovery_review = db.get(Review, review_id)
+            if protected_draft(db, recovery_review, db.scalar(select(Draft).where(Draft.review_id == review_id))) or (isinstance(recovery, str) and recovery_review.wb_account_id != recovery):
+                raise ReviewSkipped('Ручные правки или начатая публикация сохранены')
         if skip_existing:
             review = db.get(Review, review_id)
             if (not review or review.is_answered or review.status == 'publishing'
                 or db.scalar(select(Draft.id).where(Draft.review_id == review_id))):
                 raise ReviewSkipped('У отзыва уже есть ответ или черновик')
-        return await _generate_draft(db, review_id, instruction, fast_only=fast_only, retry_outages=skip_existing)
+        return await _generate_draft(db, review_id, instruction, fast_only=fast_only, retry_outages=skip_existing, recovery=recovery)
     return await exclusive_generation(review_id, operation, sessionmaker(bind=db.get_bind(), expire_on_commit=False))
 
 
-async def _generate_draft(db, review_id, instruction='', *, fast_only=False, retry_outages=False):
+async def _generate_draft(db, review_id, instruction='', *, fast_only=False, retry_outages=False, recovery=False):
     generation_started = time.monotonic()
     requested_instruction = instruction
     web_seconds = model_seconds = 0.0
@@ -1035,7 +1040,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         reply, review, product, memories, verified_facts,
         lambda value: assess_reply(review, product, value, verified_facts),
         protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
-        local_only=fast_only)
+        local_only=fast_only, **({'check_seconds': 120} if recovery else {}))
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
@@ -1059,7 +1064,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if (draft.revision if draft else None) != expected_revision:
         raise ValueError('Черновик изменён во время генерации. Правки сохранены; повторите запрос при необходимости')
     if draft:
-        edit_draft(db, draft.id, reply, draft.revision)
+        if recovery and matching_owner_rules(db, product) != memories:
+            raise GenerationBusy('Правила изменились во время подготовки; повторяем проверку')
+        edit_draft(db, draft.id, reply, draft.revision, recovery=recovery)
         draft.model = model
         draft.quality = quality
     else:
@@ -1071,7 +1078,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     return public(draft)
 
 
-def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=True):
+def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=True, recovery=False):
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
     review_id = db.scalar(select(Draft.review_id).where(Draft.id == draft_id))
@@ -1082,6 +1089,10 @@ def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=Tru
         raise ValueError('Черновик изменился. Обновите страницу')
     if not review or review.status == 'publishing' or review.is_answered:
         raise ValueError('Этот ответ уже публикуется или опубликован')
+    if recovery:
+        from .bulk_recovery import protected_draft
+        if protected_draft(db, review, draft) or (isinstance(recovery, str) and review.wb_account_id != recovery):
+            raise ReviewSkipped('Ручные правки или начатая публикация сохранены')
     value = validate_reply(value)
     old = draft.text
     draft.edits = draft.edits + [{'old': old, 'new': value, 'diff': '\n'.join(difflib.ndiff(old.splitlines(), value.splitlines())), 'at': now(), 'by': actor_id or 'automation'}]

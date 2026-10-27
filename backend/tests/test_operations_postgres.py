@@ -60,8 +60,30 @@ class PostgresOperations(unittest.TestCase):
                 filtered = exclusions.page(db, parent, reason='check_timeout', sort='rating_desc')
                 self.assertEqual(filtered['total'], 1)
                 self.assertEqual(filtered['items'][0]['id'], prefix+'100')
+                # Two independent JSON-flattening subqueries must keep their
+                # own kind/parent bindings when retrying recovery errors.
+                from app import bulk_recovery as recovery
+                manifests = list(db.scalars(select(Action).where(Action.kind == bulk.MANIFEST_KIND,
+                    Action.payload['parent_id'].as_string() == aid)))
+                for manifest in manifests:
+                    manifest.payload = {**manifest.payload, 'items': [item for item in manifest.payload['items'] if item['review_id'] != prefix+'100']}
+                db.commit()
+                recovery_id = recovery.start(db, parent, 'ci-actor')['id']
+                self.assertEqual(recovery.start(db, parent, 'ci-actor')['id'], recovery_id)
+                recovery_job = db.get(Job, recovery_id)
+                self.assertEqual(recovery_job.result['total'], 1)
+                chunk = db.scalar(select(Action).where(Action.kind == recovery.ITEMS, Action.payload['parent_id'].as_string() == recovery_id))
+                chunk.payload = {**chunk.payload, 'items': [{**chunk.payload['items'][0], 'reason': 'error'}]}
+                recovery_job.status = 'completed'
+                db.commit()
+                retry = recovery.start(db, parent, 'ci-actor', retry_errors=True)
+                self.assertEqual(retry['total'], 1)
         finally:
             with factory() as db:
+                recovery_ids = list(db.scalars(select(Job.id).where(Job.kind == 'wb_excluded_recovery', Job.result['account_id'].as_string() == prefix)))
+                if recovery_ids:
+                    db.execute(delete(Action).where(Action.payload['parent_id'].as_string().in_(recovery_ids)))
+                    db.execute(delete(Job).where(Job.id.in_(recovery_ids)))
                 if aid:
                     db.execute(delete(Action).where(Action.payload['parent_id'].as_string() == aid))
                     db.execute(delete(Action).where(Action.id == aid))

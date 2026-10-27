@@ -84,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -1158,6 +1158,10 @@ async def execute_job(job_id):
                 else:
                     await send_step(job_id)
                 db.refresh(job)
+            elif kind == 'wb_excluded_recovery':
+                from .bulk_recovery import run_step
+                await run_step(job_id)
+                db.refresh(job)
             elif kind == 'knowledge_research':
                 from .knowledge_queue import research_step
                 await research_step(job_id)
@@ -1259,7 +1263,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -2297,6 +2301,22 @@ def wb_bulk_exclusions(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB,
 def wb_bulk_exclusions_summary(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB):
     from .bulk_exclusions import summary
     return summary(db, wb_bulk_parent(db, auth, store_id, aid))
+
+
+class RecoveryInput(BulkPublishInput):
+    retry_errors: bool = False
+
+
+@app.post('/publications/wb/all/{aid}/exclusions/recovery')
+def wb_bulk_recovery(aid: str, body: RecoveryInput, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_recovery import start
+    return start(db, wb_bulk_parent(db, auth, body.store_id, aid), auth['user_id'], body.retry_errors)
+
+
+@app.post('/publications/wb/all/{aid}/exclusions/recovery/stop')
+def wb_bulk_recovery_stop(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_recovery import stop
+    return stop(db, wb_bulk_parent(db, auth, body.store_id, aid))
 
 
 @app.post('/publications/wb/all/{aid}/cancel')
