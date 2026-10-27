@@ -109,7 +109,7 @@ def exclusion_rows(db, parent_id):
     if db.bind.dialect.name == 'postgresql':
         sql = """select e.value->>'review_id' as review_id, e.value->>'reason' as reason,
             e.value->>'at' as checked_at, e.value->>'retrospective' as retrospective
-            from actions a cross join lateral jsonb_array_elements(a.payload->'items') e(value)
+            from actions a cross join lateral jsonb_array_elements(CAST(a.payload->'items' AS jsonb)) e(value)
             where a.kind=:excluded_kind and a.payload->>'parent_id'=:parent_id"""
     else:
         sql = """select json_extract(e.value,'$.review_id') as review_id,
