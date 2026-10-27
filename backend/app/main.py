@@ -84,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -1148,7 +1148,14 @@ async def execute_job(job_id):
             if time.monotonic() - started_clock >= 30 and other_waiting(db, job_id):
                 raise QueueYield()
         try:
-            if kind == 'knowledge_research':
+            if kind in ('wb_publish_prepare', 'wb_publish_send'):
+                from .bulk_publication import prepare_step, send_step
+                if kind == 'wb_publish_prepare':
+                    await asyncio.to_thread(prepare_step, job_id)
+                else:
+                    await send_step(job_id)
+                db.refresh(job)
+            elif kind == 'knowledge_research':
                 from .knowledge_queue import research_step
                 await research_step(job_id)
                 db.refresh(job)
@@ -1249,7 +1256,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -1575,6 +1582,10 @@ def cancel_job(jid: str, auth: MARKET_OPERATOR, db: DB):
     elif auth['role'] != 'owner':
         raise HTTPException(403, 'Это задание доступно только владельцу')
     job.cancel_requested = True
+    if job.kind in ('wb_publish_prepare', 'wb_publish_send'):
+        parent = db.get(Action, (job.result or {}).get('parent_id', ''))
+        if parent and parent.status in ('preparing', 'pending', 'sending'):
+            parent.status = 'cancelled'
     if job.status == 'queued':
         job.status = 'cancelled'
     job.result = {**(job.result or {}), 'message': 'Остановка подготовки ответов' if job.status == 'running' else 'Задание отменено'}
@@ -2207,6 +2218,68 @@ class PublishInput(Payload):
     review_ids: list[str] = Field(min_length=1, max_length=100)
 
 
+class BulkPublishInput(Payload):
+    store_id: str = Field(min_length=1, max_length=200)
+
+
+def wb_bulk_store(db, auth, store_id):
+    if active_store(db, auth) != store_id:
+        raise HTTPException(409, 'Выбранный магазин изменился. Откройте отправку заново')
+    store = db.get(StoreProfile, store_id)
+    can_operate_store(auth, store)
+    if store.provider != 'wb':
+        raise HTTPException(400, 'Эта отправка доступна только для Wildberries')
+    return store
+
+
+def wb_bulk_parent(db, auth, store_id, aid):
+    from .bulk_publication import parent_for
+    wb_bulk_store(db, auth, store_id)
+    parent = parent_for(db, aid, store_id)
+    if not parent:
+        raise HTTPException(404, 'Пакет отправки не найден')
+    return parent
+
+
+@app.get('/publications/wb/all')
+def wb_bulk_status(store_id: str, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_publication import PARENT_KIND, view
+    wb_bulk_store(db, auth, store_id)
+    parent = db.scalar(select(Action).where(Action.kind == PARENT_KIND,
+        Action.payload['account_id'].as_string() == store_id).order_by(Action.created_at.desc()).limit(1))
+    return view(db, parent) if parent else None
+
+
+@app.post('/publications/wb/all')
+def wb_bulk_prepare(body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_publication import start, view
+    wb_bulk_store(db, auth, body.store_id)
+    return view(db, start(db, body.store_id, auth['user_id']))
+
+
+@app.get('/publications/wb/all/{aid}/items')
+def wb_bulk_preview(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB, offset: int = 0):
+    from .bulk_publication import preview
+    if offset < 0:
+        raise HTTPException(422, 'Неверная страница')
+    return preview(db, wb_bulk_parent(db, auth, store_id, aid), offset)
+
+
+@app.post('/publications/wb/all/{aid}/confirm')
+def wb_bulk_confirm(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_publication import confirm, view
+    parent = wb_bulk_parent(db, auth, body.store_id, aid)
+    return view(db, confirm(db, parent, auth['user_id'], REAL_PUBLISH))
+
+
+@app.post('/publications/wb/all/{aid}/cancel')
+def wb_bulk_cancel(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_publication import cancel, view
+    parent = wb_bulk_parent(db, auth, body.store_id, aid)
+    cancel(db, parent)
+    return view(db, parent)
+
+
 @app.post('/actions/publish')
 def publish_proposal(body: PublishInput, auth: MARKET_OPERATOR, db: DB):
     active = active_store(db, auth)
@@ -2220,7 +2293,9 @@ def publish_proposal(body: PublishInput, auth: MARKET_OPERATOR, db: DB):
 @app.get('/actions')
 def actions(auth: AUTH, db: DB):
     active_statuses = ['pending', 'executing', 'needs_review']
-    rows = list(db.scalars(select(Action).where(Action.status.in_(active_statuses)).order_by(Action.created_at.desc()).limit(100)))
+    rows = list(db.scalars(select(Action).where(Action.status.in_(active_statuses),
+        Action.kind.in_(('publish', 'memory')), Action.payload['bulk_parent'].as_string().is_(None)
+        ).order_by(Action.created_at.desc()).limit(100)))
     if auth['role'] == 'owner':
         return [public(a) for a in rows]
     active = active_store(db, auth)
@@ -2272,6 +2347,8 @@ action_lock = asyncio.Lock()
 @app.post('/actions/{aid}/confirm')
 async def confirmation(aid: str, body: Confirm, request: Request, auth: AUTH, db: DB):
     action = db.get(Action, aid)
+    if action and action.kind not in ('publish', 'memory'):
+        raise HTTPException(400, 'Используйте отдельное подтверждение пакета Wildberries')
     if action and action.kind == 'publish':
         marketplace_operator(auth)
         active = active_store(db, auth)
@@ -2291,6 +2368,8 @@ async def confirmation(aid: str, body: Confirm, request: Request, auth: AUTH, db
 @app.post('/actions/{aid}/cancel')
 def cancel(aid: str, request: Request, auth: AUTH, db: DB):
     action = db.get(Action, aid)
+    if action and action.kind not in ('publish', 'memory'):
+        raise HTTPException(400, 'Используйте остановку пакета Wildberries')
     if not action or action.status != 'pending':
         raise ValueError('Действие уже обработано')
     if action.kind == 'publish':

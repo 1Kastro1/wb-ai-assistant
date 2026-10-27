@@ -10,7 +10,9 @@ LABELS = {'products': 'Обновление товаров', 'reviews': 'Обн�
           'drafts': 'Ответы на отзывы', 'question_drafts': 'Ответы на вопросы',
           'single_draft': 'Ответ на отзыв', 'single_question_draft': 'Ответ на вопрос',
           'draft_audit': 'Перепроверка черновиков', 'draft_recheck': 'Проверка правил ответа',
-          'knowledge_research': 'Поиск инструкций для важных товаров'}
+          'knowledge_research': 'Поиск инструкций для важных товаров',
+          'wb_publish_prepare': 'Список готовых ответов Wildberries',
+          'wb_publish_send': 'Публикация всех готовых ответов Wildberries'}
 
 
 def queue_overview(db, auth, store_id):
