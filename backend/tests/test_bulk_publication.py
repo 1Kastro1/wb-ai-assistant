@@ -426,3 +426,28 @@ def test_legacy_prefix_and_new_preparation_pages_do_not_duplicate_exclusions(cli
     assert result['counts'] == {'low_rating': 105}
     assert result['total'] == result['diagnosed'] == 105
     prepared.publish.assert_not_awaited()
+
+
+def test_missing_global_verdict_diagnosis_does_not_query_each_product_catalog(client, prepared, monkeypatch):
+    from sqlalchemy import delete
+    from app import bulk_exclusions as exclusions, owner_reply_rules
+    with Session() as db:
+        db.add(Memory(id='global-policy', text='Начинай с «Добрый день!».', kind='REVIEW_RULE', scope='global'))
+        db.commit()
+    aid = prepare(client)
+    with Session() as db:
+        db.execute(delete(Action).where(Action.kind == exclusions.KIND))
+        parent = db.get(Action, aid)
+        parent.payload = {key: value for key, value in parent.payload.items()
+                          if key not in ('exclusion_legacy_cursor', 'exclusion_counts')}
+        db.commit()
+    client.post(f'/publications/wb/all/{aid}/exclusions/audit', json={'store_id': 'owner'})
+    def unnecessary_lookup(*args, **kwargs):
+        raise AssertionError('Missing global verdict needs no catalog lookup')
+    monkeypatch.setattr(owner_reply_rules, 'matching_owner_rules', unnecessary_lookup)
+    with Session() as db:
+        jid = db.get(Action, aid).payload['exclusions_job_id']
+    exclusions.audit_step(jid)
+    with Session() as db:
+        assert db.get(Action, aid).payload['exclusion_counts'] == {'rules_changed': 105}
+    prepared.publish.assert_not_awaited()

@@ -56,7 +56,7 @@ def start_audit(db, parent, actor_id):
 
 def audit_step(job_id):
     from .bulk_publication import MANIFEST_KIND, exclusion_reason
-    from .owner_reply_rules import matching_owner_rules
+    from .owner_reply_rules import matching_owner_rules, _scope_key, rule_applies_to
     started = time.monotonic()
     with Session() as db:
         job = db.get(Job, job_id)
@@ -67,6 +67,7 @@ def audit_step(job_id):
             Action.kind == MANIFEST_KIND, Action.payload['parent_id'].as_string() == parent.id))
             for item in row.payload['items'] if item['review_id'] <= job.result['cutoff']}
         rule_rows = list(db.scalars(select(Memory).where(Memory.enabled == True).order_by(Memory.id)))
+        global_rules = [row.text for row in rule_rows if _scope_key(row.scope) == 'global' and rule_applies_to(row.kind)]
         rules_cache = {}
         while time.monotonic() - started < 30:
             db.refresh(job)
@@ -83,9 +84,15 @@ def audit_step(job_id):
             for review, draft in rows:
                 if review.id in accepted:
                     continue
-                if review.product_id not in rules_cache:
-                    rules_cache[review.product_id] = matching_owner_rules(db, db.get(Product, review.product_id), rule_rows=rule_rows)
-                reason = exclusion_reason(db, review, draft, rules_cache[review.product_id])
+                if global_rules and not ((draft.quality or {}).get('owner_rules') or {}).get('fingerprint'):
+                    # Any applicable global policy requires a saved verdict. Its
+                    # absence is certain without 100,000 product/catalog lookups.
+                    rules = global_rules
+                else:
+                    if review.product_id not in rules_cache:
+                        rules_cache[review.product_id] = matching_owner_rules(db, db.get(Product, review.product_id), rule_rows=rule_rows)
+                    rules = rules_cache[review.product_id]
+                reason = exclusion_reason(db, review, draft, rules)
                 if review.id in attempted:
                     reason = 'already_attempted'
                 items.append({'review_id': review.id, 'reason': reason or 'changed_since_scan', 'at': now(), 'retrospective': True})
