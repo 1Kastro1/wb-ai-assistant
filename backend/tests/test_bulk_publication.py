@@ -236,6 +236,25 @@ def test_cancellation_during_request_finishes_only_that_request(client, prepared
         assert db.get(Job, jid).status == 'cancelled'
 
 
+@pytest.mark.parametrize('change', ['provider', 'permission'])
+def test_access_change_between_requests_stops_next_write(client, prepared, change):
+    aid = prepare(client); jid = confirm(client, aid)
+    async def revoke_after_first_request(*args):
+        with Session() as db:
+            if change == 'provider':
+                db.get(StoreProfile, 'owner').provider = 'ozon'
+            else:
+                actor = db.get(User, 'owner')
+                actor.role, actor.permissions = 'member', ['data:read']
+            db.commit()
+    prepared.publish.side_effect = revoke_after_first_request
+    asyncio.run(bulk.send_step(jid))
+    assert prepared.publish.await_count == 1
+    with Session() as db:
+        assert db.get(Action, aid).status == 'needs_review'
+        assert db.get(Action, aid).result['published'] == 1
+
+
 def test_uncertain_reserved_child_survives_worker_restart_without_repeat(client, prepared, monkeypatch):
     aid = prepare(client); jid = confirm(client, aid)
     original = services.confirm_action

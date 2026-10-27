@@ -190,6 +190,8 @@ async def send_step(job_id):
         job = db.get(Job, job_id)
         parent = db.get(Action, job.result['parent_id'])
         while count < 10 and time.monotonic() - started < SLICE_SECONDS:
+            # Other sessions can revoke access or change modes between writes.
+            db.expire_all()
             db.refresh(job); db.refresh(parent)
             if job.cancel_requested or parent.status != 'sending':
                 job.status = 'cancelled'; db.commit(); return
