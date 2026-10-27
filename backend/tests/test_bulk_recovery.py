@@ -117,6 +117,7 @@ def test_retry_outage_checks_saved_text_without_regenerating(client, source, gen
     assert generate.await_count == 6
     assert check.await_count == 1
     assert check.call_args.kwargs['check_only'] is True
+    assert check.call_args.kwargs['check_seconds'] == 120
     with Session() as db:
         assert db.get(Job, jid).result['ready'] == 6, (db.get(Draft, 'd1').quality, db.get(Job, jid).result)
         assert db.get(Draft, 'd1').revision == 2
@@ -192,7 +193,19 @@ def test_checker_only_never_applies_rewrite(client, source, monkeypatch):
     with Session() as db:
         text = 'Добрый день! Спасибо за отзыв!'
         answer, verdict = asyncio.run(enforce_owner_rules(text, db.get(Review, 'r1'), db.get(Product, 'recover-p'),
-            ['Обязательно объясняй смысл оценки своими словами.'], [], lambda value: {'passed': True}, check_only=True))
+            ['Обязательно объясняй смысл оценки своими словами.'], [], lambda value: {'passed': True}, check_only=True, check_seconds=120))
         assert answer == text and not verdict['passed']
         assert mock.await_count == 1
+        assert mock.call_args.kwargs['timeout_seconds'] == 120
+
+
+def test_provider_honors_background_budget_without_changing_interactive_default(monkeypatch):
+    from app.integrations import OllamaProvider, guard
+    request = AsyncMock(return_value={'message': {'content': '{"compliant":true}'}})
+    monkeypatch.setattr(guard, 'request', request)
+    provider = OllamaProvider()
+    asyncio.run(provider.structured([{'role': 'user', 'content': 'check'}], {'type': 'object'}, task='OWNER_RULES', timeout_seconds=120))
+    assert request.call_args.kwargs['timeout_seconds'] == 120
+    asyncio.run(provider.structured([{'role': 'user', 'content': 'check'}], {'type': 'object'}, task='OWNER_RULES'))
+    assert request.call_args.kwargs['timeout_seconds'] == 45
 

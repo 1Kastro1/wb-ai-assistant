@@ -272,7 +272,8 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                         'product': product.name, 'verified_facts': facts, 'answer': adjusted,
                         'required_style': {key: constraints(rules)[key] for key in ('greeting', 'signature')},
                         'protected_answer': protected}, ensure_ascii=False)
-                    check = await budget.run(lambda: ollama.structured(messages, CHECK_SCHEMA, task='OWNER_RULES'))
+                    check = await budget.run(lambda: ollama.structured(messages, CHECK_SCHEMA, task='OWNER_RULES',
+                        **({'timeout_seconds': check_seconds} if check_seconds is not None else {})))
                     if (not isinstance(check, dict) or type(check.get('compliant')) is not bool
                         or not isinstance(check.get('violations'), list)
                         or any(not isinstance(item, str) for item in check['violations'])
