@@ -35,6 +35,8 @@ def queue_overview(db, auth, store_id):
         reason = ('Повтор после временной ошибки' if retry_at > timestamp else
                   'Выполняется: ' + LABELS.get(blocker.kind, blocker.kind) if waiting and blocker else
                   'Ожидает свободного места в очереди' if waiting else 'Выполняется на сервере')
+        if job.kind == 'wb_excluded_recovery':
+            reason = 'Приоритет Wildberries. ' + reason
         tasks.append({'id': job.id, 'kind': job.kind, 'label': LABELS.get(job.kind, job.kind),
                       'store_id': state.get('account_id'), 'store_name': store.name if store else 'Общие задачи',
                       'provider': store.provider if store else '', 'status': job.status,

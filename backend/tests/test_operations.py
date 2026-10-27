@@ -21,6 +21,25 @@ def test_background_round_robin_does_not_starve_imports_and_interactive_wins(cli
         assert next_job(db).id == 'sync'
 
 
+def test_wb_recovery_precedes_background_but_respects_clicks_backoff_and_cancel(client):
+    with Session() as db:
+        db.add_all([Job(id='sync', kind='products', priority=1, created_at='2025-01-01', result={}),
+                    Job(id='wb', kind='wb_excluded_recovery', priority=45, created_at='2026-01-01',
+                        result={'last_served_at': '2026-10-27T17:00:00', 'account_id': 'owner'}),
+                    Job(id='click', kind='single_draft', priority=100, created_at='2026-02-01', result={})])
+        db.commit()
+        assert next_job(db).id == 'click'
+        db.get(Job, 'click').status = 'completed'; db.commit()
+        assert next_job(db).id == 'wb'
+        assert next_job(db, ('products',)).id == 'sync'
+        db.get(Job, 'wb').result = {'retry_at': time.time() + 60}; db.commit()
+        assert next_job(db).id == 'sync'
+        db.get(Job, 'wb').result = {}; db.get(Job, 'wb').cancel_requested = True; db.commit()
+        assert next_job(db).id == 'sync'
+        db.get(Job, 'wb').cancel_requested = False; db.get(Job, 'wb').status = 'completed'; db.commit()
+        assert next_job(db).id == 'sync'
+
+
 def test_catalog_filters_cover_whole_catalog_and_respect_trust(client):
     with Session() as db:
         for index in range(70):
