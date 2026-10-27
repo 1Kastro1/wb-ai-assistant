@@ -124,19 +124,37 @@ def cancel(db, parent):
 
 
 def eligible(db, review, draft, rules):
-    if (review.marketplace != 'wb' or review.is_answered or review.rating < 4
-        or review.manual or review.safety_critical or review.risk != 'NORMAL'
-        or review.status != 'draft_ready' or not (draft.quality or {}).get('passed')):
-        return False
+    return not exclusion_reason(db, review, draft, rules)
+
+
+def exclusion_reason(db, review, draft, rules):
+    if review.marketplace != 'wb' or review.is_answered:
+        return 'not_ready'
+    if review.rating < 4:
+        return 'low_rating'
+    if review.manual or review.safety_critical or review.risk != 'NORMAL':
+        return 'safety'
     previous = (draft.quality or {}).get('owner_rules') or {}
-    if previous and (previous.get('passed') is not True or previous.get('checked') is False):
-        return False
-    # Reject stale semantic verdicts before the more expensive local checks.
+    if previous.get('technical_error'):
+        return 'check_timeout' if 'время' in previous.get('reason', '') else 'check_error'
+    if previous and previous.get('checked') is False:
+        return 'rules_unchecked'
+    if previous and previous.get('passed') is not True:
+        return 'rules_violation'
     if rules and previous.get('fingerprint') != fingerprint(rules):
-        return False
-    return (saved_rule_quality(draft.text, rules, previous, review=review)['passed']
-            and not semantic_reply_issues(review, db.get(Product, review.product_id), draft.text)
-            and validate_reply(draft.text) == draft.text)
+        return 'rules_changed'
+    if review.status != 'draft_ready':
+        return 'not_ready'
+    if not (draft.quality or {}).get('passed'):
+        return 'text_quality'
+    try:
+        if not saved_rule_quality(draft.text, rules, previous, review=review)['passed']:
+            return 'rules_violation'
+        if semantic_reply_issues(review, db.get(Product, review.product_id), draft.text) or validate_reply(draft.text) != draft.text:
+            return 'content_check'
+    except ValueError:
+        return 'content_check'
+    return ''
 
 
 def prepare_step(job_id):
@@ -149,6 +167,8 @@ def prepare_step(job_id):
             if job.cancel_requested or parent.status != 'preparing':
                 job.status = 'cancelled'; db.commit(); return
             cursor = job.result.get('cursor', '')
+            if 'exclusion_legacy_cursor' not in parent.payload:
+                parent.payload = {**parent.payload, 'exclusion_legacy_cursor': cursor}
             rows = db.execute(select(Review, Draft).join(Draft, Draft.review_id == Review.id).where(
                 Review.wb_account_id == parent.payload['account_id'], Review.marketplace == 'wb',
                 Review.is_answered == False, Review.id > cursor).order_by(Review.id).limit(PAGE_SIZE)).all()
@@ -157,7 +177,7 @@ def prepare_step(job_id):
                 parent.payload = {**parent.payload, 'prepared_at': now()}
                 job.status, job.progress = 'completed', 100
                 db.commit(); return
-            items = []
+            items, excluded = [], []
             for review, draft in rows:
                 if review.product_id not in rules_cache:
                     rules_cache[review.product_id] = matching_owner_rules(db, db.get(Product, review.product_id))
@@ -165,15 +185,22 @@ def prepare_step(job_id):
                     allowed = eligible(db, review, draft, rules_cache[review.product_id])
                 except ValueError:
                     allowed = False
-                if allowed and not db.scalar(select(Publication.id).where(Publication.review_id == review.id)):
+                attempted = db.scalar(select(Publication.id).where(Publication.review_id == review.id)) if allowed else None
+                if allowed and not attempted:
                     items.append({'review_id': review.id, 'draft_id': draft.id, 'revision': draft.revision,
                                   'text': draft.text, 'rating': review.rating, 'manual': False, 'kind': 'review'})
+                else:
+                    excluded.append({'review_id': review.id, 'reason': 'already_attempted' if attempted else
+                        exclusion_reason(db, review, draft, rules_cache[review.product_id]), 'at': now(), 'retrospective': False})
             if items:
                 db.add(Action(id=str(uuid4()), kind=MANIFEST_KIND, status='staged', payload={
                     'parent_id': parent.id, 'account_id': parent.payload['account_id'], 'items': items,
                     'start_index': parent.payload['total'], 'end_index': parent.payload['total'] + len(items)},
                     result={'next_index': 0, 'operations': {}}))
-            parent.payload = {**parent.payload, 'total': parent.payload['total'] + len(items),
+            db.refresh(parent, with_for_update=True)
+            from .bulk_exclusions import save_chunk
+            save_chunk(db, parent, excluded)
+            parent.payload = {**parent.payload, 'exclusion_legacy_cursor': parent.payload.get('exclusion_legacy_cursor', cursor), 'total': parent.payload['total'] + len(items),
                 'scanned': parent.payload['scanned'] + len(rows),
                 'excluded': parent.payload['excluded'] + len(rows) - len(items)}
             job.result = {**job.result, 'cursor': rows[-1][0].id, 'processed': parent.payload['scanned'],

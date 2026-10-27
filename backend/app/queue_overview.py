@@ -12,6 +12,7 @@ LABELS = {'products': 'Обновление товаров', 'reviews': 'Обн�
           'draft_audit': 'Перепроверка черновиков', 'draft_recheck': 'Проверка правил ответа',
           'knowledge_research': 'Поиск инструкций для важных товаров',
           'wb_publish_prepare': 'Список готовых ответов Wildberries',
+          'wb_exclusions_audit': 'Причины исключения ответов Wildberries',
           'wb_publish_send': 'Публикация всех готовых ответов Wildberries'}
 
 

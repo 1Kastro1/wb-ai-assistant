@@ -1,0 +1,30 @@
+'use client';
+import {useEffect,useRef,useState} from 'react';
+import {api} from './client';
+type Row=Record<string,any>;
+const n=(value:number=0)=>value.toLocaleString('ru-RU');
+export default function BulkExcluded({parentId,storeId,onReview}:{parentId:string;storeId:string;onReview:(id:string)=>void}){
+ const [meta,setMeta]=useState<Row>({counts:{},labels:{}}),[page,setPage]=useState<Row>({items:[],total:0}),[reason,setReason]=useState(''),[sort,setSort]=useState('newest'),[query,setQuery]=useState(''),[search,setSearch]=useState(''),[offset,setOffset]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const mounted=useRef(true),request=useRef(0),status=useRef(''),previousStatus=useRef('');status.current=meta.audit_status;
+ const path='/publications/wb/all/'+encodeURIComponent(parentId)+'/exclusions',scope='store_id='+encodeURIComponent(storeId);
+ async function load(){const version=++request.current;setBusy(true);setError('');try{const result=await api(path+'?'+scope+'&'+new URLSearchParams({reason,sort,q:search,offset:String(offset)}),'GET',undefined,30000);if(mounted.current&&version===request.current){setPage(result);setMeta(result)}}catch(e){if(mounted.current&&version===request.current)setError(e instanceof Error?e.message:'Не удалось загрузить исключённые отзывы')}finally{if(mounted.current&&version===request.current)setBusy(false)}}
+ async function audit(){setError('');try{const result=await api(path+'/audit','POST',{store_id:storeId});if(mounted.current)setMeta(result)}catch(e){if(mounted.current)setError(e instanceof Error?e.message:'Не удалось запустить диагностику')}}
+ useEffect(()=>{mounted.current=true;const timer=setInterval(()=>{if(['queued','running'].includes(status.current))void api(path+'/summary?'+scope).then(result=>{if(mounted.current)setMeta(result)}).catch(()=>{})},5000);return()=>{mounted.current=false;request.current++;clearInterval(timer)}},[parentId,storeId]);
+ useEffect(()=>{void load()},[reason,sort,search,offset]);
+ useEffect(()=>{if(meta.audit_status==='completed'&&['queued','running'].includes(previousStatus.current))void load();previousStatus.current=meta.audit_status},[meta.audit_status]);
+ return <section aria-label="Исключённые отзывы">
+  <h3>Исключённые отзывы</h3><p className="muted">Исключены из массовой отправки, но сохранены на сайте. Выберите причину, откройте отзыв и при необходимости исправьте или подготовьте ответ заново.</p>
+  {meta.audit_status==='not_started'&&<div className="notice"><p>В старом пакете причины отдельно не сохранялись. Можно восстановить список по текущему состоянию черновиков. Это не меняет состав пакета и ничего не публикует; количество может отличаться от первоначального счётчика.</p><button onClick={()=>void audit()}>Разобрать причины старого пакета</button></div>}
+  {['queued','running'].includes(meta.audit_status)&&<p role="status">Диагностика старого пакета {meta.audit_status==='queued'?'ожидает очереди':'выполняется на сервере'}. Разобрано исключений: {n(meta.diagnosed)}. Можно закрыть окно.</p>}
+  {meta.audit_error&&<p className="error">Диагностика остановлена: {meta.audit_error}</p>}
+  {['failed','cancelled','interrupted'].includes(meta.audit_status)&&<button onClick={()=>void audit()}>Продолжить диагностику</button>}
+  <div className="button-row" style={{flexWrap:'wrap',marginBottom:16}}>{Object.entries(meta.counts||{}).map(([key,count])=><button key={key} aria-pressed={reason===key} className={reason===key?'primary':'subtle'} onClick={()=>{setReason(key);setOffset(0)}}>{meta.labels[key]} · {n(count as number)}</button>)}</div>
+  <div className="button-row" style={{flexWrap:'wrap'}}><label>Причина исключения<select value={reason} onChange={e=>{setReason(e.target.value);setOffset(0)}}><option value="">Все причины</option>{Object.entries(meta.labels||{}).map(([key,label])=><option value={key} key={key}>{String(label)} ({n(meta.counts?.[key])})</option>)}</select></label><label>Сортировка<select value={sort} onChange={e=>{setSort(e.target.value);setOffset(0)}}><option value="newest">Сначала новые</option><option value="oldest">Сначала старые</option><option value="rating_asc">Сначала низкая оценка</option><option value="rating_desc">Сначала высокая оценка</option></select></label></div>
+  <form className="button-row" onSubmit={e=>{e.preventDefault();setSearch(query.trim());setOffset(0);if(search===query.trim())void load()}}><input aria-label="Поиск исключённых отзывов" placeholder="Текст отзыва или название товара" value={query} maxLength={300} onChange={e=>setQuery(e.target.value)}/><button disabled={busy}>Найти</button><button type="button" disabled={busy} onClick={()=>void load()}>Обновить список</button></form>
+  {error&&<p className="error" role="alert">{error}</p>}{busy&&<p role="status">Загружаем отзывы…</p>}
+  <p>По выбранным условиям: {n(page.total)} · всего разобрано: {n(meta.diagnosed)}</p>
+  {!busy&&!page.items.length&&<p className="muted">В разобранной части пакета нет отзывов по этим условиям.</p>}
+  {page.items.map((item:Row)=><article key={item.id} className="action-preview" style={{marginBlock:16}}><h4>{item.product?.name||'Товар'} · {item.rating}★</h4><p><b>{item.exclusion.label}</b></p><small>{item.exclusion.retrospective?'Диагностика старого пакета по текущему состоянию':'Причина на момент отбора'} · {new Date(item.exclusion.checked_at).toLocaleString('ru-RU')}</small><p style={{whiteSpace:'pre-wrap'}}>{item.text?.trim()||'Оценка без текста'}</p>{item.draft?.text&&<><b>Сохранённый ответ</b><p style={{whiteSpace:'pre-wrap'}}>{item.draft.text}</p></>}<button onClick={()=>onReview(item.id)}>Открыть отзыв и ответ</button></article>)}
+  <div className="button-row"><button disabled={busy||offset===0} onClick={()=>setOffset(Math.max(0,offset-20))}>Предыдущие 20</button><button disabled={busy||!page.has_more} onClick={()=>setOffset(offset+20)}>Следующие 20</button></div>
+ </section>;
+}
