@@ -20,6 +20,7 @@ export default function BulkWbPublish({storeId,canManage,busy,onChange,onReview}
  useEffect(()=>{setAck(false);setItems([]);setOffset(0);if(open&&data?.status==='pending')void preview(0)},[open,data?.id,data?.status]);
  async function action(operation:string){serial.current++;setWorking(true);setError('');try{const result=await api(operation==='prepare'?path:path+'/'+encodeURIComponent(data!.id)+'/'+operation,'POST',{store_id:storeId});if(alive.current){setData(result);setAck(false)}if(operation!=='prepare')void onChange()}catch(e){if(alive.current)setError(e instanceof Error?e.message:'Не удалось выполнить действие')}finally{if(alive.current)setWorking(false)}}
  const pending=data?.status==='pending',sending=data?.status==='sending',preparing=data?.status==='preparing';
+ async function rebuild(){if(data&&active(data.status)){await action('cancel')}setExcludedOpen(false);await action('prepare');void onChange()}
  return <>
   <button className="primary" disabled={busy||working||!canManage} onClick={()=>{setOpen(true);if(!data)void action('prepare')}}>{sending?'Отправка в WB: '+number(data?.published)+' / '+number(data?.total):preparing?'Собираем ответы для WB…':'Выгрузить все готовые ответы в WB'}</button>
   {open&&<ApprovalDialog busy={working} error={error} onClose={()=>setOpen(false)}>
@@ -27,8 +28,8 @@ export default function BulkWbPublish({storeId,canManage,busy,onChange,onReview}
    <p className="muted">Ответы выбранного магазина со всех страниц. Список фиксируется перед подтверждением; новые черновики автоматически в него не добавляются.</p>
    {working&&!data&&<p role="status">Создаём пакет…</p>}
    {data&&<div className="button-row"><button aria-pressed={excludedOpen} onClick={()=>setExcludedOpen(!excludedOpen)}>{excludedOpen?'К готовым ответам':'Показать исключённые ('+number(data.excluded)+')'}</button></div>}
-   {data&&!active(data.status)&&<button disabled={working} onClick={()=>{setExcludedOpen(false);void action('prepare')}}>Собрать новый список ответов</button>}
-   {data&&excludedOpen&&<BulkExcluded key={data.id} parentId={data.id} storeId={storeId} onReview={id=>{setOpen(false);onReview(id)}}/>}
+   {data&&!excludedOpen&&!active(data.status)&&<button disabled={working} onClick={()=>{setExcludedOpen(false);void action('prepare')}}>Собрать новый список ответов</button>}
+   {data&&excludedOpen&&<BulkExcluded key={data.id} parentId={data.id} storeId={storeId} onReady={()=>void rebuild()} onReview={id=>{setOpen(false);onReview(id)}}/>}
    {data&&!excludedOpen&&<>
     <div className="metrics"><div className="metric"><span>Готовы к отправке</span><strong>{number(data.total)}</strong></div><div className="metric"><span>Исключены</span><strong>{number(data.excluded)}</strong></div><div className="metric"><span>Опубликованы</span><strong>{number(data.published)}</strong></div></div>
     {preparing&&<p role="status">Проверяем черновики со всех страниц: просмотрено {number(data.scanned)}. Можно закрыть окно — подготовка продолжится на сервере.</p>}

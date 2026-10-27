@@ -1,31 +1,36 @@
 'use client';
 import {useEffect,useRef,useState} from 'react';
 import {api} from './client';
+
 type Row=Record<string,any>;
 const n=(value:number=0)=>value.toLocaleString('ru-RU');
-export default function BulkExcluded({parentId,storeId,onReview}:{parentId:string;storeId:string;onReview:(id:string)=>void}){
- const [meta,setMeta]=useState<Row>({counts:{},labels:{}}),[page,setPage]=useState<Row>({items:[],total:0}),[reason,setReason]=useState(''),[sort,setSort]=useState('newest'),[query,setQuery]=useState(''),[search,setSearch]=useState(''),[offset,setOffset]=useState(0),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const mounted=useRef(true),request=useRef(0),status=useRef(''),previousStatus=useRef('');status.current=meta.audit_status;
- const path='/publications/wb/all/'+encodeURIComponent(parentId)+'/exclusions',scope='store_id='+encodeURIComponent(storeId);
- async function load(){const version=++request.current;setBusy(true);setError('');try{const result=await api(path+'?'+scope+'&'+new URLSearchParams({reason,sort,q:search,offset:String(offset)}),'GET',undefined,30000);if(mounted.current&&version===request.current){setPage(result);setMeta(result)}}catch(e){if(mounted.current&&version===request.current)setError(e instanceof Error?e.message:'Не удалось загрузить исключённые отзывы')}finally{if(mounted.current&&version===request.current)setBusy(false)}}
- async function audit(){setError('');try{const result=await api(path+'/audit','POST',{store_id:storeId});if(mounted.current)setMeta(result)}catch(e){if(mounted.current)setError(e instanceof Error?e.message:'Не удалось запустить диагностику')}}
- useEffect(()=>{mounted.current=true;const timer=setInterval(()=>{if(['queued','running'].includes(status.current))void api(path+'/summary?'+scope).then(result=>{if(mounted.current)setMeta(result)}).catch(()=>{})},5000);return()=>{mounted.current=false;request.current++;clearInterval(timer)}},[parentId,storeId]);
- useEffect(()=>{void load()},[reason,sort,search,offset]);
- useEffect(()=>{if(meta.audit_status==='completed'&&['queued','running'].includes(previousStatus.current))void load();previousStatus.current=meta.audit_status},[meta.audit_status]);
- return <section aria-label="Исключённые отзывы">
-  <h3>Исключённые отзывы</h3><p className="muted">Исключены из массовой отправки, но сохранены на сайте. Выберите причину, откройте отзыв и при необходимости исправьте или подготовьте ответ заново.</p>
-  {meta.audit_status==='not_started'&&<div className="notice"><p>В старом пакете причины отдельно не сохранялись. Можно восстановить список по текущему состоянию черновиков. Это не меняет состав пакета и ничего не публикует; количество может отличаться от первоначального счётчика.</p><button onClick={()=>void audit()}>Разобрать причины старого пакета</button></div>}
-  {['queued','running'].includes(meta.audit_status)&&<p role="status">Диагностика старого пакета {meta.audit_status==='queued'?'ожидает очереди':'выполняется на сервере'}. Разобрано исключений: {n(meta.diagnosed)}. Можно закрыть окно.</p>}
-  {['queued','running','completed','failed','cancelled','interrupted'].includes(meta.audit_status)&&<p className="muted">Для старого пакета показана диагностика по текущему состоянию. Причины на момент первоначального отбора не сохранялись; количество может отличаться от старого счётчика.</p>}
-  {meta.audit_error&&<p className="error">Диагностика остановлена: {meta.audit_error}</p>}
-  {['failed','cancelled','interrupted'].includes(meta.audit_status)&&<button onClick={()=>void audit()}>Продолжить диагностику</button>}
-  <div className="button-row" style={{flexWrap:'wrap',marginBottom:16}}>{Object.entries(meta.counts||{}).map(([key,count])=><button key={key} aria-pressed={reason===key} className={reason===key?'primary':'subtle'} onClick={()=>{setReason(key);setOffset(0)}}>{meta.labels[key]} · {n(count as number)}</button>)}</div>
-  <div className="button-row" style={{flexWrap:'wrap'}}><label>Причина исключения<select value={reason} onChange={e=>{setReason(e.target.value);setOffset(0)}}><option value="">Все причины</option>{Object.entries(meta.labels||{}).map(([key,label])=><option value={key} key={key}>{String(label)} ({n(meta.counts?.[key])})</option>)}</select></label><label>Сортировка<select value={sort} onChange={e=>{setSort(e.target.value);setOffset(0)}}><option value="newest">Сначала новые</option><option value="oldest">Сначала старые</option><option value="rating_asc">Сначала низкая оценка</option><option value="rating_desc">Сначала высокая оценка</option></select></label></div>
-  <form className="button-row" onSubmit={e=>{e.preventDefault();setSearch(query.trim());setOffset(0);if(search===query.trim())void load()}}><input aria-label="Поиск исключённых отзывов" placeholder="Текст отзыва или название товара" value={query} maxLength={300} onChange={e=>setQuery(e.target.value)}/><button disabled={busy}>Найти</button><button type="button" disabled={busy} onClick={()=>void load()}>Обновить список</button></form>
-  {error&&<p className="error" role="alert">{error}</p>}{busy&&<p role="status">Загружаем отзывы…</p>}
-  <p>По выбранным условиям: {n(page.total)} · всего разобрано: {n(meta.diagnosed)}</p>
-  {!busy&&!page.items.length&&<p className="muted">В разобранной части пакета нет отзывов по этим условиям.</p>}
-  {page.items.map((item:Row)=><article key={item.id} className="action-preview" style={{marginBlock:16}}><h4>{item.product?.name||'Товар'} · {item.rating}★</h4><p><b>{item.exclusion.label}</b></p><small>{item.exclusion.retrospective?'Диагностика старого пакета по текущему состоянию':'Причина на момент отбора'} · {new Date(item.exclusion.checked_at).toLocaleString('ru-RU')}</small><p style={{whiteSpace:'pre-wrap'}}>{item.text?.trim()||'Оценка без текста'}</p>{item.draft?.text&&<><b>Сохранённый ответ</b><p style={{whiteSpace:'pre-wrap'}}>{item.draft.text}</p></>}<button onClick={()=>onReview(item.id)}>Открыть отзыв и ответ</button></article>)}
-  <div className="button-row"><button disabled={busy||offset===0} onClick={()=>setOffset(Math.max(0,offset-20))}>Предыдущие 20</button><button disabled={busy||!page.has_more} onClick={()=>setOffset(offset+20)}>Следующие 20</button></div>
+export default function BulkExcluded({parentId,storeId,onReady}:{parentId:string;storeId:string;onReview:(id:string)=>void;onReady:()=>void}){
+ const [job,setJob]=useState<Row|null>(null),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const alive=useRef(true),serial=useRef(0),acting=useRef(false);
+ const path='/publications/wb/all/'+encodeURIComponent(parentId)+'/exclusions';
+ async function load(){const version=serial.current;try{const result=await api(path+'/summary?store_id='+encodeURIComponent(storeId));if(alive.current&&version===serial.current)setJob(result.recovery)}catch(e){if(alive.current&&version===serial.current)setError(e instanceof Error?e.message:'Не удалось получить прогресс')}finally{if(alive.current)setLoading(false)}}
+ useEffect(()=>{alive.current=true;void load();const timer=setInterval(()=>{if(!acting.current)void load()},5000);return()=>{alive.current=false;serial.current++;clearInterval(timer)}},[parentId,storeId]);
+ async function action(stop=false,retry=false){acting.current=true;serial.current++;setBusy(true);setError('');try{const result=await api(path+'/recovery'+(stop?'/stop':''),'POST',{store_id:storeId,...(!stop?{retry_errors:retry}:{})},60000);if(alive.current)setJob(result)}catch(e){if(alive.current)setError(e instanceof Error?e.message:'Не удалось запустить подготовку')}finally{acting.current=false;if(alive.current)setBusy(false)}}
+ const active=job&&['queued','running'].includes(job.status),finished=job?.status==='completed',paused=job&&['cancelled','failed','interrupted'].includes(job.status);
+ return <section aria-label="Новые ответы на исключённые отзывы" className="notice" style={{padding:24,borderRadius:20,marginTop:20}}>
+  <h3>Подготовить исключённые отзывы заново</h3>
+  <p>Новые ответы будут созданы по актуальным правилам и проверены перед выгрузкой в Wildberries. Работа продолжится на сервере, даже если закрыть сайт.</p>
+  <p className="muted">Ручные правки сохраняются. Низкие оценки и опасные ситуации остаются на личной проверке. Подготовка ничего не публикует.</p>
+  {loading&&<p role="status">Загружаем состояние подготовки…</p>}
+  {error&&<p role="alert" className="error">{error}</p>}
+  {job&&<>
+   <div className="metrics"><div className="metric"><span>Обработано</span><strong>{n(job.processed)} / {n(job.total)}</strong></div><div className="metric"><span>Готовы к выгрузке</span><strong>{n(job.ready)}</strong></div><div className="metric"><span>Нужна личная проверка</span><strong>{n(job.manual)}</strong></div></div>
+   <progress aria-label="Подготовка исключённых отзывов" max={Math.max(1,job.total)} value={job.processed} style={{width:'100%'}}/>
+   <p role="status">{finished?'Подготовка завершена.':paused?'Подготовка остановлена; прогресс сохранён.':job.status==='queued'?'Подготовка в очереди.':'Готовим и проверяем ответы.'} {job.retrying?'Повторяем проверку после временного сбоя.':''}</p>
+   {!!job.errors&&<p>Не удалось завершить: {n(job.errors)}. Их можно повторить отдельно; готовые ответы сохраняются.</p>}
+   {job.detail&&<p className="muted">{job.detail}</p>}
+  </>}
+  <div className="button-row" style={{flexWrap:'wrap'}}>
+   {!loading&&!active&&<button className="primary" disabled={busy} onClick={()=>void action()}>{busy?'Запускаем…':paused?'Продолжить подготовку':'Перегенерировать исключённые отзывы'}</button>}
+   {active&&<button disabled={busy||job.cancel_requested} onClick={()=>void action(true)}>{job.cancel_requested?'Останавливаем после текущего ответа…':'Остановить подготовку'}</button>}
+   {!active&&!!job?.errors&&<button disabled={busy} onClick={()=>void action(false,true)}>Повторить ошибки подготовки ({n(job.errors)})</button>}
+   {!active&&!!job?.ready&&<button className="primary" disabled={busy} onClick={onReady}>Собрать готовые ответы для выгрузки в WB</button>}
+  </div>
+  {!!job?.ready&&<p className="muted">Счётчики показывают результат подготовки. Перед отправкой список будет собран заново с проверкой актуального текста и правил; публикация потребует Вашего подтверждения.</p>}
  </section>;
 }

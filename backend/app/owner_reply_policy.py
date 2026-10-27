@@ -184,7 +184,7 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
 
 
 async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=None,
-                              allow_fast_positive=False, instruction='', local_only=False):
+                              allow_fast_positive=False, instruction='', local_only=False, check_only=False):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
@@ -192,8 +192,9 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     """
     from .integrations import ollama
     check_started = monotonic()
-    adjusted, applied = apply_local_preferences(reply, review, rules, style_only=protected)
-    adjusted = apply_signature(adjusted, rules)
+    adjusted, applied = (reply, []) if check_only else apply_local_preferences(reply, review, rules, style_only=protected)
+    if not check_only:
+        adjusted = apply_signature(adjusted, rules)
     result = {'matched': len(rules), 'applied_preferences': applied,
               'fingerprint': fingerprint(rules), 'checked': True, 'passed': True, 'issues': []}
     try:
@@ -228,7 +229,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         cached = cached_verdict(key)
         if cached:
             value, verdict = cached
-            if validate_reply(mask_vin(value)) == value and not local_issues(value, rules, review) and assess(value)['passed']:
+            if (not check_only or value == reply) and validate_reply(mask_vin(value)) == value and not local_issues(value, rules, review) and assess(value)['passed']:
                 verdict.update(cache_hit=True, verification_method='exact_input_cache',
                                reused_check_seconds=verdict.get('verification_seconds', 0),
                                verification_seconds=round(monotonic() - check_started, 4))
@@ -285,7 +286,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 if result['verified_groups'] == len(groups):
                     break
                 candidate = check['revised_answer'].strip()
-                if not candidate or protected or attempt:
+                if not candidate or protected or attempt or check_only:
                     result['issues'].extend(check['violations'] or ['Правила магазина не выполнены'])
                     break
                 candidate, _ = apply_local_preferences(candidate, review, rules)
