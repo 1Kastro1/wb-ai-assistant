@@ -15,6 +15,7 @@ export default function BulkWbPublish({storeId,canManage,busy,onChange,onReview}
  const alive=useRef(true),serial=useRef(0),current=useRef({data,open});current.current={data,open};
  const path='/publications/wb/all',scope='store_id='+encodeURIComponent(storeId);
  async function load(){const version=serial.current;try{const result=await api(path+'?'+scope);if(alive.current&&version===serial.current){setData(result);setError('')}}catch(e){if(alive.current&&version===serial.current)setError(e instanceof Error?e.message:'Не удалось обновить отправку')}}
+ useEffect(()=>{serial.current++;setOpen(false);setExcludedOpen(false);setData(null);setAck(false);setError('')},[storeId]);
  useEffect(()=>{alive.current=true;if(canManage)void load();const timer=setInterval(()=>{if(canManage&&(current.current.open||active(current.current.data?.status)))void load()},3000);return()=>{alive.current=false;clearInterval(timer)}},[storeId,canManage]);
  async function preview(page:number){if(!data)return;setPreviewBusy(true);try{const result=await api(path+'/'+encodeURIComponent(data.id)+'/items?'+scope+'&offset='+page);if(alive.current){setItems(result.items);setOffset(page)}}catch(e){if(alive.current)setError(e instanceof Error?e.message:'Не удалось загрузить тексты')}finally{if(alive.current)setPreviewBusy(false)}}
  useEffect(()=>{setAck(false);setItems([]);setOffset(0);if(open&&data?.status==='pending')void preview(0)},[open,data?.id,data?.status]);

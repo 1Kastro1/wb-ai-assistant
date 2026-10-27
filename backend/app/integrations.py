@@ -21,7 +21,7 @@ class OllamaProvider:
     async def list_models(self):
         return (await self.health_check()).get('models', [])
 
-    async def chat(self, messages, schema=None, *, task=None):
+    async def chat(self, messages, schema=None, *, task=None, timeout_seconds=None):
         from .model_router import ModelRouter
         messages = [dict(message) for message in messages]
         if messages and messages[-1].get('role') == 'user':
@@ -39,7 +39,7 @@ class OllamaProvider:
         if schema:
             body['format'] = schema
         from .generation_budget import OWNER_RULE_CHECK_SECONDS
-        request_options = {'timeout_seconds': OWNER_RULE_CHECK_SECONDS} if task == 'OWNER_RULES' else {}
+        request_options = {'timeout_seconds': timeout_seconds if timeout_seconds is not None else OWNER_RULE_CHECK_SECONDS} if task == 'OWNER_RULES' else {}
         result = await guard.request('ollama', 'chat', body=body, **request_options)
         if result.get('prompt_eval_count', 0) >= body['options']['num_ctx'] - 8:
             raise ValueError('Контекст модели переполнен; сократите повторяющиеся правила или их область применения')
@@ -51,8 +51,11 @@ class OllamaProvider:
             raise ValueError('Локальная модель не завершила ответ. Повторите запрос.')
         return content.strip()
 
-    async def structured(self, messages, schema, *, task=None):
-        return json.loads(await self.chat(messages, schema, task=task) if task else await self.chat(messages, schema))
+    async def structured(self, messages, schema, *, task=None, timeout_seconds=None):
+        options = {'task': task} if task else {}
+        if timeout_seconds is not None:
+            options['timeout_seconds'] = timeout_seconds
+        return json.loads(await self.chat(messages, schema, **options))
 
     async def reply_variants(self, messages, count=3):
         """Request several customer-facing variants in one model call."""
