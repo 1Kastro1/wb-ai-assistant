@@ -5,13 +5,67 @@ from uuid import uuid4
 from sqlalchemy import create_engine, select, delete
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
-from app.db import Base, Product, Setting, Job, StoreProfile, Review, Draft, set_setting
+from app.db import Base, Product, Setting, Job, StoreProfile, Review, Draft, Action, set_setting
 from app.product_search import knowledge_condition
 from app.queue_policy import next_job
 
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_bulk_manifest_double_click_and_pagination_on_postgresql(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        from app import bulk_publication as bulk
+        url = make_url(os.environ['DATABASE_URL'])
+        self.assertEqual(url.database, 'wb_workbench_tests')
+        self.assertTrue(url.drivername.startswith('postgresql'))
+        engine = create_engine(url); Base.metadata.create_all(engine)
+        factory = sessionmaker(engine, expire_on_commit=False)
+        prefix, aid, jid = 'bulk-ci-'+uuid4().hex, None, None
+        try:
+            with factory() as db:
+                db.add(StoreProfile(id=prefix, name='Test WB', provider='wb'))
+                db.add(Product(id=prefix, name='Test')); db.flush()
+                for i in range(105):
+                    rid = prefix+str(i).zfill(3)
+                    db.add(Review(id=rid, wb_review_id=rid, wb_account_id=prefix, product_id=prefix,
+                                  marketplace='wb', rating=5, text='', status='draft_ready'))
+                db.flush()
+                for i in range(105):
+                    rid = prefix+str(i).zfill(3)
+                    db.add(Draft(id=rid, review_id=rid, text='Добрый день! Спасибо за высокую оценку!',
+                                 original='Добрый день! Спасибо за высокую оценку!', quality={'passed': True}))
+                db.commit()
+            def click():
+                with factory() as db:
+                    return bulk.start(db, prefix, 'ci-actor').id
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                ids = list(executor.map(lambda _: click(), range(2)))
+            self.assertEqual(ids[0], ids[1]); aid = ids[0]
+            with factory() as db:
+                jid = db.get(Action, aid).payload['prepare_job_id']
+            with patch.object(bulk, 'Session', factory), patch.object(bulk, 'matching_owner_rules', return_value=[]):
+                bulk.prepare_step(jid)
+            with factory() as db:
+                parent = db.get(Action, aid)
+                self.assertEqual(parent.status, 'pending')
+                self.assertEqual(parent.payload['total'], 105)
+                page = bulk.preview(db, parent, 100)
+                self.assertEqual(len(page['items']), 5)
+                self.assertEqual(page['items'][0]['review_id'], prefix+'100')
+        finally:
+            with factory() as db:
+                if aid:
+                    db.execute(delete(Action).where(Action.payload['parent_id'].as_string() == aid))
+                    db.execute(delete(Action).where(Action.id == aid))
+                if jid:
+                    db.execute(delete(Job).where(Job.id == jid))
+                db.execute(delete(Draft).where(Draft.id.startswith(prefix)))
+                db.execute(delete(Review).where(Review.id.startswith(prefix)))
+                db.execute(delete(Product).where(Product.id == prefix))
+                db.execute(delete(StoreProfile).where(StoreProfile.id == prefix)); db.commit()
+            engine.dispose()
+
     def test_manual_queue_counts_match_rows_without_a_cartesian_join(self):
         from app.main import work_queue
         url=make_url(os.environ['DATABASE_URL'])
