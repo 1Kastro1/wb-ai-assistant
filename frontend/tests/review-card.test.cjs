@@ -84,7 +84,7 @@ test('all-category Uniqom workflow remains visible without automatic provider ac
 
 test('product photos load lazily with an accessible name',()=>{const html=render({review:{product:{name:'Очиститель',brand:'KANGAROO',image_url:'https://example.com/card.webp'}}});assert(html.includes('src="https://example.com/card.webp"'));assert(html.includes('loading="lazy"'));assert(html.includes('alt="Очиститель"'))});
 test('missing or unsafe photo URLs retain a product placeholder',()=>{for(const image_url of ['', 'javascript:alert(1)']){const html=render({review:{product:{name:'Очиститель',image_url}}});assert(html.includes('Фото товара отсутствует'));assert(!html.includes('<img'))}});
-test('review header keeps scheduling details collapsed and controls permission-aware',()=>{const Header=loadComponent(path.join(__dirname,'../app/ReviewHeader.tsx')).default;const html=renderToStaticMarkup(React.createElement(Header,{automation:{enabled:false},busy:false,canManage:false,assistantEnabled:true,count:30,total:220294,selected:0,onToggle(){},onCheck(){},onPublish(){}}));assert(html.includes('Расписание автоответов'));assert(!html.includes(' open='));assert(html.includes('disabled'));assert(!html.includes('class="primary"'))});
+test('review header shows status and collapsed scheduling without action buttons',()=>{const Header=loadComponent(path.join(__dirname,'../app/ReviewHeader.tsx')).default;const html=renderToStaticMarkup(React.createElement(Header,{automation:{enabled:false},count:30,total:220294}));assert(html.includes('Расписание автоответов'));assert(!html.includes(' open='));assert(html.includes('Автоответы:'));assert(!html.includes('<button'));assert(!html.includes('Проверить сейчас'));assert(!html.includes('К публикации'));});
 
 test('product knowledge card renders its own thumbnail',()=>{
  const file=path.join(__dirname,'../app/page.tsx'),page=fs.readFileSync(file,'utf8');
@@ -137,4 +137,5 @@ test('sync operations remain disabled for a viewer',()=>{const html=syncCard({ca
 test('question recovery continues the saved job instead of suggesting a new generation',()=>{const html=renderQuestion({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));});
 
 test('catalog progress displays committed count instead of an invented percentage',()=>{const html=syncCard({productSync:{tone:'working',state:'running',progress:95,processed:14300,phase:'archived'}});assert(html.includes('14'));assert(html.includes('300'));assert(html.includes('Загружаем архивные товары'));assert(!html.includes('95%'));assert(!html.includes('aria-valuenow="95"'));});
+
 
