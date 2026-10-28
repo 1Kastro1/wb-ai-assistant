@@ -175,3 +175,10 @@ test('access editor preserves existing assignments without a mutation on open',(
  const html=renderToStaticMarkup(React.createElement(Editor,{user:{display_name:'Менеджер',permissions:['data:read','wb:operate'],store_ids:['shop']},stores:[{id:'shop',name:'Основной магазин'}],busy:false,onClose:()=>{},onSave:async()=>{writes++}}));
  assert.equal(writes,0);assert(html.includes('Работа с Wildberries'));assert(html.includes('Основной магазин'));assert.equal((html.match(/checked=""/g)||[]).length,3);assert(html.includes('Сохранить права'));assert(html.includes('<dialog'));
 });
+
+test('vehicle identifiers remain visible before expanding a question',()=>{
+ const Question=loadComponent(path.join(__dirname,'../app/QuestionCard.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Question,{question:{id:'q',text:'Подойдёт для RD1-5300053?',created_at:'2026-10-28',product:{name:'Фильтр'}},checked:false,toggle(){},busy:false,assistantEnabled:true,canManage:true,generating:false,generationError:'',generate(){},save:async()=>({}),publish:async()=>{},storageKey:'test'}));
+ assert(html.includes('identifier-preview'));assert(html.includes('RD1-5300053'));assert(html.indexOf('identifier-preview')<html.indexOf('<details'));
+ assert(!html.includes('Совместимость подтверждена'));
+});
