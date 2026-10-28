@@ -1161,7 +1161,7 @@ def propose_publish(db, review_ids):
     return public(action)
 
 
-async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
+async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_approval=None):
     # Reserve the action and unique per-review publication slots atomically.
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
@@ -1193,7 +1193,14 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id=''):
         if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
         rules = matching_owner_rules(db, db.get(Product, review.product_id), for_questions=review.marketplace.endswith('_question'))
-        if not saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'), review=review)['passed']:
+        owner_approval = False
+        if bulk_approval:
+            from .bulk_publication import owner_approved_item
+            owner_approval = (action.payload.get('bulk_parent') == bulk_approval and
+                owner_approved_item(db, bulk_approval, actor_id, review, draft, item, rules))
+            if not owner_approval:
+                raise ValueError('Подтверждение владельца больше не соответствует пакету')
+        if not owner_approval and not saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'), review=review)['passed']:
             raise ValueError('Правила магазина изменились или не выполнены. Подготовьте ответ и подтверждение заново.')
         if not review.marketplace.endswith('_question'):
             from .reply_policy import semantic_reply_issues

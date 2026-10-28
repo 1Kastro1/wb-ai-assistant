@@ -34,19 +34,25 @@ def parent_for(db, aid, store_id):
     return parent
 
 
-def start(db, store_id, actor_id):
+def start(db, store_id, actor_id, include_excluded=False):
     # Serialize double clicks across API processes, without a table-wide lock.
     store = db.scalar(select(StoreProfile).where(StoreProfile.id == store_id).with_for_update())
     if not store or store.provider != 'wb':
         raise ValueError('Массовая отправка доступна только для Wildberries')
+    actor = db.get(User, actor_id)
+    if include_excluded and (not actor or not actor.enabled or actor.role != 'owner'):
+        raise ValueError('Включить исключённые ответы может только владелец')
     existing = db.scalar(select(Action).where(Action.kind == PARENT_KIND,
         Action.status.in_(('preparing', 'pending', 'sending')),
         Action.payload['account_id'].as_string() == store_id).order_by(Action.created_at.desc()))
     if existing:
+        if bool(existing.payload.get('include_excluded')) != include_excluded:
+            raise ValueError('Сначала отмените текущий пакет, чтобы изменить состав')
         return existing
     aid, jid = str(uuid4()), str(uuid4())
     parent = Action(id=aid, kind=PARENT_KIND, status='preparing', payload={
         'account_id': store_id, 'total': 0, 'scanned': 0, 'excluded': 0,
+        'include_excluded': include_excluded, 'included_excluded': 0,
         'prepare_job_id': jid, 'requested_by': actor_id}, result={})
     db.add_all([parent, Job(id=jid, kind=PREPARE_KIND, result={
         'account_id': store_id, 'parent_id': aid, 'requested_by': actor_id, 'cursor': ''})])
@@ -66,7 +72,9 @@ def view(db, parent):
         'job_status': job.status if job else '',
         'job_error': (job.result or {}).get('detail', '') if job and job.status in ('failed', 'interrupted') else '',
         'blocked': bool(setting(db, 'safe_mode', False) or setting(db, 'test_mode', True) or not REAL_PUBLISH),
-        'prepared_at': payload.get('prepared_at')}
+        'prepared_at': payload.get('prepared_at'),
+        'include_excluded': bool(payload.get('include_excluded')),
+        'included_excluded': payload.get('included_excluded', 0)}
 
 
 def preview(db, parent, offset=0):
@@ -88,13 +96,17 @@ def preview(db, parent, offset=0):
     return {'items': items, 'offset': offset, 'total': parent.payload['total']}
 
 
-def confirm(db, parent, actor_id, real_publish):
+def confirm(db, parent, actor_id, real_publish, excluded_ack=False):
     db.rollback()
     parent = db.scalar(select(Action).where(Action.id == parent.id).with_for_update().execution_options(populate_existing=True))
     if parent.status == 'sending':
         return parent  # A repeated confirmation cannot create another sender.
     if parent.status != 'pending' or not parent.payload.get('total'):
         raise ValueError('Сначала дождитесь подготовки списка ответов')
+    if parent.payload.get('include_excluded'):
+        actor = db.get(User, actor_id)
+        if not actor or not actor.enabled or actor.role != 'owner' or not excluded_ack:
+            raise ValueError('Владелец должен отдельно подтвердить ответы без автоматического одобрения')
     if datetime.now(timezone.utc) - datetime.fromisoformat(parent.payload['prepared_at']) > timedelta(minutes=30):
         raise ValueError('Список устарел. Отмените его и подготовьте новый')
     if setting(db, 'safe_mode', False) or setting(db, 'test_mode', True) or not real_publish:
@@ -103,7 +115,8 @@ def confirm(db, parent, actor_id, real_publish):
     parent.status = 'sending'
     parent.payload = {**parent.payload, 'send_job_id': jid}
     parent.result = {'confirmed_by': actor_id, 'confirmed_at': now(), 'processed': 0,
-                     'published': 0, 'skipped': 0, 'uncertain': 0}
+                     'published': 0, 'skipped': 0, 'uncertain': 0,
+                     'excluded_ack': bool(parent.payload.get('include_excluded') and excluded_ack)}
     db.add(Job(id=jid, kind=SEND_KIND, result={'account_id': parent.payload['account_id'],
         'parent_id': parent.id, 'requested_by': actor_id, 'total': parent.payload['total']}))
     db.commit()
@@ -157,6 +170,49 @@ def exclusion_reason(db, review, draft, rules):
     return ''
 
 
+def owner_review_reason(db, review, draft, rules):
+    """Human approval can replace an unavailable automated verdict, never known content errors."""
+    if (review.marketplace != 'wb' or review.is_answered or
+            review.status not in ('draft_ready', 'manual_review')):
+        return 'not_ready'
+    try:
+        if validate_reply(draft.text) != draft.text or semantic_reply_issues(review, db.get(Product, review.product_id), draft.text):
+            return 'content_check'
+    except ValueError:
+        return 'content_check'
+    previous = (draft.quality or {}).get('owner_rules') or {}
+    if (previous.get('checked') and previous.get('passed') is False and
+            not previous.get('technical_error') and previous.get('fingerprint') == fingerprint(rules)):
+        return 'rules_violation'
+    return ''
+
+
+def approval_snapshot(review, rules):
+    return {'text': review.text, 'rating': review.rating, 'product_id': review.product_id,
+            'manual': review.manual, 'risk': review.risk, 'safety_critical': review.safety_critical,
+            'rules': fingerprint(rules)}
+
+
+def owner_approved_item(db, parent_id, actor_id, review, draft, item, rules):
+    """Server-only authorization tied to an owner-confirmed frozen manifest and current inputs."""
+    parent, actor = db.get(Action, parent_id), db.get(User, actor_id)
+    if not (parent and parent.kind == PARENT_KIND and parent.status == 'sending' and
+            parent.payload.get('include_excluded') and parent.result.get('excluded_ack') and
+            parent.result.get('confirmed_by') == actor_id and actor and actor.enabled and actor.role == 'owner' and
+            parent.payload['account_id'] == review.wb_account_id and
+            item.get('approval_snapshot') == approval_snapshot(review, rules) and
+            draft.id == item['draft_id'] and draft.review_id == review.id and
+            draft.revision == item['revision'] and draft.text == item['text']):
+        return False
+    # A client cannot forge an approval by adding fields to an ordinary publish action.
+    manifests = db.scalars(select(Action).where(Action.kind == MANIFEST_KIND,
+        Action.payload['parent_id'].as_string() == parent_id,
+        Action.payload['start_index'].as_integer() <= item.get('manifest_index', -1),
+        Action.payload['end_index'].as_integer() > item.get('manifest_index', -1)))
+    return (any(item in row.payload['items'] for row in manifests) and
+            not owner_review_reason(db, review, draft, rules))
+
+
 def prepare_step(job_id):
     started, rules_cache = time.monotonic(), {}
     with Session() as db:
@@ -177,7 +233,7 @@ def prepare_step(job_id):
                 parent.payload = {**parent.payload, 'prepared_at': now()}
                 job.status, job.progress = 'completed', 100
                 db.commit(); return
-            items, excluded = [], []
+            items, excluded, included_excluded = [], [], 0
             for review, draft in rows:
                 if review.product_id not in rules_cache:
                     rules_cache[review.product_id] = matching_owner_rules(db, db.get(Product, review.product_id))
@@ -185,13 +241,23 @@ def prepare_step(job_id):
                     allowed = eligible(db, review, draft, rules_cache[review.product_id])
                 except ValueError:
                     allowed = False
+                ordinary = allowed
+                if parent.payload.get('include_excluded'):
+                    allowed = not owner_review_reason(db, review, draft, rules_cache[review.product_id])
                 attempted = db.scalar(select(Publication.id).where(Publication.review_id == review.id)) if allowed else None
                 if allowed and not attempted:
-                    items.append({'review_id': review.id, 'draft_id': draft.id, 'revision': draft.revision,
-                                  'text': draft.text, 'rating': review.rating, 'manual': False, 'kind': 'review'})
+                    item = {'review_id': review.id, 'draft_id': draft.id, 'revision': draft.revision,
+                            'text': draft.text, 'rating': review.rating, 'manual': review.manual, 'kind': 'review'}
+                    if parent.payload.get('include_excluded'):
+                        item.update(approval_snapshot=approval_snapshot(review, rules_cache[review.product_id]),
+                                    manifest_index=parent.payload['total'] + len(items),
+                                    owner_review=not ordinary)
+                        included_excluded += int(not ordinary)
+                    items.append(item)
                 else:
                     excluded.append({'review_id': review.id, 'reason': 'already_attempted' if attempted else
-                        exclusion_reason(db, review, draft, rules_cache[review.product_id]), 'at': now(), 'retrospective': False})
+                        (owner_review_reason(db, review, draft, rules_cache[review.product_id]) if parent.payload.get('include_excluded') else
+                         exclusion_reason(db, review, draft, rules_cache[review.product_id])), 'at': now(), 'retrospective': False})
             if items:
                 db.add(Action(id=str(uuid4()), kind=MANIFEST_KIND, status='staged', payload={
                     'parent_id': parent.id, 'account_id': parent.payload['account_id'], 'items': items,
@@ -202,6 +268,7 @@ def prepare_step(job_id):
             save_chunk(db, parent, excluded)
             parent.payload = {**parent.payload, 'exclusion_legacy_cursor': parent.payload.get('exclusion_legacy_cursor', cursor), 'total': parent.payload['total'] + len(items),
                 'scanned': parent.payload['scanned'] + len(rows),
+                'included_excluded': parent.payload.get('included_excluded', 0) + included_excluded,
                 'excluded': parent.payload['excluded'] + len(rows) - len(items)}
             job.result = {**job.result, 'cursor': rows[-1][0].id, 'processed': parent.payload['scanned'],
                           'message': 'Собираем проверенные ответы со всех страниц', 'updated_at': now()}
@@ -259,9 +326,13 @@ async def send_step(job_id):
                 if child.status == 'pending':
                     draft = db.get(Draft, item['draft_id'])
                     rules = matching_owner_rules(db, db.get(Product, review.product_id))
-                    if not draft or not eligible(db, review, draft, rules):
+                    owner_approval = bool(draft and owner_approved_item(db, parent.id, parent.result['confirmed_by'], review, draft, item, rules))
+                    if not draft or not (owner_approval if parent.payload.get('include_excluded') else eligible(db, review, draft, rules)):
                         raise ValueError('Ответ больше не готов к массовой публикации')
-                    await confirm_action(db, aid, False, parent.result['confirmed_by'])
+                    if owner_approval:
+                        await confirm_action(db, aid, True, parent.result['confirmed_by'], bulk_approval=parent.id)
+                    else:
+                        await confirm_action(db, aid, False, parent.result['confirmed_by'])
                 db.refresh(child)
                 statuses = [row['status'] for row in (child.result or {}).get('items', [])]
                 outcome = 'published' if statuses == ['published'] else 'uncertain' if child.status in ('executing', 'needs_review') else 'skipped'

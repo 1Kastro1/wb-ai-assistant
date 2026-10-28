@@ -2227,6 +2227,8 @@ class PublishInput(Payload):
 
 class BulkPublishInput(Payload):
     store_id: str = Field(min_length=1, max_length=200)
+    include_excluded: bool = False
+    excluded_ack: bool = False
 
 
 def wb_bulk_store(db, auth, store_id):
@@ -2261,7 +2263,7 @@ def wb_bulk_status(store_id: str, auth: MARKET_OPERATOR, db: DB):
 def wb_bulk_prepare(body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
     from .bulk_publication import start, view
     wb_bulk_store(db, auth, body.store_id)
-    return view(db, start(db, body.store_id, auth['user_id']))
+    return view(db, start(db, body.store_id, auth['user_id'], body.include_excluded))
 
 
 @app.get('/publications/wb/all/{aid}/items')
@@ -2276,7 +2278,7 @@ def wb_bulk_preview(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB, offs
 def wb_bulk_confirm(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
     from .bulk_publication import confirm, view
     parent = wb_bulk_parent(db, auth, body.store_id, aid)
-    return view(db, confirm(db, parent, auth['user_id'], REAL_PUBLISH))
+    return view(db, confirm(db, parent, auth['user_id'], REAL_PUBLISH, body.excluded_ack))
 
 
 @app.post('/publications/wb/all/{aid}/exclusions/audit')
