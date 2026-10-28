@@ -1204,7 +1204,9 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
             raise ValueError('Правила магазина изменились или не выполнены. Подготовьте ответ и подтверждение заново.')
         if not review.marketplace.endswith('_question'):
             from .reply_policy import semantic_reply_issues
-            if semantic_reply_issues(review, db.get(Product, review.product_id), draft.text):
+            from .bulk_publication import owner_content_issues
+            content_check = owner_content_issues if owner_approval else semantic_reply_issues
+            if content_check(review, db.get(Product, review.product_id), draft.text):
                 raise ValueError('Ответ не соответствует отзыву. Подготовьте ответ и подтверждение заново.')
         if review.manual and not manual_ack:
             raise ValueError('Нужно отдельное подтверждение ручной проверки опасного отзыва')

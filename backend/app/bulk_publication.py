@@ -5,6 +5,7 @@ the existing publication reservation, revision/rule checks and uncertainty guard
 """
 import time
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from sqlalchemy import select
@@ -170,13 +171,21 @@ def exclusion_reason(db, review, draft, rules):
     return ''
 
 
+def owner_content_issues(review, product, reply):
+    """An owner may retain existing wording; factual and usage conflicts stay blocked."""
+    style_only = {'убрать повторную благодарность', 'исправить согласование частей предложения'}
+    if not re.search(r'по инструкции|распылите|дозировк|время выдержки', reply.lower()):
+        style_only.add('для оценки без текста нужна краткая благодарность без инструкции и полного названия')
+    return [issue for issue in semantic_reply_issues(review, product, reply) if issue not in style_only]
+
+
 def owner_review_reason(db, review, draft, rules):
     """Human approval can replace an unavailable automated verdict, never known content errors."""
     if (review.marketplace != 'wb' or review.is_answered or
             review.status not in ('draft_ready', 'manual_review')):
         return 'not_ready'
     try:
-        if validate_reply(draft.text) != draft.text or semantic_reply_issues(review, db.get(Product, review.product_id), draft.text):
+        if validate_reply(draft.text) != draft.text or owner_content_issues(review, db.get(Product, review.product_id), draft.text):
             return 'content_check'
     except ValueError:
         return 'content_check'
