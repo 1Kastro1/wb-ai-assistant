@@ -24,12 +24,14 @@ def seed_error(rating=5, **extra):
 def test_outage_is_separate_from_personal_review_and_preserves_low_rating(client):
     seed_error()
     assert client.get('/reviews/page', params={'manual_only': True}).json()['total'] == 0
+    assert client.get('/work-queue', params={'view':'manual'}).json()['total'] == 0
     assert client.get('/reviews/page', params={'technical_only': True}).json()['total'] == 1
     assert client.get('/reviews/page', params={'manual_only': True, 'technical_only': True}).json()['total'] == 1
     with Session() as db:
         db.get(Review, 'r').rating = 3
         db.commit()
     assert client.get('/reviews/page', params={'manual_only': True}).json()['total'] == 1
+    assert client.get('/work-queue', params={'view':'manual'}).json()['total'] == 1
 
 
 @pytest.mark.parametrize('defect', ['text_issues', 'violations'])
