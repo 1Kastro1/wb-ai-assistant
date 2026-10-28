@@ -119,6 +119,7 @@ async def recheck_step(job_id, session_factory=Session):
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     with session_factory() as db:
         job = db.get(Job, job_id); state = dict(job.result or {})
+        check_only = bool(state.get('check_only'))
         cursor = state.get('cursor', 0); ids = state.get('draft_ids', [])
         did = ids[cursor] if cursor < len(ids) else None
         draft = db.get(Draft, did) if did else None
@@ -136,7 +137,7 @@ async def recheck_step(job_id, session_factory=Session):
             assess = (lambda value: assess_question_answer(review, product, value, facts, owner_rules=rules)) if question else (lambda value: assess_reply(review, product, value, facts))
             protected = manually_edited(draft)
             answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
-                assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')), check_seconds=600)
+                assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')), check_seconds=120 if check_only else 600, check_only=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
@@ -144,8 +145,10 @@ async def recheck_step(job_id, session_factory=Session):
                 return False
             # Never apply a model rewrite to an employee's/manual answer, nor
             # allow a model repair that fails the independent semantic checks.
+            if rules != matching_owner_rules(db, product, for_questions=question):
+                return False
             checked = assess(answer)
-            if answer != draft.text and (protected or not checked['passed']):
+            if answer != draft.text and (check_only or protected or not checked['passed']):
                 verdict = {**verdict, 'passed': False, 'checked': False,
                            'issues': ['Предложенный вариант требует ручной проверки; исходный текст сохранён']}
                 answer = draft.text
@@ -162,6 +165,18 @@ async def recheck_step(job_id, session_factory=Session):
     with session_factory() as db:
         job = db.get(Job, job_id)
         state = dict(job.result or {})
+        from .rule_retry import technical_check
+        draft = db.get(Draft, did) if did else None
+        review = db.get(Review, rid) if rid else None
+        retry = bool(check_only and draft and review and not review.is_answered and review.status != 'publishing'
+                     and technical_check(draft.quality) and state.get('check_retries', 0) < 2)
+        if retry:
+            count = state.get('check_retries', 0) + 1
+            state.update(check_retries=count, retry_at=time.time() + 60 * (5 ** (count - 1)),
+                         updated_at=now(), message='Сервис проверки не ответил; сохранённый текст ожидает повтора')
+            job.result, job.status = state, 'queued'
+            db.commit()
+            return
         state.update(cursor=cursor + 1, checked=cursor + 1, passed=state.get('passed', 0) + int(passed), updated_at=now())
         state['message'] = f'Проверка правил: {cursor + 1} из {len(ids)}'
         job.result, job.progress = state, round(100 * (cursor + 1) / max(1, len(ids)))

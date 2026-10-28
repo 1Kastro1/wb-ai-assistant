@@ -31,12 +31,30 @@ test('store-specific product panels have distinct sibling keys on every marketpl
  }
 });
 const Card=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx')).default;
+
+test('complaint products are full accessible buttons with exact identity, counts and keyboard focus',()=>{
+ const Problems=loadComponent(path.join(__dirname,'../app/ProblemProducts.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Problems,{products:[{id:'exact-product',name:'Kangaroo Profoam',brand:'KANGAROO',negative:12,average:2.2}],loading:false,onSelect(){},onAttention(){}}));
+ assert(html.includes('Показать негативные отзывы о товаре Kangaroo Profoam'));
+ assert(html.includes('problem-product-count'));assert(html.includes('12'));assert(html.includes('отзывов 1–3★'));
+ assert(html.includes('Средняя оценка 2.2'));
+ const source=fs.readFileSync(path.join(__dirname,'../app/ProblemProducts.tsx'),'utf8');
+ assert(source.includes('onClick={()=>onSelect(p)}'));
+});
 function render(overrides={}){
  const review={id:'r',product_id:'p',product:{name:'Очиститель',brand:'KANGAROO'},rating:5,text:'',risk:'NORMAL',created_at:'2026-10-13',draft:{text:'Спасибо за оценку!',revision:2,quality:{passed:true},edits:[{at:'2026-10-13',old:'Прежний текст',new:'Новый текст'}]},...overrides.review};
  return renderToStaticMarkup(React.createElement(Card,{review,checked:false,toggle(){},busy:false,assistantEnabled:true,canManage:true,generating:false,generationError:'',generate(){},save(){},feedback(){},...overrides,review}));
 }
 test('rating-only card removes the empty customer block',()=>{const html=render();assert(!html.includes('ОТЗЫВ ПОКУПАТЕЛЯ'));assert(html.includes('Оценка без текста'));assert(html.includes('Готов к отправке'))});
 test('low-rated draft needs review despite a passed text score',()=>{const html=render({review:{rating:2,text:'Плохое качество'}});assert(html.includes('Нужна проверка'));assert(!html.includes('Готов к отправке'));assert(!html.includes('textarea'))});
+
+test('positive technical failure is not labelled a negative review and offers text-preserving check',()=>{
+ const quality={passed:false,owner_rules:{matched:28,status:'error',technical_error:true,passed:false}};
+ const html=render({recheck:async()=>{},generationError:'Открыть',review:{text:'Все супер!',draft:{text:'Добрый день! Спасибо!',quality}}});
+ assert(html.includes('Сбой проверки правил'));assert(html.includes('Перепроверить правила'));
+ const checked=render({review:{draft:{text:'Добрый день! Спасибо!',model:'safety-fallback-1.2',quality:{passed:true,repair_audit:{rules_rechecked_at:'now'}}}}});
+ assert(checked.includes('Готов к отправке'));
+});
 test('collapsed rows do not mount editors or edit history',()=>{const html=render();assert(!html.includes('textarea'));assert(!html.includes('История правок'));assert(!html.includes('Прежний текст'));assert(!html.includes(' open='));assert(html.includes('Открыть ответ'))});
 test('generation retains text and disables editor',()=>{const html=render({generating:true,busy:true});assert(html.includes('Готовится'));assert(html.includes('Спасибо за оценку!'));assert(/textarea[^>]+disabled/.test(html));assert(html.includes('0 сек.'))});
 test('recoverable waiting failure retains text and offers continuation',()=>{const html=render({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));assert(html.includes('Спасибо за оценку!'));assert(html.includes('Предыдущий ответ сохранён'))});

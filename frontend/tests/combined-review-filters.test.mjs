@@ -1,7 +1,25 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams,lowRatingReviewFilters,reviewAnswerFilters} from '../app/review-filters.mjs';
+import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams,lowRatingReviewFilters,reviewAnswerFilters,negativeProductFilters} from '../app/review-filters.mjs';
 import {readViewPreferences} from '../app/workspace-data.mjs';
+
+test('product complaints drill down by exact product and low ratings, retaining the dashboard period',()=>{
+ const f=negativeProductFilters({id:'yandex:shop:123',name:'Очиститель'},30),p=reviewFilterParams(f);
+ assert.equal(p.get('product_id'),'yandex:shop:123');assert.equal(p.get('days'),'30');
+ assert.deepEqual(p.getAll('ratings'),['1','2','3']);assert.equal(p.has('answer_status'),false);
+ assert.deepEqual(readViewPreferences({getItem:()=>JSON.stringify({reviewFilters:f})},'shop').reviewFilters,f);
+ const cleared=reviewFilterParams({...f,product:null});assert(!cleared.has('product_id'));assert(!cleared.has('days'));
+ assert.deepEqual(cleared.getAll('ratings'),['1','2','3']);
+});
+
+test('technical checks are separate, persistent and removable without clearing personal review',()=>{
+ const f={...emptyReviewFilters(),technical:true,manual:true,brands:['KANGAROO']};
+ assert.equal(reviewFilterParams(f).get('technical_only'),'true');
+ assert.equal(reviewFilterParams(f).get('manual_only'),'true');
+ assert.deepEqual(readViewPreferences({getItem:()=>JSON.stringify({reviewFilters:f})},'shop').reviewFilters,f);
+ assert.equal(reviewFilterParams({...f,technical:false}).has('technical_only'),false);
+ assert.equal(reviewFilterParams({...f,technical:false}).get('manual_only'),'true');
+});
 
 test('answer tabs retain independent filters and persist published state',()=>{
  const base={...emptyReviewFilters(),ratings:['4'],brands:['EIKOSHA'],drafts:['generated']};
@@ -50,4 +68,3 @@ test('generated reply filter is independent, persisted and treats both choices a
 test('text and multiple ratings travel as independent server conditions',()=>{const f={...emptyReviewFilters(),ratings:['1','2','3'],text:['with_text'],brands:['A, B','EIKOSHA']};const p=reviewFilterParams(f);assert.deepEqual(p.getAll('ratings'),['1','2','3']);assert.equal(p.get('text_status'),'with_text');assert.deepEqual(p.getAll('brands'),['A, B','EIKOSHA']);assert.equal(reviewFilterParams(emptyReviewFilters()).toString(),'')});
 test('both text or answer options mean either, ratings remain constrained',()=>{const p=reviewFilterParams({ratings:['2'],text:['with_text','rating_only'],answers:['answered','unanswered']});assert.equal(p.has('text_status'),false);assert.equal(p.has('answer_status'),false);assert.deepEqual(p.getAll('ratings'),['2'])});
 test('saved combined filters survive restore and reject malformed values',()=>{const filters={...emptyReviewFilters(),ratings:['2'],text:['with_text'],manual:true};assert.deepEqual(readViewPreferences({getItem:()=>JSON.stringify({reviewFilters:filters})},'store-a').reviewFilters,filters);assert.deepEqual(normalizeReviewFilters({ratings:['0','2','2',null],brands:'bad',manual:'true'}),{...emptyReviewFilters(),ratings:['2']})});
-

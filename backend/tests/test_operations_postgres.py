@@ -12,6 +12,33 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_technical_filter_never_hides_low_ratings_or_content_defects(self):
+        from app.services import manual_review_condition, technical_review_condition
+        url = make_url(os.environ['DATABASE_URL'])
+        self.assertEqual(url.database, 'wb_workbench_tests')
+        engine = create_engine(url); Base.metadata.create_all(engine); factory = sessionmaker(engine)
+        prefix = 'rule-retry-' + uuid4().hex
+        try:
+            with factory() as db:
+                db.add(Product(id=prefix, name='Test')); db.flush()
+                for suffix, rating, issues in [('positive',5,[]),('negative',3,[]),('defect',5,['Неверный ответ'])]:
+                    db.add(Review(id=prefix+suffix, wb_review_id=prefix+suffix, product_id=prefix,
+                        text='Test', rating=rating, status='manual_review', risk='NORMAL', manual=False))
+                    db.flush()
+                    db.add(Draft(id=prefix+suffix, review_id=prefix+suffix, text='Reply', original='Reply',
+                        model='safety-fallback-1.2', quality={'passed':False,'text_issues':issues,
+                        'owner_rules':{'passed':False,'technical_error':True,'violations':[]}}))
+                db.commit()
+                base = select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(Review.id.startswith(prefix))
+                self.assertEqual(set(db.scalars(base.where(manual_review_condition()))), {prefix+'negative', prefix+'defect'})
+                self.assertEqual(len(list(db.scalars(base.where(technical_review_condition())))), 3)
+        finally:
+            with factory() as db:
+                db.execute(delete(Draft).where(Draft.id.startswith(prefix)))
+                db.execute(delete(Review).where(Review.id.startswith(prefix)))
+                db.execute(delete(Product).where(Product.id == prefix)); db.commit()
+            engine.dispose()
+
     def test_bulk_manifest_double_click_and_pagination_on_postgresql(self):
         from concurrent.futures import ThreadPoolExecutor
         from unittest.mock import patch

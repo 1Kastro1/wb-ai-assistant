@@ -255,16 +255,29 @@ def remember_web_instruction_sources(product, sources):
     } for source in sources]
 
 
+def technical_review_condition():
+    rules = Draft.quality['owner_rules']
+    return (Review.is_answered == False) & (func.coalesce(rules['passed'].as_boolean(), False) == False) & or_(
+        func.coalesce(rules['technical_error'].as_boolean(), False) == True,
+        rules['status'].as_string() == 'error')
+
+
 def manual_review_condition():
-    return (Review.is_answered == False) & or_(Review.rating <= 3, Review.manual == True,
-        Review.risk != 'NORMAL', Review.status == 'manual_review',
-        Draft.quality['passed'].as_boolean() == False, Draft.model.startswith('safety-fallback'))
+    technical = func.coalesce(technical_review_condition(), False)
+    # Content defects survive an outage; the outage itself is not a complaint.
+    defects = func.coalesce(Draft.quality['text_issues'].as_string(), '[]') != '[]'
+    violations = func.coalesce(Draft.quality['owner_rules']['violations'].as_string(), '[]') != '[]'
+    return (Review.is_answered == False) & or_((Review.rating <= 3) & ~Review.marketplace.like('%_question'), Review.manual == True,
+        Review.risk != 'NORMAL', defects, violations,
+        (~technical) & or_(Review.status == 'manual_review',
+            Draft.quality['passed'].as_boolean() == False,
+            Draft.model.startswith('safety-fallback') & (func.coalesce(Draft.quality['repair_audit']['rules_rechecked_at'].as_string(), '') == '')))
 
 
 def _review_query(filters):
     view = filters.get('view', 'all')
     query = select(Review).join(Product)
-    if view in ('manual', 'wrong_item', 'no_effect', 'odor') or filters.get('manual_only'):
+    if view in ('manual', 'wrong_item', 'no_effect', 'odor') or filters.get('manual_only') or filters.get('technical_only') or filters.get('attention'):
         query = query.outerjoin(Draft, Draft.review_id == Review.id)
     conditions = [Review.rating <= filters.get('max_rating', 5), ~Review.marketplace.like('%_question')]
     if filters.get('ratings'):
@@ -281,15 +294,18 @@ def _review_query(filters):
         saved_text = func.trim(func.replace(func.replace(func.replace(func.coalesce(Draft.text, ''), '\n', ''), '\r', ''), '\t', ''))
         has_saved_reply = select(Draft.id).where(Draft.review_id == Review.id, saved_text != '').correlate(Review).exists()
         conditions.append(has_saved_reply if filters['draft_status'] == 'generated' else ~has_saved_reply)
-    if filters.get('manual_only'):
-        conditions.append(manual_review_condition())
+    if filters.get('manual_only') or filters.get('technical_only'):
+        checks = []
+        if filters.get('manual_only'): checks.append(manual_review_condition())
+        if filters.get('technical_only'): checks.append(technical_review_condition())
+        conditions.append(or_(*checks))
     if filters.get('q'):
         q = filters['q']
         conditions.append(Review.text.contains(q, autoescape=True) | Product.name.contains(q, autoescape=True) | Product.brand.contains(q, autoescape=True))
     if filters.get('unanswered'):
         conditions.append(Review.is_answered == False)
     if filters.get('attention'):
-        conditions.append((Review.rating <= 3) | (Review.manual == True) | (Review.risk != 'NORMAL') | (Review.status == 'manual_review'))
+        conditions.append(manual_review_condition())
     if filters.get('product_id'):
         conditions.append(Review.product_id == filters['product_id'])
     if filters.get('account_id'):
@@ -361,7 +377,7 @@ def review_items(db, rows):
     return result
 
 
-def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids='', ratings=None, text_status='all', answer_status='all', draft_status='all', manual_only=False, brands=None, categories=None):
+def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids='', ratings=None, text_status='all', answer_status='all', draft_status='all', manual_only=False, brands=None, categories=None, technical_only=False):
     query = _review_query(locals())
     rows = db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(max(0, offset)).limit(min(200, max(1, limit)))).all()
     return review_items(db, rows)
@@ -1077,6 +1093,10 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         draft = Draft(id=str(uuid4()), review_id=review_id, text=reply, original=reply, model=model, quality=quality)
         db.add(draft)
     review.status = 'manual_review' if review.manual or not quality['passed'] or model.startswith('safety-fallback') else 'draft_ready'
+    from .rule_retry import technical_check, enqueue
+    if technical_check(quality):
+        db.flush()
+        enqueue(db, draft, review)
     record_outcome(db, review, draft)
     db.commit()
     return public(draft)
