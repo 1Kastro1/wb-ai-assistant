@@ -1,7 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams} from '../app/review-filters.mjs';
+import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams,lowRatingReviewFilters} from '../app/review-filters.mjs';
 import {readViewPreferences} from '../app/workspace-data.mjs';
+
+test('personal review queue combines low ratings, saved drafts and no seller reply',()=>{
+ const f=lowRatingReviewFilters(),p=reviewFilterParams(f);
+ assert.deepEqual(p.getAll('ratings'),['1','2','3']);
+ assert.equal(p.get('draft_status'),'generated');
+ assert.equal(p.get('answer_status'),'unanswered');
+ assert.deepEqual(f.brands,[]);
+ assert.equal(f.manual,false); // Do not hide low ratings lacking a manual marker.
+});
 
 test('generated reply filter is independent, persisted and treats both choices as all',()=>{
  const f={...emptyReviewFilters(),drafts:['generated'],answers:['unanswered']};
@@ -15,3 +24,4 @@ test('generated reply filter is independent, persisted and treats both choices a
 test('text and multiple ratings travel as independent server conditions',()=>{const f={...emptyReviewFilters(),ratings:['1','2','3'],text:['with_text'],brands:['A, B','EIKOSHA']};const p=reviewFilterParams(f);assert.deepEqual(p.getAll('ratings'),['1','2','3']);assert.equal(p.get('text_status'),'with_text');assert.deepEqual(p.getAll('brands'),['A, B','EIKOSHA']);assert.equal(reviewFilterParams(emptyReviewFilters()).toString(),'')});
 test('both text or answer options mean either, ratings remain constrained',()=>{const p=reviewFilterParams({ratings:['2'],text:['with_text','rating_only'],answers:['answered','unanswered']});assert.equal(p.has('text_status'),false);assert.equal(p.has('answer_status'),false);assert.deepEqual(p.getAll('ratings'),['2'])});
 test('saved combined filters survive restore and reject malformed values',()=>{const filters={...emptyReviewFilters(),ratings:['2'],text:['with_text'],manual:true};assert.deepEqual(readViewPreferences({getItem:()=>JSON.stringify({reviewFilters:filters})},'store-a').reviewFilters,filters);assert.deepEqual(normalizeReviewFilters({ratings:['0','2','2',null],brands:'bad',manual:'true'}),{...emptyReviewFilters(),ratings:['2']})});
+

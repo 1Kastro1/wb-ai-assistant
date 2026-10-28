@@ -8,11 +8,11 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from sqlalchemy import select
+from sqlalchemy import select, func
 from .db import Session, Action, Job, Review, Draft, Product, Publication, StoreProfile, User, setting, now
 from .owner_reply_rules import matching_owner_rules
 from .owner_reply_policy import saved_rule_quality, fingerprint
-from .reply_policy import semantic_reply_issues
+from .reply_policy import semantic_reply_issues, analyze_customer_message
 from .safety import validate_reply
 
 PREPARE_KIND = 'wb_publish_prepare'
@@ -35,25 +35,44 @@ def parent_for(db, aid, store_id):
     return parent
 
 
-def start(db, store_id, actor_id, include_excluded=False):
+def scope_condition(rating_scope):
+    return func.coalesce(Action.payload['rating_scope'].as_string(), 'all') == rating_scope
+
+
+def rating_scope_reason(review, rating_scope):
+    # Low ratings always use the ordinary, individually reviewed publication flow.
+    if review.rating <= 3:
+        return 'low_rating'
+    if rating_scope == 'positive':
+        analysis = analyze_customer_message(review.text, review.rating)
+        if (review.rating not in (4, 5) or analysis['sentiment'] != 'positive' or
+                analysis['complaints'] or review.safety_critical or review.risk != 'NORMAL'):
+            return 'manual_review'
+    return ''
+
+
+def start(db, store_id, actor_id, include_excluded=False, rating_scope='all'):
+    if rating_scope not in ('all', 'positive'):
+        raise ValueError('Неизвестный состав отзывов')
     # Serialize double clicks across API processes, without a table-wide lock.
     store = db.scalar(select(StoreProfile).where(StoreProfile.id == store_id).with_for_update())
-    if not store or store.provider != 'wb':
-        raise ValueError('Массовая отправка доступна только для Wildberries')
+    if not store or store.provider not in ('wb', 'ozon', 'yandex'):
+        raise ValueError('Массовая отправка недоступна для этого магазина')
     actor = db.get(User, actor_id)
     if include_excluded and (not actor or not actor.enabled or actor.role != 'owner'):
         raise ValueError('Включить исключённые ответы может только владелец')
     existing = db.scalar(select(Action).where(Action.kind == PARENT_KIND,
         Action.status.in_(('preparing', 'pending', 'sending')),
-        Action.payload['account_id'].as_string() == store_id).order_by(Action.created_at.desc()))
+        Action.payload['account_id'].as_string() == store_id,
+        scope_condition(rating_scope)).order_by(Action.created_at.desc()))
     if existing:
         if bool(existing.payload.get('include_excluded')) != include_excluded:
             raise ValueError('Сначала отмените текущий пакет, чтобы изменить состав')
         return existing
     aid, jid = str(uuid4()), str(uuid4())
     parent = Action(id=aid, kind=PARENT_KIND, status='preparing', payload={
-        'account_id': store_id, 'total': 0, 'scanned': 0, 'excluded': 0,
-        'include_excluded': include_excluded, 'included_excluded': 0,
+        'account_id': store_id, 'provider': store.provider, 'total': 0, 'scanned': 0, 'excluded': 0,
+        'include_excluded': include_excluded, 'included_excluded': 0, 'rating_scope': rating_scope,
         'prepare_job_id': jid, 'requested_by': actor_id}, result={})
     db.add_all([parent, Job(id=jid, kind=PREPARE_KIND, result={
         'account_id': store_id, 'parent_id': aid, 'requested_by': actor_id, 'cursor': ''})])
@@ -67,6 +86,7 @@ def view(db, parent):
     job_id = payload.get('send_job_id') if parent.status == 'sending' else payload.get('prepare_job_id')
     job = db.get(Job, job_id) if job_id else None
     return {'id': parent.id, 'status': parent.status, 'store_id': payload['account_id'],
+        'provider': payload.get('provider', 'wb'),
         **{key: payload.get(key, 0) for key in ('total', 'scanned', 'excluded')},
         **{key: result.get(key, 0) for key in ('processed', 'published', 'skipped', 'uncertain')},
         'message': result.get('message', ''),
@@ -75,6 +95,7 @@ def view(db, parent):
         'blocked': bool(setting(db, 'safe_mode', False) or setting(db, 'test_mode', True) or not REAL_PUBLISH),
         'prepared_at': payload.get('prepared_at'),
         'include_excluded': bool(payload.get('include_excluded')),
+        'rating_scope': payload.get('rating_scope', 'all'),
         'included_excluded': payload.get('included_excluded', 0)}
 
 
@@ -142,8 +163,10 @@ def eligible(db, review, draft, rules):
 
 
 def exclusion_reason(db, review, draft, rules):
-    if review.marketplace != 'wb' or review.is_answered:
+    if review.marketplace not in ('wb', 'ozon', 'yandex') or review.is_answered:
         return 'not_ready'
+    if review.marketplace == 'yandex' and len(draft.text) > 4096:
+        return 'content_check'  # Never let the provider truncate an approved saved text.
     if review.rating < 4:
         return 'low_rating'
     if review.manual or review.safety_critical or review.risk != 'NORMAL':
@@ -181,9 +204,11 @@ def owner_content_issues(review, product, reply):
 
 def owner_review_reason(db, review, draft, rules):
     """Human approval can replace an unavailable automated verdict, never known content errors."""
-    if (review.marketplace != 'wb' or review.is_answered or
+    if (review.marketplace not in ('wb', 'ozon', 'yandex') or review.is_answered or
             review.status not in ('draft_ready', 'manual_review')):
         return 'not_ready'
+    if review.marketplace == 'yandex' and len(draft.text) > 4096:
+        return 'content_check'
     try:
         if validate_reply(draft.text) != draft.text or owner_content_issues(review, db.get(Product, review.product_id), draft.text):
             return 'content_check'
@@ -209,6 +234,8 @@ def owner_approved_item(db, parent_id, actor_id, review, draft, item, rules):
             parent.payload.get('include_excluded') and parent.result.get('excluded_ack') and
             parent.result.get('confirmed_by') == actor_id and actor and actor.enabled and actor.role == 'owner' and
             parent.payload['account_id'] == review.wb_account_id and
+            parent.payload.get('provider', 'wb') == review.marketplace and
+            not rating_scope_reason(review, parent.payload.get('rating_scope', 'all')) and
             item.get('approval_snapshot') == approval_snapshot(review, rules) and
             draft.id == item['draft_id'] and draft.review_id == review.id and
             draft.revision == item['revision'] and draft.text == item['text']):
@@ -235,7 +262,7 @@ def prepare_step(job_id):
             if 'exclusion_legacy_cursor' not in parent.payload:
                 parent.payload = {**parent.payload, 'exclusion_legacy_cursor': cursor}
             rows = db.execute(select(Review, Draft).join(Draft, Draft.review_id == Review.id).where(
-                Review.wb_account_id == parent.payload['account_id'], Review.marketplace == 'wb',
+                Review.wb_account_id == parent.payload['account_id'], Review.marketplace == parent.payload.get('provider', 'wb'),
                 Review.is_answered == False, Review.id > cursor).order_by(Review.id).limit(PAGE_SIZE)).all()
             if not rows:
                 parent.status = 'pending' if parent.payload['total'] else 'empty'
@@ -244,6 +271,11 @@ def prepare_step(job_id):
                 db.commit(); return
             items, excluded, included_excluded = [], [], 0
             for review, draft in rows:
+                rating_reason = rating_scope_reason(review, parent.payload.get('rating_scope', 'all'))
+                if rating_reason:
+                    excluded.append({'review_id': review.id, 'reason': rating_reason,
+                                     'at': now(), 'retrospective': False})
+                    continue
                 if review.product_id not in rules_cache:
                     rules_cache[review.product_id] = matching_owner_rules(db, db.get(Product, review.product_id))
                 try:
@@ -256,7 +288,8 @@ def prepare_step(job_id):
                 attempted = db.scalar(select(Publication.id).where(Publication.review_id == review.id)) if allowed else None
                 if allowed and not attempted:
                     item = {'review_id': review.id, 'draft_id': draft.id, 'revision': draft.revision,
-                            'text': draft.text, 'rating': review.rating, 'manual': review.manual, 'kind': 'review'}
+                            'text': draft.text, 'rating': review.rating, 'manual': review.manual, 'kind': 'review',
+                            'review_text': review.text}
                     if parent.payload.get('include_excluded'):
                         item.update(approval_snapshot=approval_snapshot(review, rules_cache[review.product_id]),
                                     manifest_index=parent.payload['total'] + len(items),
@@ -302,10 +335,10 @@ async def send_step(job_id):
             actor = db.get(User, parent.result['confirmed_by'])
             permissions = (actor.permissions or []) if actor else []
             permitted = (actor and actor.enabled and
-                (actor.role == 'owner' or '*' in permissions or 'wb:operate' in permissions
-                 or not permissions and actor.position == 'Менеджер WB') and
+                (actor.role == 'owner' or '*' in permissions or (store and store.provider + ':operate' in permissions)
+                 or not permissions and store and actor.position == {'wb':'Менеджер WB','ozon':'Менеджер Ozon','yandex':'Менеджер Яндекс Маркет'}.get(store.provider)) and
                 (actor.role == 'owner' or '*' in (actor.store_ids or []) or parent.payload['account_id'] in (actor.store_ids or [])))
-            if (not store or store.provider != 'wb' or not permitted or
+            if (not store or store.provider != parent.payload.get('provider', 'wb') or not permitted or
                 setting(db, 'safe_mode', False) or setting(db, 'test_mode', True) or not REAL_PUBLISH):
                 parent.status, job.status = 'needs_review', 'completed'
                 parent.result = {**parent.result, 'message': 'Отправка остановлена: проверьте магазин, права и рабочий режим публикации. После проверки подготовьте новый пакет.'}
@@ -330,9 +363,12 @@ async def send_step(job_id):
             outcome, detail = 'skipped', ''
             try:
                 review = db.get(Review, item['review_id'])
-                if not review or review.wb_account_id != parent.payload['account_id'] or review.marketplace != 'wb':
+                if (not review or review.wb_account_id != parent.payload['account_id'] or
+                        review.marketplace != parent.payload.get('provider', 'wb')):
                     raise ValueError('Магазин отзыва изменился')
                 if child.status == 'pending':
+                    if rating_scope_reason(review, parent.payload.get('rating_scope', 'all')):
+                        raise ValueError('Этот отзыв требует личной проверки и отдельного подтверждения')
                     draft = db.get(Draft, item['draft_id'])
                     rules = matching_owner_rules(db, db.get(Product, review.product_id))
                     owner_approval = bool(draft and owner_approved_item(db, parent.id, parent.result['confirmed_by'], review, draft, item, rules))
@@ -361,9 +397,10 @@ async def send_step(job_id):
             if index + 1 == len(manifest.payload['items']):
                 manifest.status = 'completed'
             job.result = {**job.result, 'processed': parent.result['processed'],
-                'message': 'Отправляем подтверждённые ответы в Wildberries', 'updated_at': now()}
+                'message': 'Отправляем подтверждённые ответы в маркетплейс', 'updated_at': now()}
             job.progress = min(99, round(parent.result['processed'] / max(1, parent.payload['total']) * 100))
             db.commit(); count += 1
             if outcome in ('published', 'uncertain'):
                 await publication_pause()
         job.status = 'queued'; db.commit()
+

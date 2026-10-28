@@ -16,7 +16,7 @@ def owner_package(client):
     return aid
 
 
-def test_owner_can_include_stale_unverified_and_low_rating_without_rewriting(client, prepared):
+def test_low_rating_requires_individual_review_even_in_owner_package(client, prepared):
     with Session() as db:
         review=db.get(Review,'bulk-0000'); review.rating=2; review.manual=True; review.status='manual_review'
         draft=db.get(Draft,'draft-bulk-0000'); draft.quality={'passed':False,'owner_rules':{'technical_error':True,'passed':False,'checked':False}}
@@ -24,18 +24,19 @@ def test_owner_can_include_stale_unverified_and_low_rating_without_rewriting(cli
         db.commit()
     aid=owner_package(client)
     state=client.get('/publications/wb/all?store_id=owner').json()
-    assert state['include_excluded'] and state['total']==105 and state['included_excluded']==1
+    assert state['include_excluded'] and state['total']==104 and state['excluded']==1
     assert client.post(f'/publications/wb/all/{aid}/confirm',json={'store_id':'owner'}).status_code==400
     prepared.publish.assert_not_awaited()
     response=client.post(f'/publications/wb/all/{aid}/confirm',json={'store_id':'owner','excluded_ack':True})
     assert response.status_code==200, response.text
     with Session() as db: jid=db.get(Action,aid).payload['send_job_id']
     finish(jid)
-    assert prepared.publish.await_count==105
+    assert prepared.publish.await_count==104
     with Session() as db:
         draft=db.get(Draft,'draft-bulk-0000')
         assert draft.text==original and draft.quality['owner_rules']['technical_error']
         assert db.get(Action,aid).result['excluded_ack'] is True
+        assert not db.scalar(select(Publication).where(Publication.review_id=='bulk-0000'))
 
 
 @pytest.mark.parametrize('changed',['text','rules','buyer','role'])
@@ -107,3 +108,4 @@ def test_owner_mode_retains_instruction_and_contradiction_checks(client,prepared
         db.commit()
     aid=owner_package(client)
     assert client.get('/publications/wb/all?store_id=owner').json()['total']==104
+
