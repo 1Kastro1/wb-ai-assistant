@@ -1687,10 +1687,10 @@ def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_ratin
 
 
 @app.get('/reviews/page')
-def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'with_text', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = '', ratings: list[int] = Query(default=[]), text_status: Literal['all', 'with_text', 'rating_only'] = 'all', answer_status: Literal['all', 'answered', 'unanswered'] = 'all', draft_status: Literal['all', 'generated', 'missing'] = 'all', manual_only: bool = False, brands: list[str] = Query(default=[]), categories: list[str] = Query(default=[])):
+def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'with_text', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = '', ratings: list[int] = Query(default=[]), text_status: Literal['all', 'with_text', 'rating_only'] = 'all', answer_status: Literal['all', 'answered', 'unanswered'] = 'all', draft_status: Literal['all', 'generated', 'missing'] = 'all', manual_only: bool = False, technical_only: bool = False, brands: list[str] = Query(default=[]), categories: list[str] = Query(default=[])):
     if len(ratings) > 5 or any(r < 1 or r > 5 for r in ratings) or any(len(values) > 100 or any(len(value) > 200 for value in values) for values in (brands, categories)):
         raise HTTPException(422, 'Недопустимые значения фильтра')
-    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids, ratings=ratings, text_status=text_status, answer_status=answer_status, draft_status=draft_status, manual_only=manual_only, brands=brands, categories=categories)
+    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids, ratings=ratings, text_status=text_status, answer_status=answer_status, draft_status=draft_status, manual_only=manual_only, technical_only=technical_only, brands=brands, categories=categories)
 
 
 @app.get('/reviews/facets')
@@ -2197,6 +2197,22 @@ def draft_edit(did: str, body: DraftEdit, auth: MARKET_OPERATOR, db: DB):
 class DraftFeedback(Payload):
     rating: str = Field(pattern='^(positive|negative)$')
     reasons: list[str] = Field(default_factory=list, max_length=5)
+
+
+@app.post('/drafts/{did}/recheck-rules')
+def retry_draft_rules(did: str, background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB):
+    existing = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
+    review = db.get(Review, existing.review_id) if existing else None
+    if not review or review.wb_account_id != active_store(db, auth):
+        raise HTTPException(404, 'Черновик не найден')
+    can_operate_store(auth, db.get(StoreProfile, review.wb_account_id))
+    if review.is_answered or review.status == 'publishing':
+        raise HTTPException(409, 'Ответ уже отправляется или опубликован')
+    from .rule_retry import enqueue
+    job = enqueue(db, existing, review, auth['user_id'])
+    db.commit()
+    background.add_task(run_job_queue)
+    return public(job)
 
 
 @app.post('/drafts/{did}/feedback')
@@ -3041,6 +3057,5 @@ async def portable_import(auth: OWNER, password: str = Form(...), file: UploadFi
 def export_reviews(auth: AUTH, db: DB):
     # Explicit allowlist; never export ORM internals, accounts, settings or sessions.
     return [{'id': r.id, 'rating': r.rating, 'text': mask_vin(r.text), 'status': r.status} for r in db.scalars(select(Review))]
-
 
 
