@@ -2594,17 +2594,20 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
     if body.product_id and not product_owned(db,db.get(StoreProfile,active_store(db,auth)),product):raise HTTPException(404,'Товар не найден в выбранном магазине')
     facts=trusted_product_facts(db,product) if body.product_id else []
     for_questions = body.kind == 'QUESTION_RULE'
-    rules = matching_owner_rules(db, product, for_questions=for_questions) + [body.text]
+    rules = list(dict.fromkeys([*matching_owner_rules(db, product, for_questions=for_questions), body.text]))
     facts += owner_business_facts(product, rules)
     if for_questions:
         from .rule_preview import preview_question
         return await preview_question(db, product, body.example, rules, facts, active_store(db, auth))
     review=Review(id='preview',product_id=product.id,rating=body.rating,text=body.example,risk=classify(body.example,product.name+' '+product.category)['risk'])
-    reply=rule_reply(review,product,facts=facts)
+    from .rule_execution import select_rules, positive_template
+    context_rules = select_rules(rules, review, product)[0]
+    local_positive = positive_template(review, rules, product=product)
+    reply=local_positive or rule_reply(review,product,facts=facts)
     note='Предварительный ответ. Правило и ответ не сохраняются.'
-    if review.risk=='NORMAL':
+    if review.risk=='NORMAL' and not local_positive:
         try:
-            reply=await asyncio.wait_for(ollama.chat([{'role':'system','content':customer_reply_policy()+'\nПравила владельца: '+json.dumps(rules,ensure_ascii=False)},{'role':'user','content':json.dumps({'review_data':body.example,'rating':body.rating,'product':product.name,'verified_facts':facts},ensure_ascii=False)}]),timeout=12)
+            reply=await asyncio.wait_for(ollama.chat([{'role':'system','content':customer_reply_policy()+'\nПравила владельца: '+json.dumps(context_rules,ensure_ascii=False)},{'role':'user','content':json.dumps({'review_data':body.example,'rating':body.rating,'product':product.name,'verified_facts':facts},ensure_ascii=False)}]),timeout=12)
         except Exception:
             reply=reply or safe_fallback_reply(review,product,facts=facts)
             note='Показан ответ по проверенным сценариям. Свободную формулировку правила сейчас не удалось проверить; ограничения на слова применены.'
@@ -2617,7 +2620,7 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
     reply, rule_quality = await enforce_owner_rules(
         reply, review, product, rules, facts,
         lambda value: assess_reply(review,product,value,facts),
-        protected=review.risk != 'NORMAL', check_seconds=5)
+        protected=review.risk != 'NORMAL', check_seconds=5, allow_fast_positive=bool(local_positive))
     quality = attach_rule_quality(assess_reply(review,product,reply,facts), rule_quality)
     return {'text':reply,'quality':quality,'note':note}
 
