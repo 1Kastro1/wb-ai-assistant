@@ -1,6 +1,7 @@
 'use client';
 import {useState,useRef} from 'react';
 import {api} from './client';
+import {ruleTitle} from './presentation.mjs';
 
 type Row=Record<string,any>;
 type RuleKind='REVIEW_RULE'|'QUESTION_RULE';
@@ -33,7 +34,7 @@ export default function MemoryRules({items,products,owner,onRefresh,onPropose,on
    }else{await onPropose(rule.trim(),scope,audience);setRule('');setResult(null);setSuccess('Правило отправлено владельцу на подтверждение.');}
   })}finally{submitting.current=false}
  }
- return <section>
+ return <section className="rules-workspace">
   <div className="section-title"><div><p className="eyebrow">ПРАВИЛА ВАШЕГО МАГАЗИНА</p><h1>Правила ответов</h1><p className="muted">Создавайте правила отдельно для отзывов и вопросов. Каждый раздел действует на Wildberries, Ozon и Яндекс Маркете. Область товара, бренда или категории выбирается независимо от типа ответа.</p></div><span className="pill">{sectionItems.filter(m=>m.enabled).length} действуют</span></div>
   <div className="segmented rule-kind-tabs" role="tablist" aria-label="Тип правил">
    {(['REVIEW_RULE','QUESTION_RULE'] as RuleKind[]).map(value=><button key={value} id={'rules-'+value} role="tab" aria-selected={audience===value} aria-pressed={audience===value} aria-controls="rule-kind-panel" disabled={busy} onClick={()=>changeAudience(value)}>{kindLabels[value]} <span className="pill">{items.filter(m=>matchesKind(m,value)&&m.enabled).length}</span></button>)}
@@ -46,8 +47,8 @@ export default function MemoryRules({items,products,owner,onRefresh,onPropose,on
     <div className="segmented" role="group" aria-label="Область правил">{[['all','Все'],['global','Общие'],['brand','Бренды'],['product','Товары'],['category','Категории']].map(([id,label])=><button key={id} aria-pressed={filter===id} onClick={()=>setFilter(id)}>{label}</button>)}</div>
     <div style={{marginTop:16}}>{visible.map(m=><article key={m.id} className={'card rule-card '+(!m.enabled?'disabled':'')}>
      <div className="card-heading"><span className="pill">{scopes[(m.scope||'global').split(':')[0]]||m.scope}{m.scope?.includes(':')?' · '+m.scope.split(':').slice(1).join(':'):''}</span><label className="rule-switch"><input type="checkbox" role="switch" aria-label={'Включить правило '+m.text.slice(0,60)} checked={Boolean(m.enabled)} disabled={busy||!owner} onChange={e=>{const enabled=e.target.checked;void run(async()=>{await api('/memory/'+encodeURIComponent(m.id)+'/enabled','PATCH',{enabled});await onRefresh()})}}/>{m.enabled?'Включено':'Отключено'}</label></div>
-     <p className="rule-short">{m.text.length>220?m.text.slice(0,220)+'…':m.text}</p>{m.text.length>220&&<details><summary>Полный текст правила</summary><p>{m.text}</p></details>}<label>Применять правило<select aria-label={'Тип правила: '+m.text.slice(0,60)} value={['REVIEW_RULE','QUESTION_RULE'].includes(m.kind)?m.kind:'GLOBAL_RULE'} disabled={busy||!owner} onChange={e=>{const kind=e.target.value;void run(async()=>{await api('/memory/'+encodeURIComponent(m.id)+'/kind','PATCH',{kind});setResult(null);await onRefresh()})}}>{!['REVIEW_RULE','QUESTION_RULE'].includes(m.kind)&&<option value="GLOBAL_RULE" disabled>{kindLabels.GLOBAL_RULE}</option>}<option value="REVIEW_RULE">Только для отзывов</option><option value="QUESTION_RULE">Только для вопросов</option></select></label>
-     <p className="rule-meta">{m.created_by_name?'Добавил: '+m.created_by_name:'Автор старого правила не записан'}{m.created_at?' · '+new Date(m.created_at).toLocaleDateString('ru-RU'):''}{m.updated_by_name?' · Изменил: '+m.updated_by_name:''}</p>
+     <h3 className="rule-title">{ruleTitle(m.text)}</h3><details className="rule-full-text"><summary>Текст и настройки правила</summary><p className="rule-short">{m.text}</p><label>Применять правило<select aria-label={'Тип правила: '+m.text.slice(0,60)} value={['REVIEW_RULE','QUESTION_RULE'].includes(m.kind)?m.kind:'GLOBAL_RULE'} disabled={busy||!owner} onChange={e=>{const kind=e.target.value;void run(async()=>{await api('/memory/'+encodeURIComponent(m.id)+'/kind','PATCH',{kind});setResult(null);await onRefresh()})}}>{!['REVIEW_RULE','QUESTION_RULE'].includes(m.kind)&&<option value="GLOBAL_RULE" disabled>{kindLabels.GLOBAL_RULE}</option>}<option value="REVIEW_RULE">Только для отзывов</option><option value="QUESTION_RULE">Только для вопросов</option></select></label>
+     <p className="rule-meta">{m.created_by_name?'Добавил: '+m.created_by_name:'Автор старого правила не записан'}{m.created_at?' · '+new Date(m.created_at).toLocaleDateString('ru-RU'):''}{m.updated_by_name?' · Изменил: '+m.updated_by_name:''}</p></details>
      <div className="button-row"><button disabled={busy} onClick={()=>{setRule(m.text);setScopeKind((m.scope||'global').split(':')[0]);setTarget((m.scope||'').split(':').slice(1).join(':'));setResult(null);document.getElementById('rule-example')?.focus()}}>Проверить на примере</button>{owner&&<button disabled={busy} onClick={()=>onDelete(m.id)}>Удалить</button>}</div>
     </article>)}</div>
     {!visible.length&&<div className="empty"><h3>{sectionItems.length?'Совпадений нет':questions?'Правил для вопросов пока нет':'Правил для отзывов пока нет'}</h3><p>Измените поиск или предложите новое правило в этом разделе.</p></div>}

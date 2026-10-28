@@ -1,3 +1,4 @@
+import {ruleTitle} from '../app/presentation.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
@@ -6,7 +7,7 @@ const require=createRequire(import.meta.url),fs=require('node:fs'),path=require(
 const file=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../app/MemoryRules.tsx');
 const module={exports:{}};
 const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
-new Function('require','module','exports',code)(name=>name==='./client'?{api(){throw new Error('SSR must not send requests')}}:require(name),module,module.exports);
+new Function('require','module','exports',code)(name=>name==='./presentation.mjs'?{ruleTitle}:name==='./client'?{api(){throw new Error('SSR must not send requests')}}:require(name),module,module.exports);
 const Rules=module.exports.default;
 const items=[{id:'r',text:'REVIEW_ONLY_CONTENT',kind:'REVIEW_RULE',scope:'global',enabled:true},{id:'q',text:'UNIQOM_QUESTION_ONLY_CONTENT',kind:'QUESTION_RULE',scope:'global',enabled:true}];
 const render=initialKind=>renderToStaticMarkup(React.createElement(Rules,{items,products:[],owner:true,initialKind,onRefresh(){},onPropose(){},onDelete(){}}));

@@ -1,10 +1,11 @@
 'use client';
-import {useEffect,useRef,useState} from 'react';
+import {Fragment,useEffect,useRef,useState} from 'react';
 import {api} from './client';
+import {scopeLabel} from './presentation.mjs';
 import {activityDescription} from './activity-labels.mjs';
 type Row=Record<string,any>;
 export function ActivityRows({items}:{items:Row[]}){
- return <div className="activity-feed">{items.map(item=><article className="activity-entry" key={item.id}><span className="activity-avatar" aria-hidden="true">{(item.actor_name||item.username||'П').slice(0,1).toUpperCase()}</span><div className="activity-content"><div className="activity-entry-head"><span><b>{item.actor_name||item.username}</b><small>@{item.username}</small></span><time dateTime={item.timestamp}>{new Date(item.timestamp).toLocaleString('ru-RU')}</time></div><p>{activityDescription(item)}{item.details?.target_username&&<> · @{item.details.target_username}</>}</p>{item.details?.rule&&<details><summary>Текст правила</summary><blockquote>{item.details.rule}</blockquote></details>}{item.details?.scope&&<small>Область: {item.details.scope==='global'?'Все товары':item.details.scope}</small>}</div></article>)}</div>;
+ return <div className="activity-feed">{items.map((item,index)=><Fragment key={item.id}>{(index===0||new Date(items[index-1].timestamp).toLocaleDateString('ru-RU')!==new Date(item.timestamp).toLocaleDateString('ru-RU'))&&<h2 className="activity-day">{new Date(item.timestamp).toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</h2>}<article className="activity-entry" key={item.id}><span className="activity-avatar" aria-hidden="true">{(item.actor_name||item.username||'П').slice(0,1).toUpperCase()}</span><div className="activity-content"><div className="activity-entry-head"><span><b>{item.actor_name||item.username}</b><small>@{item.username}</small></span><time dateTime={item.timestamp}>{new Date(item.timestamp).toLocaleString('ru-RU')}</time></div><p>{activityDescription(item)}{item.details?.target_username&&<> · @{item.details.target_username}</>}</p>{item.details?.rule&&<details><summary>Текст правила</summary><blockquote>{item.details.rule}</blockquote></details>}{item.details?.scope&&<small>Область: {scopeLabel(item.details.scope)}</small>}</div></article></Fragment>)}</div>;
 }
 export default function ActivityHistory({owner,revision=''}:{owner:boolean;revision?:string}){
  const [items,setItems]=useState<Row[]>([]),[category,setCategory]=useState('all'),[query,setQuery]=useState(''),[applied,setApplied]=useState(''),[loading,setLoading]=useState(false),[error,setError]=useState(''),[more,setMore]=useState(false),[before,setBefore]=useState<number|null>(null);

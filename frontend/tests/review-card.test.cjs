@@ -153,3 +153,25 @@ test('full running batch keeps cancellation and progress until server completion
  const html=renderToStaticMarkup(React.createElement(Panel,{job:{id:'running',status:'running',result:{total:44,processed:44}},onCancel:()=>{},onReview:()=>{}}));
  assert(html.includes('Завершаем подготовку'));assert(html.includes('Остановить подготовку'));assert(html.includes('<progress'));assert(!html.includes('Обработка завершена'));
 });
+
+test('compact rules expose their complete text and preserve audience controls',()=>{
+ const Rules=loadComponent(path.join(__dirname,'../app/MemoryRules.tsx')).default;
+ const text='Если товар не подошёл, запроси VIN. '+'Полный текст правила. '.repeat(30);
+ const html=renderToStaticMarkup(React.createElement(Rules,{items:[{id:'r',kind:'REVIEW_RULE',enabled:true,text,scope:'global'}],products:[],owner:true,onRefresh:async()=>{},onPropose:async()=>{},onDelete:()=>{}}));
+ assert(html.includes('rule-title'));assert(html.includes(text));assert(html.includes('Текст и настройки правила'));assert(html.includes('Только для отзывов'));
+});
+test('loading indicator has accessible status without placeholder cards above live content',()=>{
+ const Loading=loadComponent(path.join(__dirname,'../app/SectionSkeleton.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Loading,{title:'Вопросы'}));
+ assert(html.includes('role="status"'));assert(html.includes('Вопросы'));assert(!html.includes('skeleton-card'));
+});
+test('scope fields accept plain names while retaining server scope format',()=>{
+ const Field=loadComponent(path.join(__dirname,'../app/ScopeField.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Field,{value:'brand:EIKOSHA',onChange:()=>{}}));
+ assert(html.includes('value="EIKOSHA"'));assert(html.includes('Бренд'));assert(!html.includes('value="brand:EIKOSHA"'));
+});
+test('access editor preserves existing assignments without a mutation on open',()=>{
+ const Editor=loadComponent(path.join(__dirname,'../app/AccessEditor.tsx')).default;let writes=0;
+ const html=renderToStaticMarkup(React.createElement(Editor,{user:{display_name:'Менеджер',permissions:['data:read','wb:operate'],store_ids:['shop']},stores:[{id:'shop',name:'Основной магазин'}],busy:false,onClose:()=>{},onSave:async()=>{writes++}}));
+ assert.equal(writes,0);assert(html.includes('Работа с Wildberries'));assert(html.includes('Основной магазин'));assert.equal((html.match(/checked=""/g)||[]).length,3);assert(html.includes('Сохранить права'));assert(html.includes('<dialog'));
+});
