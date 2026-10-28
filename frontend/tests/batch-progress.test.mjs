@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {batchProgressJob,batchProgress,batchWaitReason} from '../app/batch-progress.mjs';
+import {batchProgressJob,batchProgress,batchWaitReason,batchStage} from '../app/batch-progress.mjs';
 const job=(id,status,result={})=>({id,kind:'drafts',status,result:{account_id:'shop',...result}});
 
 test('queued batches explain active work and retries without stale running rows',()=>{
@@ -41,4 +41,15 @@ test('fractional progress separates skipped, manual checks and technical errors'
  assert.equal(progress.remaining,10394);
  assert.equal(progress.attention,3);
  assert.equal(progress.failed,2);
+});
+
+test('full counters do not announce completion before server completes the job',()=>{
+ assert.equal(batchStage(job('one','running',{total:44,processed:44})), 'Завершаем подготовку');
+ assert.equal(batchStage(job('one','running',{total:44,processed:44,retrying:1})), 'Ожидаем повторной обработки');
+ assert.equal(batchStage(job('one','completed',{total:44,processed:44})), 'Обработка завершена');
+ assert.equal(batchStage(job('one','running',{total:44,processed:20})), 'Готовим и проверяем ответы');
+ assert.equal(batchStage({...job('one','running'),cancel_requested:true}), 'Останавливаем подготовку');
+ assert.equal(batchStage(job('one','failed')), 'Не удалось завершить подготовку');
+ assert.equal(batchStage(job('one','interrupted')), 'Подготовка прервана');
+ assert.equal(batchStage(job('one','cancelled')), 'Подготовка остановлена');
 });

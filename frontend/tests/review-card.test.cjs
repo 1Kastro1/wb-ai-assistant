@@ -139,3 +139,17 @@ test('question recovery continues the saved job instead of suggesting a new gene
 test('catalog progress displays committed count instead of an invented percentage',()=>{const html=syncCard({productSync:{tone:'working',state:'running',progress:95,processed:14300,phase:'archived'}});assert(html.includes('14'));assert(html.includes('300'));assert(html.includes('Загружаем архивные товары'));assert(!html.includes('95%'));assert(!html.includes('aria-valuenow="95"'));});
 
 
+test('terminal batch stays compact but exposes saved answers and issues without claiming continued processing',()=>{
+ const Panel=loadComponent(path.join(__dirname,'../app/BatchDraftPanel.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Panel,{job:{id:'done',status:'completed',result:{total:10,processed:9,failed:1,attention:2}},onCancel:()=>{},onReview:()=>{}}));
+ assert(html.includes('is-terminal'));assert(html.includes('Обработка завершена'));assert(html.includes('Сохранено ответов: 9'));
+ assert(html.includes('На проверку: 2'));assert(html.includes('Ошибок: 1'));assert(html.includes('Просмотреть ответы'));
+ assert(!html.includes(' open='));assert(!html.includes('<progress'));assert(!html.includes('обработка продолжится'));
+ const cancelled=renderToStaticMarkup(React.createElement(Panel,{job:{id:'stop',status:'cancelled',result:{processed:4,total:10}},onCancel:()=>{},onReview:()=>{}}));
+ assert(cancelled.includes('Подготовка остановлена'));assert(!cancelled.includes('обработка продолжится'));
+});
+test('full running batch keeps cancellation and progress until server completion',()=>{
+ const Panel=loadComponent(path.join(__dirname,'../app/BatchDraftPanel.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Panel,{job:{id:'running',status:'running',result:{total:44,processed:44}},onCancel:()=>{},onReview:()=>{}}));
+ assert(html.includes('Завершаем подготовку'));assert(html.includes('Остановить подготовку'));assert(html.includes('<progress'));assert(!html.includes('Обработка завершена'));
+});

@@ -36,3 +36,16 @@ export function batchWaitReason(job, jobs = [], now = Date.now()) {
  const names=[...new Set(running.map(item=>labels[item.kind]||'другое задание'))];
  return names.length?'Сейчас выполняется: '+names.join(', ')+'. Ваш прогресс сохранён; пакет продолжится при следующем переходе очереди.':'Задание сохранено и ожидает обработчика. Повторно запускать подготовку не нужно.';
 }
+
+/** Server status is authoritative: a full counter alone never means completion. */
+export function batchStage(job) {
+ if (job.cancel_requested && ['queued','running'].includes(job.status)) return 'Останавливаем подготовку';
+ if (job.status === 'queued') return 'Подготовка ответов в очереди';
+ if (job.status === 'completed') return 'Обработка завершена';
+ if (job.status === 'failed') return 'Не удалось завершить подготовку';
+ if (job.status === 'interrupted') return 'Подготовка прервана';
+ if (job.status !== 'running') return 'Подготовка остановлена';
+ const progress = batchProgress(job);
+ if (progress.total != null && progress.remaining === 0) return Number(job.result?.retrying)>0 ? 'Ожидаем повторной обработки' : 'Завершаем подготовку';
+ return 'Готовим и проверяем ответы';
+}
