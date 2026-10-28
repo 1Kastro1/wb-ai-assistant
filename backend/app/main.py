@@ -2229,6 +2229,7 @@ class BulkPublishInput(Payload):
     store_id: str = Field(min_length=1, max_length=200)
     include_excluded: bool = False
     excluded_ack: bool = False
+    rating_scope: Literal['all', 'positive'] = 'all'
 
 
 def wb_bulk_store(db, auth, store_id):
@@ -2236,8 +2237,8 @@ def wb_bulk_store(db, auth, store_id):
         raise HTTPException(409, 'Выбранный магазин изменился. Откройте отправку заново')
     store = db.get(StoreProfile, store_id)
     can_operate_store(auth, store)
-    if store.provider != 'wb':
-        raise HTTPException(400, 'Эта отправка доступна только для Wildberries')
+    if store.provider not in ('wb', 'ozon', 'yandex'):
+        raise HTTPException(400, 'Эта отправка недоступна для выбранного магазина')
     return store
 
 
@@ -2251,22 +2252,26 @@ def wb_bulk_parent(db, auth, store_id, aid):
 
 
 @app.get('/publications/wb/all')
-def wb_bulk_status(store_id: str, auth: MARKET_OPERATOR, db: DB):
-    from .bulk_publication import PARENT_KIND, view
+@app.get('/publications/reviews/all')
+def wb_bulk_status(store_id: str, auth: MARKET_OPERATOR, db: DB, rating_scope: Literal['all', 'positive'] = 'all'):
+    from .bulk_publication import PARENT_KIND, view, scope_condition
     wb_bulk_store(db, auth, store_id)
     parent = db.scalar(select(Action).where(Action.kind == PARENT_KIND,
-        Action.payload['account_id'].as_string() == store_id).order_by(Action.created_at.desc()).limit(1))
+        Action.payload['account_id'].as_string() == store_id,
+        scope_condition(rating_scope)).order_by(Action.created_at.desc()).limit(1))
     return view(db, parent) if parent else None
 
 
 @app.post('/publications/wb/all')
+@app.post('/publications/reviews/all')
 def wb_bulk_prepare(body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
     from .bulk_publication import start, view
     wb_bulk_store(db, auth, body.store_id)
-    return view(db, start(db, body.store_id, auth['user_id'], body.include_excluded))
+    return view(db, start(db, body.store_id, auth['user_id'], body.include_excluded, body.rating_scope))
 
 
 @app.get('/publications/wb/all/{aid}/items')
+@app.get('/publications/reviews/all/{aid}/items')
 def wb_bulk_preview(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB, offset: int = 0):
     from .bulk_publication import preview
     if offset < 0:
@@ -2275,6 +2280,7 @@ def wb_bulk_preview(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB, offs
 
 
 @app.post('/publications/wb/all/{aid}/confirm')
+@app.post('/publications/reviews/all/{aid}/confirm')
 def wb_bulk_confirm(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
     from .bulk_publication import confirm, view
     parent = wb_bulk_parent(db, auth, body.store_id, aid)
@@ -2322,6 +2328,7 @@ def wb_bulk_recovery_stop(aid: str, body: BulkPublishInput, auth: MARKET_OPERATO
 
 
 @app.post('/publications/wb/all/{aid}/cancel')
+@app.post('/publications/reviews/all/{aid}/cancel')
 def wb_bulk_cancel(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
     from .bulk_publication import cancel, view
     parent = wb_bulk_parent(db, auth, body.store_id, aid)
@@ -3027,5 +3034,6 @@ async def portable_import(auth: OWNER, password: str = Form(...), file: UploadFi
 def export_reviews(auth: AUTH, db: DB):
     # Explicit allowlist; never export ORM internals, accounts, settings or sessions.
     return [{'id': r.id, 'rating': r.rating, 'text': mask_vin(r.text), 'status': r.status} for r in db.scalars(select(Review))]
+
 
 

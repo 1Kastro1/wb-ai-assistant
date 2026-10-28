@@ -8,3 +8,7 @@ export function reviewFilterCount(value){const f=normalizeReviewFilters(value);r
 export function reviewFilterParams(value){const f=normalizeReviewFilters(value),p=new URLSearchParams();for(const r of f.ratings)p.append('ratings',r);for(const b of f.brands)p.append('brands',b);for(const c of f.categories)p.append('categories',c);if(f.text.length===1)p.set('text_status',f.text[0]);if(f.answers.length===1)p.set('answer_status',f.answers[0]);if(f.drafts.length===1)p.set('draft_status',f.drafts[0]);if(f.manual)p.set('manual_only','true');return p}
 export function legacyReviewFilters(view){const f=emptyReviewFilters();if(view==='positive')f.ratings=['4','5'];if(view==='negative')f.ratings=['1','2','3'];if(['with_text','rating_only'].includes(view))f.text=[view];if(view==='manual')f.manual=true;if(view==='unanswered')f.answers=['unanswered'];return f}
 
+
+// Low ratings stay in the ordinary review-and-confirm flow, never the positive batch.
+export const lowRatingReviewFilters=()=>({...emptyReviewFilters(),ratings:['1','2','3'],answers:['unanswered'],drafts:['generated']});
+

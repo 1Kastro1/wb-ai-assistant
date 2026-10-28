@@ -400,13 +400,13 @@ def test_legacy_prefix_and_new_preparation_pages_do_not_duplicate_exclusions(cli
     aid = client.post('/publications/wb/all', json={'store_id': 'owner'}).json()['id']
     with Session() as db:
         jid = db.get(Action, aid).payload['prepare_job_id']
-    original, calls = bulk.eligible, [0]
+    original, calls = bulk.rating_scope_reason, [0]
     def pause(*args):
         calls[0] += 1
         if calls[0] == 101:
             raise RuntimeError('old worker stopped after first page')
         return original(*args)
-    monkeypatch.setattr(bulk, 'eligible', pause)
+    monkeypatch.setattr(bulk, 'rating_scope_reason', pause)
     with pytest.raises(RuntimeError):
         bulk.prepare_step(jid)
     with Session() as db:
@@ -417,7 +417,7 @@ def test_legacy_prefix_and_new_preparation_pages_do_not_duplicate_exclusions(cli
         db.commit()
     path = f'/publications/wb/all/{aid}/exclusions'
     client.post(path+'/audit', json={'store_id': 'owner'})
-    monkeypatch.setattr(bulk, 'eligible', original)
+    monkeypatch.setattr(bulk, 'rating_scope_reason', original)
     bulk.prepare_step(jid)
     with Session() as db:
         audit_id = db.get(Action, aid).payload['exclusions_job_id']
@@ -451,3 +451,4 @@ def test_missing_global_verdict_diagnosis_does_not_query_each_product_catalog(cl
     with Session() as db:
         assert db.get(Action, aid).payload['exclusion_counts'] == {'rules_changed': 105}
     prepared.publish.assert_not_awaited()
+
