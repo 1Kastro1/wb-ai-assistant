@@ -266,7 +266,7 @@ export default function App() {
       if(finished&&page==='Отзывы')await findReviews();
       if(finished&&page==='Вопросы'){await findQuestions();setQuestionStats(await api('/questions/stats'))}
     }});poller.start();poller.wake();const wake=()=>poller.wake();document.addEventListener('visibilitychange',wake);return()=>{poller.stop();document.removeEventListener('visibilitychange',wake)};
-  }, [logged,page,filter,query,questionFilter,questionQuery,questionKind,stores.active,currentUser.id,activeJobs.current]);
+  }, [logged,page,filter,reviewFilters,query,questionFilter,questionQuery,questionKind,stores.active,currentUser.id,activeJobs.current]);
   useEffect(() => {
     if (!logged || !(page==='Главная' || (page==='Настройки' && settingsTab==='connections'))) return;
     const poller=createBackgroundPoller({load:()=>api('/sync/status'),onValue:setSyncReport,isVisible:()=>document.visibilityState==='visible'});poller.start();const wake=()=>poller.wake();document.addEventListener('visibilitychange',wake);return()=>{poller.stop();document.removeEventListener('visibilitychange',wake)};

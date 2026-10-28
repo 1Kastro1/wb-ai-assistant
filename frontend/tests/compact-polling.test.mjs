@@ -6,6 +6,19 @@ const require=createRequire(import.meta.url),ts=require('typescript');
 const source=fs.readFileSync(new URL('../app/client.ts',import.meta.url),'utf8');
 const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 
+test('job completion refresh observes the current independent review filters',()=>{
+ const app=ts.createSourceFile('page.tsx',fs.readFileSync(new URL('../app/page.tsx',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let checked=false;
+ function visit(node){
+  if(ts.isCallExpression(node)&&node.expression.getText(app)==='useEffect'&&node.arguments[0]?.getText(app).includes("api('/jobs?compact=true')")){
+   const deps=node.arguments[1];assert(ts.isArrayLiteralExpression(deps));
+   assert(deps.elements.some(e=>e.getText(app)==='reviewFilters'),'completing a job must not restore stale filter conditions');checked=true;
+  }
+  ts.forEachChild(node,visit);
+ }
+ visit(app);assert(checked);
+});
+
 test('compact polling reuses unchanged status and clears it on session or mutation',async()=>{
  const module={exports:{}},calls=[];
  let response;

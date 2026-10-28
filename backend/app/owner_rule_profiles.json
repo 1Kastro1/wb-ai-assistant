@@ -1,4 +1,9 @@
 {
+  "033cd57dc7675f49a118ac952c26a557c38c2e002112311722ff82a00c9b5afb": {
+    "family": "filters",
+    "label": "Рекомендации для вопросов — Масляные, воздушные, салонные и топливные фильтры",
+    "local_positive": false
+  },
   "0365fd6e18b30a0310b21ec979ec992c89f3f990319875f5678860636a83edea": {
     "family": "chemicals",
     "label": "Применяй только если отзыв касается соответствующей категории товара. Автохимия ",
@@ -16,12 +21,36 @@
     ],
     "local_positive": true
   },
+  "07fc04e9e8f876385a12fcd077627d7952753db87d4f88fed7a7e914fb0dc138": {
+    "family": "wipers",
+    "label": "Рекомендации для вопросов — Щётки стеклоочистителя",
+    "local_positive": false
+  },
   "12663c9c280102f250241d51389f13d39ccd6eb52df1ee76cea088795a831c74": {
     "label": "Подбор через Uniqom. Применяй при вопросе о подборе детали или совместимости. Ес",
     "local_positive": false
   },
+  "12b2b0fd846901510b26b9936ec62920840341052e645b5acb1cf8c19ca1ef81": {
+    "empty_inapplicable": true,
+    "family": "filters",
+    "label": "Рекомендации для отзывов — Масляные, воздушные, салонные и топливные фильтры",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "135b00dbe981154017e46cad770cb38bee80b3218974fde871323e12f511c775": {
     "label": "Вопросы о качестве и оригинальности",
+    "local_positive": false
+  },
+  "1a66b9ca617c835bc691d4f7e95e56b5e59ba42bac483b7a7db78a86185e66a3": {
+    "family": "oils",
+    "label": "Рекомендации для вопросов — Масла и технические жидкости",
+    "local_positive": false
+  },
+  "1ea72cffe4dda72bcba9104e5e200f9b9628e12bbd3b48d3c023324787c7ab35": {
+    "family": "parts",
+    "label": "Подбор автозапчасти через Uniqom",
     "local_positive": false
   },
   "1faaae06007fa46b49c90aa8021a4f4e194626378c01e5f640806f88fc118a51": {
@@ -49,19 +78,76 @@
     "label": "Не просить фото, повторное описание и обращение; учитывать уже решённую проблему",
     "local_positive": true
   },
+  "28fd4116f9c9a1dae908aead66768d32c38d7e9619a92263e73c043dcc1bd4fc": {
+    "family": "electrical",
+    "label": "Рекомендации для вопросов — Лампы и автомобильная электрика",
+    "local_positive": false
+  },
+  "33a138fbfb48ffd9681035b007022f00000b0128c7df7a94d397be353d3845d0": {
+    "family": "belts",
+    "label": "Рекомендации для вопросов — Ремни, ролики и натяжители",
+    "local_positive": false
+  },
   "35df7b0b5e65369438776b3f6e70b9eb02d92bf3c8de28256a770fb282332257": {
     "label": "Подготовка и публикация ответов на вопросы. Подготавливай и отправляй на подтвер",
     "local_positive": false,
     "workflow": true
   },
+  "3cb40f4a64b00a9cfceb34c375a4376f0d59a02d84d913b4773d95e5d4add8bd": {
+    "empty_inapplicable": true,
+    "family": "wipers",
+    "label": "Щётки стеклоочистителя: только при жалобе на полосы или разводы",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "414bf9b3818eb8473e810776db5dfda0465fb7cba36636d056022dd48209ba9e": {
+    "label": "Смысл отзыва и полезный ответ",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "460c5b77bec71acd4c3281078df2112a66b613382a24646870e2ec8b2ce6e7a1": {
+    "empty_inapplicable": true,
+    "families": [
+      "chemicals",
+      "cosmetics",
+      "household"
+    ],
+    "label": "Автохимия и автокосметика: применяй только к соответствующей жалобе",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "46521afc3e3ce94eb0246ace9af695fc64dea65fb258228fd1b8030599e6e1d5": {
+    "empty_inapplicable": true,
+    "family": "brakes",
+    "label": "Рекомендации для отзывов — Тормозные колодки и диски",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "467d16f3682a2b81e99dd4b08a198dfef623242eebfaade8671fef31a7c09283": {
+    "empty_inapplicable": true,
+    "family": "body_care",
+    "label": "Рекомендации для отзывов — Средства для кузова, стёкол и защитные покрытия",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "4bc6f444f7d680c915c393b35cea9fae4cda4698fe1a89444061bd48eebc24a7": {
+    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены.",
     "empty_inapplicable": true,
     "label": "Kangaroo: чтение даты на упаковке. Если отзыв касается даты изготовления ил",
     "local_cases": [
       "replaced_sprayer"
     ],
-    "local_positive": true,
-    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены."
+    "local_positive": true
   },
   "4d2838e6d26c532e8ffa792fca0c2ed3caa2629e5999e3f5c2cac622ff76c9cd": {
     "empty_inapplicable": true,
@@ -70,6 +156,10 @@
       "replaced_sprayer"
     ],
     "local_positive": true
+  },
+  "4dfa25e8732faeb041b57049142d0e142fcaf6ac0a87d1393984b405bf239364": {
+    "label": "Комплектация, маркировка, даты и хранение в вопросах",
+    "local_positive": false
   },
   "55aca2779dfc093e5698d82374396712e89b5eed6441dec64c4388b95506ba68": {
     "empty_inapplicable": true,
@@ -80,14 +170,28 @@
     ],
     "local_positive": true
   },
+  "56848bd1627d867e928cbfdf0811cc307fe382c6ebaa94945fb0ab0b16d44e69": {
+    "family": "body_care",
+    "label": "Рекомендации для вопросов — Средства для кузова, стёкол и защитные покрытия",
+    "local_positive": false
+  },
+  "57ad172815f2ce2985476c23fefb5a0d09390494a790850ae22c24db720fef0b": {
+    "empty_inapplicable": true,
+    "family": "oils",
+    "label": "Рекомендации для отзывов — Масла и технические жидкости",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "582814c43fdcc4cbf6e43c94db1b6d33401708e1f938e6ac5a42331663912440": {
+    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены.",
     "empty_inapplicable": true,
     "label": "Упаковка, протечки и недостача в отзывах. Применяй только к соответствующей",
     "local_cases": [
       "replaced_sprayer"
     ],
-    "local_positive": true,
-    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены."
+    "local_positive": true
   },
   "5af62c7d49915931c2c5f1e336afa461c5d9c4f8d687bc2d7ab5301651078f55": {
     "label": "Несоответствие, недокомплект, оригинальность и обращения. При жалобе извинись за",
@@ -111,6 +215,15 @@
     ],
     "local_positive": true
   },
+  "6ae94c76a308d4d6405d33d35e3893cf48036d85edfc8ba11992b909b3079417": {
+    "families": [
+      "chemicals",
+      "cosmetics",
+      "household"
+    ],
+    "label": "Автохимия, автокосметика и бытовая химия в вопросах",
+    "local_positive": false
+  },
   "6e5e9fcc70598b0b970a422a7fb47adea125fd788467400caefbe65cb3c39b5d": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Антифризы. При изменении цвета, осадке или жалобе пос",
@@ -119,14 +232,23 @@
     ],
     "local_positive": true
   },
+  "79e5d860386832a16383a93ab163bddbba81e39fe4a9d146240ad212a0a5bf89": {
+    "empty_inapplicable": true,
+    "family": "belts",
+    "label": "Рекомендации для отзывов — Ремни, ролики и натяжители",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "7bcbbe73a62ee5ef261698a2f1a4282c73742fa0d72d9dad6d7ef6a555dd40a4": {
+    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены.",
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Щётки стеклоочистителя. В дополнение к правилу о",
     "local_cases": [
       "replaced_sprayer"
     ],
-    "local_positive": true,
-    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены."
+    "local_positive": true
   },
   "7c4316e7411936db274345270ab26b43ca0ccc156ecd396c7eb60dc765134c35": {
     "label": "Если покупатель доволен: Поблагодари за покупку и отзыв. Упомяни то преимущество",
@@ -155,9 +277,22 @@
     ],
     "local_positive": true
   },
+  "93af82cf5218f3ff53d8de50b3c88591e6388bd00bb7710eeeb2ab152c7f6d50": {
+    "label": "Стиль и полнота ответа на вопрос",
+    "local_positive": false
+  },
   "9ddae636ece3b30f64db32f88a6c7db7c18eab4287fa2834f914b86fbcc5dda9": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Масляные, воздушные, салонные и топливные фильтры. Пр",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "a8ec7c1cece48bef29e3421111fb57621012a45c913f43cb6f111b86bcabbdb0": {
+    "empty_inapplicable": true,
+    "family": "electrical",
+    "label": "Рекомендации для отзывов — Лампы и автомобильная электрика",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -177,13 +312,35 @@
     ],
     "local_positive": true
   },
+  "b3c2dd56f000094692a9e2b5e7a73e191f8ddbf7da2ae85fdd96cbc5aede012a": {
+    "empty_inapplicable": true,
+    "family": "suspension",
+    "label": "Рекомендации для отзывов — Рулевые детали и подвеска",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "b5e2b7586ce1d057eb9009c47280bb659042ef48d7ef0568072c88ce27dd5cad": {
+    "family": "brakes",
+    "label": "Рекомендации для вопросов — Тормозные колодки и диски",
+    "local_positive": false
+  },
+  "b9ad2f1d5e274f3ae6cc77e956944d3ea858339944c50d5b5a2a7f26126e86ba": {
+    "label": "Вопросы о наличии и доставке",
+    "local_positive": false
+  },
   "bbbea8c09cb84bf62f7af5eeae8101d161bbab2169654a5773b61b6f745b9c35": {
+    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены.",
     "label": "Несоответствие, недокомплект, оригинальность и обращения. При жалобе извини",
     "local_cases": [
       "replaced_sprayer"
     ],
-    "local_positive": true,
-    "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены."
+    "local_positive": true
+  },
+  "bc3a074280fa6e1971a7c726b35bcdeaa1b039114587ed520e44e5c209fc9a03": {
+    "label": "Вопросы о качестве и оригинальности",
+    "local_positive": false
   },
   "bc8672c223e095039d81e49d5354bec14c1f6d1fec896a7442cb1e2c44781edc": {
     "empty_inapplicable": true,
@@ -216,6 +373,27 @@
     ],
     "local_positive": true
   },
+  "c5d89beb37670f525cfcb78ac23d3b83a07324e8bc9230a1427ec08edd7011fb": {
+    "family": "suspension",
+    "label": "Рекомендации для вопросов — Рулевые детали и подвеска",
+    "local_positive": false
+  },
+  "c78624b891ed361209fb629176a2937ceb60294682702a051d0e7d50dd08dc72": {
+    "label": "Стиль и формат ответа на отзыв",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "c7f6c0d8582b3f2d917ff436a9d85951217feaac02654e8fcd7581cb27788030": {
+    "empty_inapplicable": true,
+    "family": "fragrance",
+    "label": "Ароматизаторы: только при соответствующей жалобе",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "c909684bc83a8c38b45c52384f9dc1daaf4a33a21dfb0f177cd0be279eb83132": {
     "empty_inapplicable": true,
     "label": "EIKOSHA. Мы являемся официальным дистрибьютором EIKOSHA; при сомнениях в оригина",
@@ -240,6 +418,11 @@
   "cd9d031817bf3dd0dcb4d6eb9be4a8ed5f0d51e06d12380b4210c1d3e039f3db": {
     "family": "fragrance",
     "label": "Применяй только если вопрос касается соответствующей категории товара. Категория",
+    "local_positive": false
+  },
+  "d06bb227af073b7fa6e1b5b8e927f236b5805c9bb477520d0652021dce1f6989": {
+    "family": "cleaners",
+    "label": "Рекомендации для вопросов — Очистители салона, пластика и ткани",
     "local_positive": false
   },
   "d155a08d2d05a650d73145e32cef18107d237278d9e2d22234e9fadcac302f56": {
@@ -271,8 +454,18 @@
     "local_positive": true
   },
   "dec42ecea2244a08214ecfeaa977c8ae67b0ead76b73c4227df41441759a31d8": {
+    "empty_inapplicable": true,
     "family": "parts",
-    "label": "Применяй только если отзыв касается соответствующей категории товара. Автозапчас",
+    "label": "Применяй только если отзыв касается соответствующей категории товара",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "df387f63fe4bfc9b7cf312554b45d72cf704ccba863d8b415b143f14b85b1d7f": {
+    "empty_inapplicable": true,
+    "family": "antifreeze",
+    "label": "Рекомендации для отзывов — Антифризы",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -283,12 +476,28 @@
     "local_positive": false
   },
   "e067ce57a456309e8e5b07b5793c14bb28a8d5a45c60153d9d6fdbd98211f615": {
+    "audit": "Оценка без текста не требует анализа отсутствующего сообщения или инструкции. Проверенный ответ о заменённом распылителе учитывает достоинство, все повреждения и уже решённую проблему, содержит одну благодарность.",
     "label": "Точность и краткость ответов на отзывы",
-    "local_positive": true,
     "local_cases": [
       "replaced_sprayer"
     ],
-    "audit": "Оценка без текста не требует анализа отсутствующего сообщения или инструкции. Проверенный ответ о заменённом распылителе учитывает достоинство, все повреждения и уже решённую проблему, содержит одну благодарность."
+    "local_positive": true
+  },
+  "e1bf42723d34cd314bebd8c7dea523b2a3c9a3e2ee30de1eed72eedeae83bb41": {
+    "family": "antifreeze",
+    "label": "Рекомендации для вопросов — Антифризы",
+    "local_positive": false
+  },
+  "e607e2034c7488c65cf485cba51355fb0c9876f61904163ec4e6f674af5bbc8b": {
+    "label": "Достоверность и безопасность вопросов",
+    "local_positive": false
+  },
+  "e8a7a05b6485449fae2accfc050be9a855c90d0a5fce3f8e978dcde7ced5792c": {
+    "label": "Получение, упаковка, несоответствие и обращения",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
   },
   "ea0ef15c863f619c19a037dd43115ee1de341cd808958a0d386916006e28db91": {
     "empty_inapplicable": true,
@@ -311,6 +520,15 @@
     ],
     "local_positive": true
   },
+  "ec99f432d7211b28bea0e0aa2e19628e4884161ab9bc9aa5a68202a7988fc91a": {
+    "empty_inapplicable": true,
+    "family": "cleaners",
+    "label": "Рекомендации для отзывов — Очистители салона, пластика и ткани",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "eed2a3356e38b4402ff8711727e8ae581261cce77536e48d320a8ffcc99ef0f4": {
     "label": "Вопросы о комплектации",
     "local_positive": false
@@ -320,17 +538,22 @@
     "label": "Применяй только если вопрос касается соответствующей категории товара. Категория",
     "local_positive": false
   },
+  "f249254a2e3b0bd1c6316795f8d04d247bb77c946c083887500169ac7c17e98c": {
+    "family": "fragrance",
+    "label": "Ароматизаторы в вопросах",
+    "local_positive": false
+  },
   "f5ddc943a4abd384ac725aed673806ef2b2bfb3f883d23fe9a7d4b5936296589": {
     "label": "Содержание и стиль ответа на вопрос. Каждый ответ начинай с «Добрый день!». Зате",
     "local_positive": false
   },
   "f62ffaa6b67f05f24ccac1e8df31f7708f2426386e3f6b9d5df8248d707fcbd1": {
+    "audit": "Проверка, сохранение и подтверждение обеспечиваются приложением; это не текст покупателю и не разрешение обойти проверку.",
     "label": "Проверка, сохранение и публикация ответов",
-    "workflow": true,
-    "local_positive": true,
     "local_cases": [
       "replaced_sprayer"
     ],
-    "audit": "Проверка, сохранение и подтверждение обеспечиваются приложением; это не текст покупателю и не разрешение обойти проверку."
+    "local_positive": true,
+    "workflow": true
   }
 }

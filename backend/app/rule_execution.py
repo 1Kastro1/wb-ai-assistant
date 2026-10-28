@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2'
+VERSION = 'context-rules-3'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -35,6 +35,15 @@ def empty_positive(review):
 
 
 FAMILIES = {
+    'brakes': r'колодк|суппорт|тормозн\w*\s+(?:диск|механизм)',
+    'filters': r'фильтр',
+    'belts': r'ремень|ремн[яи]|натяжител|ролик|\bгрм\b',
+    'suspension': r'рулев|подвеск|рычаг|сошк|наконечник|сайлентблок|амортизатор|шаров\w*\s+опор',
+    'electrical': r'ламп|электрик|датчик|цокол|предохранител|проводк',
+    'oils': r'масл[оа]\b|смазк|техническ\w*\s+жидк',
+    'antifreeze': r'антифриз|охлаждающ\w*\s+жидк',
+    'cleaners': r'очистител|чистящ|антижир|profoam|средств\w*\s+для\s+(?:мытья|уборки)',
+    'body_care': r'полирол|воск|шампун|чернител|покрыти|кузов|окон|стекл|зеркал',
     'parts': r'фильтр|колодк|ремень|свеч[аиу]|амортизатор|подшипник|рычаг|сошк|рулев|наконечник|сайлентблок|стартер|генератор|суппорт|сцеплен|тормозн\w*\s+диск',
     'chemicals': r'антифриз|тормозн\w*\s+жидк|моторн\w*\s+масл|трансмиссионн\w*\s+масл|присадк|смазк|очистител|обезжиривател',
     'cosmetics': r'полирол|шампун|чернител|защитн\w*\s+воск|очистител\w*\s+салон|автокосмет',
@@ -52,6 +61,7 @@ def category_evidence(review, product):
     families = {name for name, pattern in FAMILIES.items() if re.search(pattern, value)}
     if wipers:
         families.add('parts')
+        families.add('wipers')
     # A buyer can ask about another part in an unrelated product card.
     if re.search(r'\bvin\b|\bframe\b|\bвин\b|[a-z]{1,5}\d{1,4}[- ]\d{5,9}', value, re.I):
         families.add('parts')
@@ -73,7 +83,8 @@ def select_rules(rules, review, product):
             reason = 'Правило рабочего процесса: подтверждение контролируется приложением'
         elif spec.get('empty_inapplicable') and empty_positive(review):
             reason = 'Высокая оценка без текста: условие жалобы отсутствует'
-        elif families and spec.get('family') and spec['family'] not in families:
+        elif families and (spec.get('family') or spec.get('families')) and not families.intersection(
+                spec.get('families') or [spec['family']]):
             reason = 'Условное правило другой категории'
         if reason:
             skipped.append({'rule_hash': digest(rule), 'reason': reason})

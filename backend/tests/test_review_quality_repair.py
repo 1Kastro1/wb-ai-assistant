@@ -34,7 +34,7 @@ def test_wipers_and_holders_never_receive_chemical_dosing(name):
     p=S(name=name,category='',brand='',facts=[])
     assert not is_cleaner(p)
     if 'стеклоочистител' in name.lower() or 'дворник' in name.lower():
-        assert category_evidence(S(text=''),p)=={'parts'}
+        assert category_evidence(S(text=''),p)=={'parts', 'wipers'}
     r=S(text='Очень сильно скрипит, плохо чистит',rating=2,risk='NORMAL')
     reply=rule_reply(r,p) or ''
     assert not any(x in reply for x in ('дозировк','выдержки','разных составов'))
