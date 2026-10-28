@@ -1,3 +1,4 @@
+import {scopeLabel} from '../app/presentation.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
@@ -11,7 +12,7 @@ test('errors are never described as successful actions',()=>{
 });
 const require=createRequire(import.meta.url),fs=require('node:fs'),path=require('node:path'),ts=require('typescript'),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../app');
-function loadComponent(name){const file=path.resolve(root,name+'.tsx'),source=fs.readFileSync(file,'utf8'),module={exports:{}};const code=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;const localRequire=name=>name==='./activity-labels.mjs'?{activityDescription}:name==='./client'?{api(){throw new Error('SSR must not request data')}}:name.startsWith('.')?loadComponent(name.slice(2)):require(name);new Function('require','module','exports',code)(localRequire,module,module.exports);return module.exports}
+function loadComponent(name){const file=path.resolve(root,name+'.tsx'),source=fs.readFileSync(file,'utf8'),module={exports:{}};const code=ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;const localRequire=name=>name==='./presentation.mjs'?{scopeLabel}:name==='./activity-labels.mjs'?{activityDescription}:name==='./client'?{api(){throw new Error('SSR must not request data')}}:name.startsWith('.')?loadComponent(name.slice(2)):require(name);new Function('require','module','exports',code)(localRequire,module,module.exports);return module.exports}
 test('history distinguishes proposed and activated rules',()=>{assert.equal(activityDescription({details:{event:'rule_proposed'}}),'Предложено новое правило');assert.equal(activityDescription({details:{event:'rule_added'}}),'Правило добавлено в память');assert.equal(activityDescription({details:{event:'rule_deleted'}}),'Правило удалено из памяти')});
 test('legacy entries do not invent a rule or claim it was activated',()=>{assert.equal(activityDescription({path:'/memory/propose'}),'Предложено новое правило')});
 test('reply editing and feedback have distinct descriptions',()=>{assert.notEqual(activityDescription({path:'/drafts/d',method:'PATCH'}),activityDescription({path:'/drafts/d/feedback',method:'POST'}))});
