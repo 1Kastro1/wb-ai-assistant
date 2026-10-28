@@ -35,9 +35,9 @@ test('two direct export choices have distinct scopes and active launches cannot 
 test('waiting and published answer tabs expose their current selection',()=>{
  const Tabs=component('ReviewAnswerTabs.tsx'),calls=[];
  const tree=Tabs({value:'unanswered',busy:false,onChange:value=>calls.push(value)});
- assert.equal(tree.props.children.length,2);
- assert.equal(tree.props.children[0].props['aria-pressed'],true);
- tree.props.children[1].props.onClick();assert.deepEqual(calls,['answered']);
+ assert.equal(tree.props.children.length,3);
+ assert.equal(tree.props.children[1].props['aria-pressed'],true);
+ tree.props.children[2].props.onClick();tree.props.children[0].props.onClick();assert.deepEqual(calls,['answered','all']);
  const html=renderToStaticMarkup(React.createElement(Tabs,{value:'answered',busy:false,onChange:()=>{}}));
  assert.match(html,/Ждут ответа/);assert.match(html,/Есть ответ/);
  assert.equal((html.match(/aria-pressed="true"/g)||[]).length,1);

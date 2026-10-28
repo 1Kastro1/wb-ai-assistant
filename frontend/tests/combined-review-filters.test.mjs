@@ -3,15 +3,30 @@ import assert from 'node:assert/strict';
 import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams,lowRatingReviewFilters,reviewAnswerFilters} from '../app/review-filters.mjs';
 import {readViewPreferences} from '../app/workspace-data.mjs';
 
-test('answer tabs default to waiting, retain independent filters and persist published state',()=>{
+test('answer tabs retain independent filters and persist published state',()=>{
  const base={...emptyReviewFilters(),ratings:['4'],brands:['EIKOSHA'],drafts:['generated']};
- assert.equal(reviewFilterParams(reviewAnswerFilters(base)).get('answer_status'),'unanswered');
+ assert.equal(reviewFilterParams(reviewAnswerFilters(base)).has('answer_status'),false);
  const answered=reviewAnswerFilters(base,'answered');
  assert.equal(reviewFilterParams(answered).get('answer_status'),'answered');
  assert.deepEqual(answered.ratings,['4']);assert.deepEqual(answered.brands,['EIKOSHA']);
  assert.equal(reviewFilterParams(answered).get('draft_status'),'generated');
  const restored=readViewPreferences({getItem:()=>JSON.stringify({reviewFilters:answered})},'store-a').reviewFilters;
  assert.deepEqual(reviewAnswerFilters(restored).answers,['answered']);
+});
+
+test('removing an answer chip or resetting filters stays cleared after saving and reopening',()=>{
+ for(const answer of ['unanswered','answered']){
+  const selected=reviewAnswerFilters({...emptyReviewFilters(),ratings:['4'],brands:['EIKOSHA'],drafts:['generated']},answer);
+  const removed=reviewAnswerFilters({...selected,answers:selected.answers.filter(value=>value!==answer)});
+  assert.deepEqual(removed.answers,[]);
+  assert.equal(reviewFilterParams(removed).has('answer_status'),false);
+  assert.deepEqual(removed.ratings,['4']);assert.deepEqual(removed.brands,['EIKOSHA']);assert.deepEqual(removed.drafts,['generated']);
+  const restored=readViewPreferences({getItem:()=>JSON.stringify({reviewFilters:removed})},'store-a').reviewFilters;
+  assert.deepEqual(reviewAnswerFilters(restored).answers,[]);
+  assert.deepEqual(reviewAnswerFilters(emptyReviewFilters()),emptyReviewFilters());
+  assert.deepEqual(reviewAnswerFilters(selected,'all').answers,[]);
+ }
+ assert.deepEqual(reviewAnswerFilters({answers:['answered','unanswered']}).answers,[]);
 });
 
 test('personal review queue combines low ratings, saved drafts and no seller reply',()=>{
