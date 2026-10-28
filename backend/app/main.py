@@ -1687,10 +1687,10 @@ def reviews(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_ratin
 
 
 @app.get('/reviews/page')
-def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'with_text', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = '', ratings: list[int] = Query(default=[]), text_status: Literal['all', 'with_text', 'rating_only'] = 'all', answer_status: Literal['all', 'answered', 'unanswered'] = 'all', manual_only: bool = False, brands: list[str] = Query(default=[]), categories: list[str] = Query(default=[])):
+def reviews_paginated(auth: AUTH, db: DB, q: str = '', unanswered: bool = False, max_rating: int = 5, days: int = 0, product_id: str = '', limit: int = 30, offset: int = 0, attention: bool = False, view: Literal['all', 'positive', 'negative', 'rating_only', 'with_text', 'manual', 'wrong_item', 'no_effect', 'odor', 'context'] = 'all', review_ids: str = '', ratings: list[int] = Query(default=[]), text_status: Literal['all', 'with_text', 'rating_only'] = 'all', answer_status: Literal['all', 'answered', 'unanswered'] = 'all', draft_status: Literal['all', 'generated', 'missing'] = 'all', manual_only: bool = False, brands: list[str] = Query(default=[]), categories: list[str] = Query(default=[])):
     if len(ratings) > 5 or any(r < 1 or r > 5 for r in ratings) or any(len(values) > 100 or any(len(value) > 200 for value in values) for values in (brands, categories)):
         raise HTTPException(422, 'Недопустимые значения фильтра')
-    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids, ratings=ratings, text_status=text_status, answer_status=answer_status, manual_only=manual_only, brands=brands, categories=categories)
+    return reviews_page(db, q=q, unanswered=unanswered, max_rating=max_rating, days=days, product_id=product_id, limit=limit, offset=offset, account_id=active_store(db, auth), attention=attention, view=view, review_ids=review_ids, ratings=ratings, text_status=text_status, answer_status=answer_status, draft_status=draft_status, manual_only=manual_only, brands=brands, categories=categories)
 
 
 @app.get('/reviews/facets')

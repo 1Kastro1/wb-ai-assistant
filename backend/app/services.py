@@ -277,6 +277,10 @@ def _review_query(filters):
         conditions.append(compact != '' if filters['text_status'] == 'with_text' else compact == '')
     if filters.get('answer_status') in ('answered', 'unanswered'):
         conditions.append(Review.is_answered == (filters['answer_status'] == 'answered'))
+    if filters.get('draft_status') in ('generated', 'missing'):
+        saved_text = func.trim(func.replace(func.replace(func.replace(func.coalesce(Draft.text, ''), '\n', ''), '\r', ''), '\t', ''))
+        has_saved_reply = select(Draft.id).where(Draft.review_id == Review.id, saved_text != '').correlate(Review).exists()
+        conditions.append(has_saved_reply if filters['draft_status'] == 'generated' else ~has_saved_reply)
     if filters.get('manual_only'):
         conditions.append(manual_review_condition())
     if filters.get('q'):
@@ -357,7 +361,7 @@ def review_items(db, rows):
     return result
 
 
-def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids='', ratings=None, text_status='all', answer_status='all', manual_only=False, brands=None, categories=None):
+def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids='', ratings=None, text_status='all', answer_status='all', draft_status='all', manual_only=False, brands=None, categories=None):
     query = _review_query(locals())
     rows = db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(max(0, offset)).limit(min(200, max(1, limit)))).all()
     return review_items(db, rows)
