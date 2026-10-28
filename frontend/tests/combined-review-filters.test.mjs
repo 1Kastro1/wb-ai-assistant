@@ -1,7 +1,16 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams,lowRatingReviewFilters,reviewAnswerFilters} from '../app/review-filters.mjs';
+import {emptyReviewFilters,normalizeReviewFilters,reviewFilterParams,lowRatingReviewFilters,reviewAnswerFilters,negativeProductFilters} from '../app/review-filters.mjs';
 import {readViewPreferences} from '../app/workspace-data.mjs';
+
+test('product complaints drill down by exact product and low ratings, retaining the dashboard period',()=>{
+ const f=negativeProductFilters({id:'yandex:shop:123',name:'Очиститель'},30),p=reviewFilterParams(f);
+ assert.equal(p.get('product_id'),'yandex:shop:123');assert.equal(p.get('days'),'30');
+ assert.deepEqual(p.getAll('ratings'),['1','2','3']);assert.equal(p.has('answer_status'),false);
+ assert.deepEqual(readViewPreferences({getItem:()=>JSON.stringify({reviewFilters:f})},'shop').reviewFilters,f);
+ const cleared=reviewFilterParams({...f,product:null});assert(!cleared.has('product_id'));assert(!cleared.has('days'));
+ assert.deepEqual(cleared.getAll('ratings'),['1','2','3']);
+});
 
 test('technical checks are separate, persistent and removable without clearing personal review',()=>{
  const f={...emptyReviewFilters(),technical:true,manual:true,brands:['KANGAROO']};
