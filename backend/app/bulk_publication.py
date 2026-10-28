@@ -165,6 +165,8 @@ def eligible(db, review, draft, rules):
 def exclusion_reason(db, review, draft, rules):
     if review.marketplace not in ('wb', 'ozon', 'yandex') or review.is_answered:
         return 'not_ready'
+    if review.marketplace == 'yandex' and len(draft.text) > 4096:
+        return 'content_check'  # Never let the provider truncate an approved saved text.
     if review.rating < 4:
         return 'low_rating'
     if review.manual or review.safety_critical or review.risk != 'NORMAL':
@@ -205,6 +207,8 @@ def owner_review_reason(db, review, draft, rules):
     if (review.marketplace not in ('wb', 'ozon', 'yandex') or review.is_answered or
             review.status not in ('draft_ready', 'manual_review')):
         return 'not_ready'
+    if review.marketplace == 'yandex' and len(draft.text) > 4096:
+        return 'content_check'
     try:
         if validate_reply(draft.text) != draft.text or owner_content_issues(review, db.get(Product, review.product_id), draft.text):
             return 'content_check'

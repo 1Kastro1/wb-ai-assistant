@@ -107,3 +107,21 @@ def test_other_marketplaces_use_same_review_rules_and_their_own_destination(clie
     with Session() as db:
         assert not db.scalar(select(Publication).where(Publication.review_id.in_(('bulk-0000','bulk-0001','bulk-0002'))))
 
+
+def test_yandex_never_silently_truncates_a_saved_reply(client, prepared):
+    with Session() as db:
+        db.get(StoreProfile, 'owner').provider = 'yandex'
+        for row in db.scalars(select(Review)):
+            row.marketplace = 'yandex'
+        draft = db.get(Draft, 'draft-bulk-0000')
+        draft.text = 'Добрый день! ' + 'Спасибо за оценку. ' * 230
+        original = draft.text
+        assert 4096 < len(original) < 5000
+        db.commit()
+    aid = collect(client)
+    state = client.get('/publications/reviews/all?store_id=owner&rating_scope=positive').json()
+    assert state['id'] == aid and state['total'] == 104 and state['excluded'] == 1
+    with Session() as db:
+        assert db.get(Draft, 'draft-bulk-0000').text == original
+    prepared.publish.assert_not_awaited()
+
