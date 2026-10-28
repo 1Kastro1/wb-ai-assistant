@@ -14,6 +14,8 @@ async def preview_question(db, product, example, rules, facts, store):
     from .services import question_intent, safe_question_fallback, assess_question_answer
     question = Review(id='rule-preview', product_id=product.id, wb_account_id=store,
                       marketplace='wb_question', text=example, rating=0)
+    from .rule_execution import select_rules
+    context_rules = select_rules(rules, question, product)[0]
     intent = question_intent(example)
     catalog = None
     if vehicle_identifiers(example) or oem_numbers(example):
@@ -34,7 +36,7 @@ async def preview_question(db, product, example, rules, facts, store):
             {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
             {'role': 'user', 'content': json.dumps({'question': example, 'question_type': intent,
                 'product': product.name, 'brand': product.brand, 'verified_facts': facts,
-                'store_rules': rules}, ensure_ascii=False)},
+                'store_rules': context_rules}, ensure_ascii=False)},
         ]
         try:
             reply = await asyncio.wait_for(ollama.chat(messages), timeout=12)

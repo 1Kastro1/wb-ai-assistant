@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-3'
+VERSION = 'context-rules-4'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -34,7 +34,22 @@ def empty_positive(review):
             and not (getattr(review, 'marketplace', '') or '').endswith('_question'))
 
 
+def simple_positive(review):
+    """Exact whole-message praise only; never infer sentiment by substring."""
+    text = (getattr(review, 'text', '') or '').casefold().replace('ё', 'е')
+    text = re.sub(r'\s+', ' ', text).strip(' .!…\n\r\t')
+    if text not in {'', 'все супер', 'все отлично', 'все хорошо', 'отлично', 'супер',
+                    'спасибо', 'рекомендую', 'все понравилось', 'товар хороший',
+                    'хороший товар', 'понравилось'}:
+        return False
+    # Reuse all existing safety/audience gates without mutating the input row.
+    from types import SimpleNamespace
+    return empty_positive(SimpleNamespace(text='', **{key: getattr(review, key, default) for key, default in
+        [('rating',0),('risk','NORMAL'),('manual',False),('safety_critical',False),('marketplace','')]}))
+
+
 FAMILIES = {
+    'batteries': r'аккумулятор|электролит|автомобильн\w*\s+батаре',
     'brakes': r'колодк|суппорт|тормозн\w*\s+(?:диск|механизм)',
     'filters': r'фильтр',
     'belts': r'ремень|ремн[яи]|натяжител|ролик|\bгрм\b',
@@ -99,19 +114,26 @@ POSITIVE_BODIES = (
     'Благодарим за Вашу оценку! Спасибо за доверие к нашему магазину. Желаем Вам приятного использования покупки и хорошего дня.',
 )
 
+SHORT_PRAISE_BODIES = (
+    'Спасибо за высокую оценку и добрые слова! Желаем Вам приятного использования покупки.',
+    'Благодарим за положительный отзыв! Желаем Вам хорошего дня и приятного использования.',
+    'Спасибо за Вашу оценку! Рады, что покупка оставила хорошее впечатление.',
+)
+
 
 def positive_body(review, revision=0):
     # Stable distribution across reviews; regeneration advances independently.
     identity = str(getattr(review, 'id', '') or getattr(review, 'wb_review_id', ''))
     seed = int(hashlib.sha256(identity.encode()).hexdigest()[:8], 16)
-    return POSITIVE_BODIES[(seed + max(0, int(revision))) % len(POSITIVE_BODIES)]
+    bodies = SHORT_PRAISE_BODIES if (getattr(review, 'text', '') or '').strip() else POSITIVE_BODIES
+    return bodies[(seed + max(0, int(revision))) % len(bodies)]
 
 
 def positive_template(review, rules, revision=0, *, product=None):
     """A narrow, reviewed no-claims answer; arbitrary semantic rules opt out."""
     from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
     from .safety import validate_reply
-    if not rules or not empty_positive(review):
+    if not rules or not simple_positive(review):
         return None
     # Evaluate the same applicable policy as the final verifier. A certified
     # workflow/category exclusion must not disable the no-claims route, while an
