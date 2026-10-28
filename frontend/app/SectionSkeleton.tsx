@@ -1,1 +1,1 @@
-export default function SectionSkeleton({title}:{title:string}){return <div className="section-load-indicator" role="status" aria-label={'Загрузка раздела «'+title+'»'}><i aria-hidden="true"/><span>Обновляем раздел «{title}»…</span></div>}
+export default function SectionSkeleton({title}:{title:string}){return <div className="section-skeleton section-load-indicator" role="status" aria-label={'Загрузка раздела «'+title+'»'}><i aria-hidden="true"/><span>Обновляем раздел «{title}»…</span></div>}

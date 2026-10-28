@@ -17,7 +17,7 @@
 .shell .segmented{padding:4px;border-radius:10px;margin-bottom:12px}
 .shell .segmented button{min-height:36px;padding:8px 13px;font-size:13px}
 .shell button:focus-visible,.shell summary:focus-visible{outline:3px solid #aa8cdb;outline-offset:3px}
-.shell .main>.body .section-load-indicator{position:absolute;right:30px;top:0;z-index:3;display:flex;align-items:center;gap:7px;max-width:calc(100% - 60px);padding:3px 9px;background:#f5f3fb;border:1px solid #e7e0f1;border-radius:0 0 8px 8px;font-size:11px;color:#69557e;pointer-events:none}
+.shell .main>.body .section-load-indicator{position:absolute;right:30px;top:0;z-index:3;display:flex;align-items:center;gap:7px;max-width:calc(100% - 60px);padding:3px 9px;background:#f5f3fb;border:1px solid #e7e0f1;border-radius:0 0 8px 8px;font-size:11px;color:#69557e;pointer-events:none;margin:0}
 .section-load-indicator i{width:10px;height:10px;border:2px solid #d8cce9;border-top-color:#8057c1;border-radius:50%;animation:startup-rotate 1s linear infinite;flex:none}
 .shell .main>.progress{position:fixed;top:64px;right:16px;z-index:30;padding:5px 12px;border-radius:0 0 8px 8px;box-shadow:0 3px 10px #40315f12}
 /* Navigation stays compact enough for daily use while retaining a scroll fallback. */
