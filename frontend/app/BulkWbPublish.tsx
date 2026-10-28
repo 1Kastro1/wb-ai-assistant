@@ -15,8 +15,8 @@ export default function BulkWbPublish(props:Props){
  const [statuses,setStatuses]=useState<Record<string,Row|null>>({});
  const statusRef=useRef(statuses);statusRef.current=statuses;
  const destination=publicationDestination(props.provider);
- useEffect(()=>{let live=true;async function update(){try{const values=await Promise.all(['all','positive'].map(scope=>api('/publications/reviews/all?store_id='+encodeURIComponent(props.storeId)+'&rating_scope='+scope)));if(live)setStatuses({all:values[0],positive:values[1]})}catch{}}
- if(props.canManage)void update();const timer=setInterval(()=>{if(props.canManage&&Object.values(statusRef.current).some(value=>active(value?.status)))void update()},3000);return()=>{live=false;clearInterval(timer)}},[props.storeId,props.canManage,mode]);
+ useEffect(()=>{let live=true,inFlight=false;async function update(){if(inFlight)return;inFlight=true;try{const values=await Promise.all(['all','positive'].map(scope=>api('/publications/reviews/all?store_id='+encodeURIComponent(props.storeId)+'&rating_scope='+scope)));if(live)setStatuses({all:values[0],positive:values[1]})}catch{}finally{inFlight=false}}
+ if(props.canManage)void update();const timer=setInterval(()=>{if(!mode&&props.canManage&&Object.values(statusRef.current).some(value=>active(value?.status)))void update()},3000);return()=>{live=false;clearInterval(timer)}},[props.storeId,props.canManage,mode]);
  const label=(scope:string,fallback:string)=>statuses[scope]?.status==='preparing'?'Собираем ответы → '+destination.short:statuses[scope]?.status==='sending'?'Отправляем → '+destination.short:fallback;
  return <>
   <button className="primary" disabled={props.busy||!props.canManage} onClick={()=>setMode('positive')}>{label('positive','Выгрузить положительные → '+destination.short)}</button>
