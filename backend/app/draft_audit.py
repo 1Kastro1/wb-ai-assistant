@@ -114,6 +114,25 @@ async def repair_step(job_id, session_factory=Session, limit=25):
 
 
 async def recheck_step(job_id, session_factory=Session):
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        scan = bool((job.result or {}).get('policy_scan'))
+    if not scan:
+        return await _recheck_one(job_id, session_factory)
+    # Fast no-claims checks share one short slice; a model check yields as soon
+    # as it finishes. Never build a huge JSON list or restart the scan at zero.
+    started = time.monotonic()
+    for _ in range(20):
+        await _recheck_one(job_id, session_factory)
+        with session_factory() as db:
+            job = db.get(Job, job_id)
+            if job.status != 'queued' or job.cancel_requested or (job.result or {}).get('retry_at', 0) > time.time():
+                break
+        if time.monotonic() - started >= 20:
+            break
+
+
+async def _recheck_one(job_id, session_factory=Session):
     from .services import assess_reply, assess_question_answer, trusted_product_facts
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
@@ -121,7 +140,19 @@ async def recheck_step(job_id, session_factory=Session):
         job = db.get(Job, job_id); state = dict(job.result or {})
         check_only = bool(state.get('check_only'))
         cursor = state.get('cursor', 0); ids = state.get('draft_ids', [])
-        did = ids[cursor] if cursor < len(ids) else None
+        scan = bool(state.get('policy_scan'))
+        if job.cancel_requested:
+            job.status = 'cancelled'; db.commit(); return
+        if scan:
+            did = db.scalar(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
+                Review.wb_account_id == state['account_id'], Review.is_answered == False,
+                Review.status != 'publishing', Draft.id > state.get('cursor_id', '')).order_by(Draft.id).limit(1))
+            if not did:
+                job.status, job.progress = 'completed', 100
+                job.result = {**state, 'message': f"Проверено: {state.get('checked', 0)}; подтверждено: {state.get('passed', 0)}. Остальные ответы не одобрены автоматически.", 'updated_at': now()}
+                db.commit(); return
+        else:
+            did = ids[cursor] if cursor < len(ids) else None
         draft = db.get(Draft, did) if did else None
         rid = draft.review_id if draft else None
     async def operation():
@@ -137,15 +168,19 @@ async def recheck_step(job_id, session_factory=Session):
             assess = (lambda value: assess_question_answer(review, product, value, facts, owner_rules=rules)) if question else (lambda value: assess_reply(review, product, value, facts))
             protected = manually_edited(draft)
             answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
-                assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')), check_seconds=120 if check_only else 600, check_only=check_only)
+                assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
+                check_seconds=45 if scan else 120 if check_only else 600, check_only=check_only,
+                allow_fast_positive=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
-            if not draft or review.is_answered or review.status == 'publishing' or expected != (draft.revision, draft.text, review.text, review.rating, review.product_id):
+            if (not draft or not review or db.get(Job, job_id).cancel_requested or review.is_answered
+                    or review.status == 'publishing' or expected != (draft.revision, draft.text, review.text, review.rating, review.product_id)):
                 return False
             # Never apply a model rewrite to an employee's/manual answer, nor
             # allow a model repair that fails the independent semantic checks.
-            if rules != matching_owner_rules(db, product, for_questions=question):
+            if (rules != matching_owner_rules(db, product, for_questions=question)
+                    or facts != trusted_product_facts(db, product)):
                 return False
             checked = assess(answer)
             if answer != draft.text and (check_only or protected or not checked['passed']):
@@ -155,7 +190,10 @@ async def recheck_step(job_id, session_factory=Session):
             if answer != draft.text:
                 draft.edits = [*(draft.edits or []), {'old': draft.text, 'new': answer, 'at': now(), 'by': 'automation', 'reason': VERSION + '-rules'}]
                 draft.text, draft.revision = answer, draft.revision + 1
-            quality = attach_rule_quality({**(draft.quality or {}), **assess(answer)}, verdict)
+            fresh_quality = {**(draft.quality or {}), **assess(answer)}
+            fresh_quality.pop('text_issues', None)
+            fresh_quality.pop('owner_rules', None)
+            quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
             review.status = 'manual_review' if review.manual or not quality['passed'] else 'draft_ready'
@@ -164,6 +202,8 @@ async def recheck_step(job_id, session_factory=Session):
     passed = await exclusive_generation(rid, operation, session_factory) if rid else False
     with session_factory() as db:
         job = db.get(Job, job_id)
+        if job.cancel_requested:
+            job.status = 'cancelled'; db.commit(); return
         state = dict(job.result or {})
         from .rule_retry import technical_check
         draft = db.get(Draft, did) if did else None
@@ -178,9 +218,13 @@ async def recheck_step(job_id, session_factory=Session):
             db.commit()
             return
         state.update(cursor=cursor + 1, checked=cursor + 1, passed=state.get('passed', 0) + int(passed), updated_at=now())
-        state['message'] = f'Проверка правил: {cursor + 1} из {len(ids)}'
-        job.result, job.progress = state, round(100 * (cursor + 1) / max(1, len(ids)))
-        job.status = 'completed' if cursor + 1 >= len(ids) else 'queued'
+        if scan:
+            state.update(cursor_id=did, check_retries=0, retry_at=0)
+        total = max(cursor + 1, state.get('total', 0)) if scan else len(ids)
+        state['message'] = f'Проверка правил: {cursor + 1} из {total}'
+        job.result = state
+        job.progress = min(99 if scan else 100, round(100 * (cursor + 1) / max(1, total)))
+        job.status = 'queued' if scan else 'completed' if cursor + 1 >= len(ids) else 'queued'
         db.commit()
 
 

@@ -10,7 +10,15 @@ def review_signature(rule):
     if not re.search(r'отзыв', rule, re.I):
         return ''
     match = re.search(r'подпись\s*:?\s*[«“"]([^»”"\n]{1,200})[»”"]', rule, re.I)
-    return match.group(1).strip() if match else ''
+    if not match:
+        return ''
+    # A question rule saying NOT to add the review signature is not itself a
+    # review-only signature rule. Keep its greeting/format instructions active.
+    before, after = rule[:match.start()], rule[match.end():]
+    if (re.search(r'не\s+(?:добавля\w*|использ\w*|пиши)[^.!?\n]{0,60}$', before, re.I)
+            or re.match(r'[^.!?\n]{0,90}\bне\s+(?:добавля\w*|использ\w*|пиши)', after, re.I)):
+        return ''
+    return match.group(1).strip()
 
 
 def apply_review_signature(reply, rules):
