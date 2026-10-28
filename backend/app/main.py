@@ -2279,6 +2279,13 @@ def wb_bulk_preview(aid: str, store_id: str, auth: MARKET_OPERATOR, db: DB, offs
     return preview(db, wb_bulk_parent(db, auth, store_id, aid), offset)
 
 
+@app.post('/publications/reviews/all/launch')
+def reviews_bulk_launch(body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):
+    from .bulk_publication import launch, view
+    wb_bulk_store(db, auth, body.store_id)
+    return view(db, launch(db, body.store_id, auth['user_id'], body.rating_scope))
+
+
 @app.post('/publications/wb/all/{aid}/confirm')
 @app.post('/publications/reviews/all/{aid}/confirm')
 def wb_bulk_confirm(aid: str, body: BulkPublishInput, auth: MARKET_OPERATOR, db: DB):

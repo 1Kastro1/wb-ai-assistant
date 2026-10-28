@@ -12,3 +12,6 @@ export function legacyReviewFilters(view){const f=emptyReviewFilters();if(view==
 // Low ratings stay in the ordinary review-and-confirm flow, never the positive batch.
 export const lowRatingReviewFilters=()=>({...emptyReviewFilters(),ratings:['1','2','3'],answers:['unanswered'],drafts:['generated']});
 
+// The two answer tabs share the existing server filter and store preferences.
+export function reviewAnswerFilters(value,answer){const filters=normalizeReviewFilters(value);return {...filters,answers:[answer||filters.answers.length===1&&filters.answers[0]||'unanswered']}}
+

@@ -96,6 +96,8 @@ def view(db, parent):
         'prepared_at': payload.get('prepared_at'),
         'include_excluded': bool(payload.get('include_excluded')),
         'rating_scope': payload.get('rating_scope', 'all'),
+        'auto_send': bool(payload.get('auto_send')),
+        'auto_send_error': payload.get('auto_send_error', ''),
         'included_excluded': payload.get('included_excluded', 0)}
 
 
@@ -143,6 +145,47 @@ def confirm(db, parent, actor_id, real_publish, excluded_ack=False):
         'parent_id': parent.id, 'requested_by': actor_id, 'total': parent.payload['total']}))
     db.commit()
     return parent
+
+
+def auto_confirm(db, parent):
+    """Only a persisted, explicit launch click may authorize the prepared list."""
+    from .config import REAL_PUBLISH
+    db.refresh(parent)
+    if parent.status != 'pending' or not parent.payload.get('auto_send'):
+        return parent
+    try:
+        store = db.get(StoreProfile, parent.payload['account_id'])
+        if not store or store.provider != parent.payload.get('provider', 'wb'):
+            raise ValueError('Магазин изменился. Откройте выгрузку заново')
+        return confirm(db, parent, parent.payload['auto_send_by'], REAL_PUBLISH, excluded_ack=True)
+    except ValueError as error:
+        db.rollback(); db.refresh(parent)
+        parent.payload = {**parent.payload, 'auto_send': False, 'auto_send_error': str(error)}
+        db.commit()
+        return parent
+
+
+def launch(db, store_id, actor_id, rating_scope='positive'):
+    from .config import REAL_PUBLISH
+    actor = db.get(User, actor_id)
+    if not actor or not actor.enabled or actor.role != 'owner':
+        raise ValueError('Выгрузку с исключёнными ответами запускает владелец')
+    if setting(db, 'safe_mode', False) or setting(db, 'test_mode', True) or not REAL_PUBLISH:
+        raise ValueError('Реальная отправка заблокирована. Проверьте рабочий режим')
+    parent = start(db, store_id, actor_id, True, rating_scope)
+    parent = db.scalar(select(Action).where(Action.id == parent.id).with_for_update().execution_options(populate_existing=True))
+    if parent.status == 'sending':
+        return parent
+    if parent.status == 'pending' and datetime.now(timezone.utc) - datetime.fromisoformat(parent.payload['prepared_at']) > timedelta(minutes=30):
+        # Retain the old snapshot and all saved drafts. A fresh list must pass
+        # the same eligibility checks rather than extending an expired verdict.
+        parent.status = 'expired'
+        db.commit()
+        parent = start(db, store_id, actor_id, True, rating_scope)
+    parent.payload = {**parent.payload, 'auto_send': True, 'auto_send_by': actor_id,
+                      'auto_send_requested_at': now(), 'auto_send_error': ''}
+    db.commit()
+    return auto_confirm(db, parent) if parent.status == 'pending' else parent
 
 
 def cancel(db, parent):
@@ -256,6 +299,10 @@ def prepare_step(job_id):
         parent = db.get(Action, job.result['parent_id'])
         while time.monotonic() - started < SLICE_SECONDS:
             db.refresh(job); db.refresh(parent)
+            if parent.status == 'pending' and parent.payload.get('auto_send') and not job.cancel_requested:
+                auto_confirm(db, parent)
+                job.status, job.progress = 'completed', 100
+                db.commit(); return
             if job.cancel_requested or parent.status != 'preparing':
                 job.status = 'cancelled'; db.commit(); return
             cursor = job.result.get('cursor', '')
@@ -265,10 +312,20 @@ def prepare_step(job_id):
                 Review.wb_account_id == parent.payload['account_id'], Review.marketplace == parent.payload.get('provider', 'wb'),
                 Review.is_answered == False, Review.id > cursor).order_by(Review.id).limit(PAGE_SIZE)).all()
             if not rows:
+                db.refresh(parent, with_for_update=True); db.refresh(job)
+                if job.cancel_requested or parent.status != 'preparing':
+                    job.status = 'cancelled'; db.commit(); return
                 parent.status = 'pending' if parent.payload['total'] else 'empty'
                 parent.payload = {**parent.payload, 'prepared_at': now()}
-                job.status, job.progress = 'completed', 100
-                db.commit(); return
+                # Leave an armed transition resumable if the process stops
+                # between saving the list and creating the send job.
+                armed = parent.status == 'pending' and parent.payload.get('auto_send')
+                job.status, job.progress = ('queued' if armed else 'completed'), 100
+                db.commit()
+                if armed:
+                    auto_confirm(db, parent)
+                    job.status = 'completed'; db.commit()
+                return
             items, excluded, included_excluded = [], [], 0
             for review, draft in rows:
                 rating_reason = rating_scope_reason(review, parent.payload.get('rating_scope', 'all'))
