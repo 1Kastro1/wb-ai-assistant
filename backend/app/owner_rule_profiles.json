@@ -34,6 +34,9 @@
     "empty_inapplicable": true,
     "family": "filters",
     "label": "Рекомендации для отзывов — Масляные, воздушные, салонные и топливные фильтры",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "135b00dbe981154017e46cad770cb38bee80b3218974fde871323e12f511c775": {
@@ -94,10 +97,16 @@
     "empty_inapplicable": true,
     "family": "wipers",
     "label": "Щётки стеклоочистителя: только при жалобе на полосы или разводы",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "414bf9b3818eb8473e810776db5dfda0465fb7cba36636d056022dd48209ba9e": {
     "label": "Смысл отзыва и полезный ответ",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "460c5b77bec71acd4c3281078df2112a66b613382a24646870e2ec8b2ce6e7a1": {
@@ -108,18 +117,27 @@
       "household"
     ],
     "label": "Автохимия и автокосметика: применяй только к соответствующей жалобе",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "46521afc3e3ce94eb0246ace9af695fc64dea65fb258228fd1b8030599e6e1d5": {
     "empty_inapplicable": true,
     "family": "brakes",
     "label": "Рекомендации для отзывов — Тормозные колодки и диски",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "467d16f3682a2b81e99dd4b08a198dfef623242eebfaade8671fef31a7c09283": {
     "empty_inapplicable": true,
     "family": "body_care",
     "label": "Рекомендации для отзывов — Средства для кузова, стёкол и защитные покрытия",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "4bc6f444f7d680c915c393b35cea9fae4cda4698fe1a89444061bd48eebc24a7": {
@@ -161,6 +179,9 @@
     "empty_inapplicable": true,
     "family": "oils",
     "label": "Рекомендации для отзывов — Масла и технические жидкости",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "582814c43fdcc4cbf6e43c94db1b6d33401708e1f938e6ac5a42331663912440": {
@@ -215,6 +236,9 @@
     "empty_inapplicable": true,
     "family": "belts",
     "label": "Рекомендации для отзывов — Ремни, ролики и натяжители",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "7bcbbe73a62ee5ef261698a2f1a4282c73742fa0d72d9dad6d7ef6a555dd40a4": {
@@ -269,6 +293,9 @@
     "empty_inapplicable": true,
     "family": "electrical",
     "label": "Рекомендации для отзывов — Лампы и автомобильная электрика",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "ab5b7aef5355a1702713d742d27e056fa2f0f430ad32605e9643c1a12cfc9890": {
@@ -289,6 +316,9 @@
     "empty_inapplicable": true,
     "family": "suspension",
     "label": "Рекомендации для отзывов — Рулевые детали и подвеска",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "b5e2b7586ce1d057eb9009c47280bb659042ef48d7ef0568072c88ce27dd5cad": {
@@ -350,12 +380,18 @@
   },
   "c78624b891ed361209fb629176a2937ceb60294682702a051d0e7d50dd08dc72": {
     "label": "Стиль и формат ответа на отзыв",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "c7f6c0d8582b3f2d917ff436a9d85951217feaac02654e8fcd7581cb27788030": {
     "empty_inapplicable": true,
     "family": "fragrance",
     "label": "Ароматизаторы: только при соответствующей жалобе",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "c909684bc83a8c38b45c52384f9dc1daaf4a33a21dfb0f177cd0be279eb83132": {
@@ -421,12 +457,18 @@
     "empty_inapplicable": true,
     "family": "parts",
     "label": "Применяй только если отзыв касается соответствующей категории товара",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "df387f63fe4bfc9b7cf312554b45d72cf704ccba863d8b415b143f14b85b1d7f": {
     "empty_inapplicable": true,
     "family": "antifreeze",
     "label": "Рекомендации для отзывов — Антифризы",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "dfdac76553660ebba86a2d338366aa6b0e6b18c612bfc7be3032614e9c95096a": {
@@ -452,6 +494,9 @@
   },
   "e8a7a05b6485449fae2accfc050be9a855c90d0a5fce3f8e978dcde7ced5792c": {
     "label": "Получение, упаковка, несоответствие и обращения",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "ea0ef15c863f619c19a037dd43115ee1de341cd808958a0d386916006e28db91": {
@@ -479,6 +524,9 @@
     "empty_inapplicable": true,
     "family": "cleaners",
     "label": "Рекомендации для отзывов — Очистители салона, пластика и ткани",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
     "local_positive": true
   },
   "eed2a3356e38b4402ff8711727e8ae581261cce77536e48d320a8ffcc99ef0f4": {

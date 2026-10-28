@@ -94,6 +94,24 @@ def test_compact_policy_filters_only_reviewed_category_blocks():
     assert execution.select_rules(rules, row, product)[0] == rules
 
 
+def test_cleanup_retains_strict_audited_routes_and_unknown_policy_opt_out(client, tmp_path):
+    from test_known_complaint_rules import BUYER
+    seed()
+    with Session() as db:
+        cleanup.apply(db, 'cleanup-owner', tmp_path)
+        product = db.get(Product, 'p')
+        product.name = 'Очиститель стёкол Fine Glass'
+        row = db.get(Review, 'r0'); row.text = BUYER; row.rating = 4
+        row.risk = 'NORMAL'; row.manual = False; row.safety_critical = False
+        rules = matching_owner_rules(db, product)
+        answer = execution.audited_case_template(row, product, rules)
+        assert answer and 'уже заменили' in answer
+        assert answer.endswith('С уважением ГК Юником.')
+        assert execution.audited_case_template(row, product, rules + ['Всегда указывай номер партии.']) is None
+        row.text = ''; row.rating = 5
+        assert execution.positive_template(row, rules, product=product)
+
+
 def test_policy_scan_preserves_edits_ignores_published_and_resumes(client, monkeypatch):
     seed()
     from app import services, owner_reply_policy
