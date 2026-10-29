@@ -916,6 +916,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     product = db.get(Product, review.product_id)
     memories = matching_owner_rules(db, product)
     verified_facts = review_verification_facts(db, review, product, memories)
+    specific_case = specific_review_case(review, product)
     context_memories, _ = select_rules(memories, review, product)
     generation_revision = initial_draft.revision if initial_draft else 0
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None

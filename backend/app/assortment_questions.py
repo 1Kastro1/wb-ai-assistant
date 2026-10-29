@@ -50,8 +50,8 @@ def standalone_holder(product):
     # A fragrance bundle that happens to include a holder is not an accessory
     # listing. Ambiguous titles opt out instead of recommending the wrong SKU.
     name = product.name.strip()
-    return bool(re.search(r'^(?:EIKOSHA\s+)?(?:���������|���������)\b', name, re.I)
-                and not re.search(r'�����|��������|\+', name, re.I))
+    return bool(re.search(r'^(?:EIKOSHA\s+)?(?:держатель|крепление)\b', name, re.I)
+                and not re.search(r'набор|комплект|\+', name, re.I))
 
 
 def assortment_question_answer(db, question, product, facts_for_product):
@@ -134,7 +134,7 @@ def review_vent_holder(db,review,product):
     if product.brand.strip().casefold()!='eikosha' or fragrance_format(product)!='can':return None
     holders=store_products(db, review.wb_account_id)
     for holder in holders:
-        if not standalone_holder(holder) or not re.search(r'���������',holder.name,re.I) or re.search(r'giga|�����',holder.name,re.I) or not catalog_reference(holder):continue
+        if not standalone_holder(holder) or not re.search(r'дефлектор',holder.name,re.I) or re.search(r'giga|стерж',holder.name,re.I) or not catalog_reference(holder):continue
         reference, source = catalog_reference(holder)
         return {'text':holder.name+' · '+reference,'kind':'vent_holder','wb_nm_id':holder.id,'article_label':reference,'verification_status':'VERIFIED','source':source}
     return None
