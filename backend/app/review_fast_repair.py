@@ -30,7 +30,7 @@ def enqueue(db, actor_id):
     return jobs
 
 
-async def step(job_id, session_factory=Session, limit=200):
+async def step(job_id, session_factory=Session, limit=500):
     from .draft_audit import manually_edited
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, fingerprint

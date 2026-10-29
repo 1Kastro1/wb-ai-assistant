@@ -115,6 +115,17 @@ def test_fast_repair_does_not_restart_cancelled_work(client):
         assert db.get(Draft,'positive').revision==3
 
 
+def test_fast_local_repair_precedes_model_scans_but_never_direct_clicks(client):
+    from app.queue_policy import next_job
+    with Session() as db:
+        db.add_all([Job(id='slow',kind='draft_recheck',created_at='2026-01-01',result={'policy_scan':True}),
+                    Job(id='fast',kind='draft_recheck',created_at='2026-01-02',result={'fast_repair':True}),
+                    Job(id='click',kind='single_draft',created_at='2026-01-03')]); db.commit()
+        assert next_job(db).id=='click'
+        db.get(Job,'click').status='completed'; db.commit()
+        assert next_job(db).id=='fast'
+
+
 def test_fragrance_bundle_is_not_sold_as_a_standalone_holder(client, monkeypatch):
     from app import assortment_questions as catalog
     r,p=example()
