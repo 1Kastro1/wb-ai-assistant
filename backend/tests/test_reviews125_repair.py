@@ -115,6 +115,30 @@ def test_fast_repair_does_not_restart_cancelled_work(client):
         assert db.get(Draft,'positive').revision==3
 
 
+def test_rating_only_templates_have_one_thanks_and_no_invented_experience():
+    import re
+    r,p=example();r.rating=5;r.text=''
+    for revision in range(3):
+        answer=positive_template(r,RULES,revision,product=p)
+        assert len(re.findall(r'спасибо|благодар',answer,re.I))==1
+        assert assess_reply(r,p,answer,[])['passed']
+
+
+def test_repair_replaces_legacy_double_thanks_even_with_old_success(client):
+    import re
+    seed()
+    with Session() as db:
+        r=db.get(Review,'positive');r.text=''
+        d=db.get(Draft,'positive');d.text='Добрый день! Спасибо за оценку! Благодарим за доверие. С уважением ГК Юником.'
+        d.quality={'passed':True,'owner_rules':{'passed':True,'fingerprint':fingerprint(RULES)}}
+        db.commit();jid=enqueue(db,'owner')[0]
+    asyncio.run(recheck_step(jid))
+    with Session() as db:
+        d=db.get(Draft,'positive')
+        assert d.quality['passed'] and d.revision==4
+        assert len(re.findall(r'спасибо|благодар',d.text,re.I))==1
+
+
 def test_fast_local_repair_precedes_model_scans_but_never_direct_clicks(client):
     from app.queue_policy import next_job
     with Session() as db:

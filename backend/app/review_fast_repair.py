@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 import time
 from sqlalchemy import select, func
 from .db import Session, Job, Review, Draft, Product, User, GenerationClaim, now
@@ -34,7 +35,7 @@ async def step(job_id, session_factory=Session, limit=500):
     from .draft_audit import manually_edited
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, fingerprint
-    from .rule_execution import positive_template, eikosha_case_template
+    from .rule_execution import positive_template, eikosha_case_template, simple_positive
     from .services import assess_reply, review_verification_facts
     from .generation_control import FastPathUnavailable
     started = time.monotonic()
@@ -72,7 +73,8 @@ async def step(job_id, session_factory=Session, limit=500):
                 # A valid current text or an employee edit may only be checked,
                 # never replaced. Arbitrary text never receives a local pass.
                 current = (draft.quality or {}).get('owner_rules') or {}
-                if protected or ((draft.quality or {}).get('passed') and current.get('fingerprint') == fingerprint(rules)):
+                repeated_thanks = simple_positive(review) and len(re.findall(r'спасибо|благодар', draft.text, re.I)) > 1
+                if protected or ((draft.quality or {}).get('passed') and current.get('fingerprint') == fingerprint(rules) and not repeated_thanks):
                     candidate = draft.text
                 if candidate:
                     try:
