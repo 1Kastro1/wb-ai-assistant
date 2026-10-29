@@ -50,7 +50,8 @@ test('low-rated draft needs review despite a passed text score',()=>{const html=
 
 test('pending policy check is distinct from personal review unless content is defective',()=>{
  const draft={text:'Добрый день! Спасибо!',quality:{passed:false,text_issues:[],owner_rules:{status:'pending',checked:false,passed:false,violations:[]}}};
- const pending=render({review:{text:'Все супер!',draft}});
+ const pending=render({recheck:async()=>{},review:{text:'Все супер!',draft}});
+ assert(pending.includes('Перепроверить правила'));
  assert(pending.includes('Ожидает проверки правил'));assert(!pending.includes('Нужна проверка'));assert(!pending.includes('Готов к отправке'));
  const defect=render({review:{text:'Все супер!',draft:{...draft,quality:{...draft.quality,text_issues:['Неверный ответ']}}}});
  assert(defect.includes('Нужна проверка'));
