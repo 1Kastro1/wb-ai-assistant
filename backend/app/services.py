@@ -378,8 +378,10 @@ def review_items(db, rows):
     if not rows:
         return []
     products = {p.id: p for p in db.scalars(select(Product).where(Product.id.in_({r.product_id for r in rows})))}
-    drafts = {d.review_id: d for d in db.scalars(select(Draft).where(Draft.review_id.in_([r.id for r in rows])))}
-    publications = {p.review_id:p.status for p in db.scalars(select(Publication).where(Publication.review_id.in_([r.id for r in rows])))}
+    draft_rows = db.execute(select(Draft, Publication.status).outerjoin(Publication, Publication.review_id == Draft.review_id).where(
+        Draft.review_id.in_([r.id for r in rows]))).all()
+    drafts = {d.review_id:d for d, _ in draft_rows}
+    publications = {d.review_id:status or '' for d, status in draft_rows}
     actor_ids = {actor for d in drafts.values() for actor in (d.created_by, d.updated_by) if actor}
     actor_ids.update(edit.get('by') for d in drafts.values() for edit in d.edits or [] if edit.get('by') not in (None, '', 'automation'))
     actors = {u.id: u for u in db.scalars(select(User).where(User.id.in_(actor_ids)))} if actor_ids else {}
