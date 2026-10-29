@@ -35,7 +35,8 @@
     "family": "filters",
     "label": "Рекомендации для отзывов — Масляные, воздушные, салонные и топливные фильтры",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -98,14 +99,16 @@
     "family": "wipers",
     "label": "Щётки стеклоочистителя: только при жалобе на полосы или разводы",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
   "414bf9b3818eb8473e810776db5dfda0465fb7cba36636d056022dd48209ba9e": {
     "label": "Смысл отзыва и полезный ответ",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -118,7 +121,8 @@
     ],
     "label": "Автохимия и автокосметика: применяй только к соответствующей жалобе",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -127,7 +131,8 @@
     "family": "brakes",
     "label": "Рекомендации для отзывов — Тормозные колодки и диски",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -136,7 +141,8 @@
     "family": "body_care",
     "label": "Рекомендации для отзывов — Средства для кузова, стёкол и защитные покрытия",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -145,7 +151,8 @@
     "empty_inapplicable": true,
     "label": "Kangaroo: чтение даты на упаковке. Если отзыв касается даты изготовления ил",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -180,7 +187,8 @@
     "family": "oils",
     "label": "Рекомендации для отзывов — Масла и технические жидкости",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -203,7 +211,8 @@
   "61d8698fb39ca921dc8b6dc0638f114d8e74bd6255976bf79d31d3227193d101": {
     "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.». Подпи",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -237,7 +246,8 @@
     "family": "belts",
     "label": "Рекомендации для отзывов — Ремни, ролики и натяжители",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -294,7 +304,8 @@
     "family": "electrical",
     "label": "Рекомендации для отзывов — Лампы и автомобильная электрика",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -317,7 +328,8 @@
     "family": "suspension",
     "label": "Рекомендации для отзывов — Рулевые детали и подвеска",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -381,7 +393,8 @@
   "c78624b891ed361209fb629176a2937ceb60294682702a051d0e7d50dd08dc72": {
     "label": "Стиль и формат ответа на отзыв",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -390,7 +403,8 @@
     "family": "fragrance",
     "label": "Ароматизаторы: только при соответствующей жалобе",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -398,7 +412,8 @@
     "empty_inapplicable": true,
     "label": "EIKOSHA. Мы являемся официальным дистрибьютором EIKOSHA; при сомнениях в оригина",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -458,7 +473,8 @@
     "family": "parts",
     "label": "Применяй только если отзыв касается соответствующей категории товара",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -467,7 +483,8 @@
     "family": "antifreeze",
     "label": "Рекомендации для отзывов — Антифризы",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -495,7 +512,8 @@
   "e8a7a05b6485449fae2accfc050be9a855c90d0a5fce3f8e978dcde7ced5792c": {
     "label": "Получение, упаковка, несоответствие и обращения",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -525,7 +543,8 @@
     "family": "cleaners",
     "label": "Рекомендации для отзывов — Очистители салона, пластика и ткани",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true
   },
@@ -551,7 +570,8 @@
     "audit": "Проверка, сохранение и подтверждение обеспечиваются приложением; это не текст покупателю и не разрешение обойти проверку.",
     "label": "Проверка, сохранение и публикация ответов",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "eikosha_scent"
     ],
     "local_positive": true,
     "workflow": true
