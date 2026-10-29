@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-4'
+VERSION = 'context-rules-5'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -183,6 +183,47 @@ def audited_case_template(review, product, rules):
         if case['key'] not in profile(rule).get('local_cases', ()) and constraints([rule])['semantic']:
             return None
     answer, _ = apply_local_preferences(case['answer'], review, rules)
+    try:
+        answer = validate_reply(apply_signature(answer, rules))
+    except ValueError:
+        return None
+    return answer if not local_issues(answer, rules, review) else None
+
+
+def eikosha_case_template(review, product, rules, facts):
+    """Certify one exact owner-reviewed can-fragrance response, not model prose.
+
+    Low ratings still require personal publication approval. New policy, safety,
+    returns, questions, other formats and extra complaints all opt out.
+    """
+    from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
+    from .reply_policy import analyze_customer_message
+    from .product_guidance import product_usage_reply
+    from .assortment_questions import fragrance_format
+    from .vehicle_identifiers import vehicle_identifiers
+    from .safety import validate_reply
+    text = getattr(review, 'text', '') or ''
+    if (not rules or getattr(product, 'brand', '').strip().casefold() != 'eikosha'
+        or fragrance_format(product) != 'can'
+        or getattr(review, 'rating', 0) not in (1, 2, 3, 4, 5)
+        or getattr(review, 'risk', 'NORMAL') != 'NORMAL' or getattr(review, 'manual', False)
+        or getattr(review, 'safety_critical', False)
+        or (getattr(review, 'marketplace', '') or '').endswith('_question')
+        or vehicle_identifiers(text)
+        or re.search(r'ожог|аллерг|отрав|раздраж|травм|врач|здоров|питом|реб[её]н|дет[ьи]|годност|просроч|возврат|ден[ьеь]?г|компенсац', text, re.I)):
+        return None
+    analysis = analyze_customer_message(text, review.rating)
+    complaints = set(analysis['complaints'])
+    if (analysis['is_question'] or analysis['buyer_asks_about_money'] or not complaints
+        or complaints - {'AUTHENTICITY', 'WEAK_SCENT', 'ODOR_COMPLAINT'}):
+        return None
+    applicable = select_rules(rules, review, product)[0]
+    if any('eikosha_scent' not in profile(rule).get('local_cases', ()) and constraints([rule])['semantic'] for rule in applicable):
+        return None
+    answer = product_usage_reply(review, product, facts)
+    if not answer:
+        return None
+    answer, _ = apply_local_preferences(answer, review, rules)
     try:
         answer = validate_reply(apply_signature(answer, rules))
     except ValueError:

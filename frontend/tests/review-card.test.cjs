@@ -48,6 +48,14 @@ function render(overrides={}){
 test('rating-only card removes the empty customer block',()=>{const html=render();assert(!html.includes('ОТЗЫВ ПОКУПАТЕЛЯ'));assert(html.includes('Оценка без текста'));assert(html.includes('Готов к отправке'))});
 test('low-rated draft needs review despite a passed text score',()=>{const html=render({review:{rating:2,text:'Плохое качество'}});assert(html.includes('Нужна проверка'));assert(!html.includes('Готов к отправке'));assert(!html.includes('textarea'))});
 
+test('pending policy check is distinct from personal review unless content is defective',()=>{
+ const draft={text:'Добрый день! Спасибо!',quality:{passed:false,text_issues:[],owner_rules:{status:'pending',checked:false,passed:false,violations:[]}}};
+ const pending=render({review:{text:'Все супер!',draft}});
+ assert(pending.includes('Ожидает проверки правил'));assert(!pending.includes('Нужна проверка'));assert(!pending.includes('Готов к отправке'));
+ const defect=render({review:{text:'Все супер!',draft:{...draft,quality:{...draft.quality,text_issues:['Неверный ответ']}}}});
+ assert(defect.includes('Нужна проверка'));
+});
+
 test('positive technical failure is not labelled a negative review and offers text-preserving check',()=>{
  const quality={passed:false,owner_rules:{matched:28,status:'error',technical_error:true,passed:false}};
  const html=render({recheck:async()=>{},generationError:'Открыть',review:{text:'Все супер!',draft:{text:'Добрый день! Спасибо!',quality}}});

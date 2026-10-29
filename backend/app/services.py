@@ -77,6 +77,21 @@ def trusted_product_facts(db, product):
     return prefer_manufacturer_instructions(facts)
 
 
+def review_verification_facts(db, review, product, rules):
+    """Generation and saved-text verification must use the same evidence."""
+    facts = trusted_product_facts(db, product)
+    case = specific_review_case(review, product)
+    if case:
+        facts += case['sources']
+    if review_intent(review.text) == 'DIM_LIGHT' and 'галоген' in product.name.lower():
+        facts += [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]
+    if review_intent(review.text) in ('WEAK_SCENT', 'AUTHENTICITY'):
+        holder = review_vent_holder(db, review, product)
+        if holder:
+            facts.append(holder)
+    return facts + owner_business_facts(product, rules)
+
+
 def draft_public(db, draft, actors=None, rules=None):
     if not draft:
         return None
@@ -263,13 +278,15 @@ def technical_review_condition():
 
 
 def manual_review_condition():
-    technical = func.coalesce(technical_review_condition(), False)
+    rules = Draft.quality['owner_rules']
+    awaiting = func.coalesce(or_(technical_review_condition(),
+        rules['status'].as_string() == 'pending', rules['checked'].as_boolean() == False), False)
     # Content defects survive an outage; the outage itself is not a complaint.
     defects = func.coalesce(Draft.quality['text_issues'].as_string(), '[]') != '[]'
     violations = func.coalesce(Draft.quality['owner_rules']['violations'].as_string(), '[]') != '[]'
     return (Review.is_answered == False) & or_((Review.rating <= 3) & ~Review.marketplace.like('%_question'), Review.manual == True,
         Review.risk != 'NORMAL', defects, violations,
-        (~technical) & or_(Review.status == 'manual_review',
+        (~awaiting) & or_((Review.status == 'manual_review') & (func.coalesce(Draft.quality['passed'].as_boolean(), False) == False),
             Draft.quality['passed'].as_boolean() == False,
             Draft.model.startswith('safety-fallback') & (func.coalesce(Draft.quality['repair_audit']['rules_rechecked_at'].as_string(), '') == '')))
 
@@ -897,17 +914,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     initial_draft = db.scalar(select(Draft).where(Draft.review_id == review_id))
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
-    verified_facts = trusted_product_facts(db, product)
-    specific_case = specific_review_case(review, product)
-    if specific_case:verified_facts = verified_facts + specific_case['sources']
-    if review_intent(review.text)=='DIM_LIGHT' and 'галоген' in product.name.lower():
-        verified_facts = verified_facts + [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]
-    if review_intent(review.text) in ('WEAK_SCENT','AUTHENTICITY'):
-        holder=review_vent_holder(db,review,product)
-        if holder:verified_facts=verified_facts+[holder]
     memories = matching_owner_rules(db, product)
+    verified_facts = review_verification_facts(db, review, product, memories)
     context_memories, _ = select_rules(memories, review, product)
-    verified_facts += owner_business_facts(product, memories)
     generation_revision = initial_draft.revision if initial_draft else 0
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
     if fast_only and not local_positive:

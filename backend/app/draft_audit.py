@@ -15,7 +15,7 @@ def manually_edited(draft):
 
 
 async def repair_step(job_id, session_factory=Session, limit=25):
-    from .services import assess_reply, trusted_product_facts
+    from .services import assess_reply, review_verification_facts
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import apply_local_preferences, apply_signature, saved_rule_quality, attach_rule_quality, enforce_owner_rules
     from .rule_execution import positive_template
@@ -51,8 +51,8 @@ async def repair_step(job_id, session_factory=Session, limit=25):
             state = dict(job.result or {})
             if (draft.quality or {}).get('repair_audit', {}).get('version') != VERSION:
                 product = db.get(Product, review.product_id)
-                facts = trusted_product_facts(db, product)
                 rules = matching_owner_rules(db, product)
+                facts = review_verification_facts(db, review, product, rules)
                 old = draft.text
                 protected = manually_edited(draft)
                 local = None if protected else positive_template(review, rules, product=product)
@@ -73,7 +73,8 @@ async def repair_step(job_id, session_factory=Session, limit=25):
                             lambda value: assess_reply(review, product, value, facts), allow_fast_positive=True, local_only=True)
                     except FastPathUnavailable:
                         pass
-                quality = attach_rule_quality({**(draft.quality or {}), **assess_reply(review, product, candidate, facts)}, rule_quality)
+                fresh = {key: value for key, value in (draft.quality or {}).items() if key not in ('text_issues', 'owner_rules')}
+                quality = attach_rule_quality({**fresh, **assess_reply(review, product, candidate, facts)}, rule_quality)
                 if changed:
                     draft.edits = [*(draft.edits or []), {'old': old, 'new': candidate, 'at': now(), 'by': 'automation', 'reason': VERSION}]
                     draft.text, draft.revision = candidate, draft.revision + 1
@@ -115,6 +116,10 @@ async def repair_step(job_id, session_factory=Session, limit=25):
 
 async def recheck_step(job_id, session_factory=Session):
     with session_factory() as db:
+        if (db.get(Job, job_id).result or {}).get('fast_repair'):
+            from .review_fast_repair import step
+            return await step(job_id, session_factory)
+    with session_factory() as db:
         job = db.get(Job, job_id)
         scan = bool((job.result or {}).get('policy_scan'))
     if not scan:
@@ -133,7 +138,7 @@ async def recheck_step(job_id, session_factory=Session):
 
 
 async def _recheck_one(job_id, session_factory=Session):
-    from .services import assess_reply, assess_question_answer, trusted_product_facts
+    from .services import assess_reply, assess_question_answer, trusted_product_facts, review_verification_facts
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     with session_factory() as db:
@@ -163,8 +168,8 @@ async def _recheck_one(job_id, session_factory=Session):
             expected = (draft.revision, draft.text, review.text, review.rating, review.product_id)
             product = db.get(Product, review.product_id)
             question = review.marketplace.endswith('_question')
-            facts = trusted_product_facts(db, product)
             rules = matching_owner_rules(db, product, for_questions=question)
+            facts = trusted_product_facts(db, product) if question else review_verification_facts(db, review, product, rules)
             assess = (lambda value: assess_question_answer(review, product, value, facts, owner_rules=rules)) if question else (lambda value: assess_reply(review, product, value, facts))
             protected = manually_edited(draft)
             answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
@@ -180,7 +185,7 @@ async def _recheck_one(job_id, session_factory=Session):
             # Never apply a model rewrite to an employee's/manual answer, nor
             # allow a model repair that fails the independent semantic checks.
             if (rules != matching_owner_rules(db, product, for_questions=question)
-                    or facts != trusted_product_facts(db, product)):
+                    or facts != (trusted_product_facts(db, product) if question else review_verification_facts(db, review, product, rules))):
                 return False
             checked = assess(answer)
             if answer != draft.text and (check_only or protected or not checked['passed']):
@@ -190,9 +195,8 @@ async def _recheck_one(job_id, session_factory=Session):
             if answer != draft.text:
                 draft.edits = [*(draft.edits or []), {'old': draft.text, 'new': answer, 'at': now(), 'by': 'automation', 'reason': VERSION + '-rules'}]
                 draft.text, draft.revision = answer, draft.revision + 1
-            fresh_quality = {**(draft.quality or {}), **assess(answer)}
-            fresh_quality.pop('text_issues', None)
-            fresh_quality.pop('owner_rules', None)
+            fresh_quality = {key: value for key, value in (draft.quality or {}).items() if key not in ('text_issues', 'owner_rules')}
+            fresh_quality.update(assess(answer))
             quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
