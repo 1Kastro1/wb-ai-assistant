@@ -48,6 +48,11 @@ function render(overrides={}){
 test('rating-only card removes the empty customer block',()=>{const html=render();assert(!html.includes('ОТЗЫВ ПОКУПАТЕЛЯ'));assert(html.includes('Оценка без текста'));assert(html.includes('Готов к отправке'))});
 test('low-rated draft needs review despite a passed text score',()=>{const html=render({review:{rating:2,text:'Плохое качество'}});assert(html.includes('Нужна проверка'));assert(!html.includes('Готов к отправке'));assert(!html.includes('textarea'))});
 
+test('uncertain publication explains why even a positive checked reply needs personal attention',()=>{
+ const html=render({review:{publication_status:'uncertain'}});
+ assert(html.includes('Нужна сверка публикации'));assert(!html.includes('Готов к отправке'));
+});
+
 test('pending policy check is distinct from personal review unless content is defective',()=>{
  const draft={text:'Добрый день! Спасибо!',quality:{passed:false,text_issues:[],owner_rules:{status:'pending',checked:false,passed:false,violations:[]}}};
  const pending=render({review:{text:'Все супер!',draft}});

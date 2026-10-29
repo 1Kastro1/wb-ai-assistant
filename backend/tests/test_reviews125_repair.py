@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace as S
 from unittest.mock import AsyncMock
 import pytest
-from app.db import Session, Product, Review, Draft, Memory, Job, User, Action
+from app.db import Session, Product, Review, Draft, Memory, Job, User, Action, Publication
 from app.rule_execution import eikosha_case_template, positive_template
 from app.owner_reply_policy import enforce_owner_rules, fingerprint
 from app.services import assess_reply, review_verification_facts
@@ -148,6 +148,21 @@ def test_fast_local_repair_precedes_model_scans_but_never_direct_clicks(client):
         assert next_job(db).id=='click'
         db.get(Job,'click').status='completed'; db.commit()
         assert next_job(db).id=='fast'
+
+
+def test_uncertain_publication_remains_personal_and_is_never_rewritten(client):
+    seed()
+    with Session() as db:
+        d=db.get(Draft,'positive');d.quality={'passed':True,'owner_rules':{'passed':True,'fingerprint':fingerprint(RULES)}}
+        db.add(Publication(id='uncertain',review_id='positive',action_id='old',status='uncertain'));db.commit()
+        jid=enqueue(db,'owner')[0]
+    asyncio.run(recheck_step(jid))
+    with Session() as db:
+        assert db.get(Draft,'positive').text=='Старый ответ'
+        assert db.get(Review,'positive').status=='manual_review'
+        assert db.get(Publication,'uncertain').status=='uncertain'
+    items=client.get('/reviews/page',params={'manual_only':True}).json()['items']
+    assert next(r for r in items if r['id']=='positive')['publication_status']=='uncertain'
 
 
 def test_fragrance_bundle_is_not_sold_as_a_standalone_holder(client, monkeypatch):

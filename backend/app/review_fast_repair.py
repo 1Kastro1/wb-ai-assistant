@@ -5,7 +5,7 @@ import json
 import re
 import time
 from sqlalchemy import select, func
-from .db import Session, Job, Review, Draft, Product, User, GenerationClaim, now
+from .db import Session, Job, Review, Draft, Product, User, GenerationClaim, Publication, now
 
 VERSION = 'review-local-repair-2026-10-29-v1'
 
@@ -16,7 +16,8 @@ def enqueue(db, actor_id):
         raise ValueError('Нужен действующий владелец')
     jobs = []
     accounts = db.execute(select(Review.wb_account_id, func.count(Draft.id)).join(Draft, Draft.review_id == Review.id).where(
-        Review.is_answered == False, Review.status != 'publishing', ~Review.marketplace.like('%_question')
+        Review.is_answered == False, Review.status != 'publishing', ~Review.marketplace.like('%_question'),
+        ~select(Publication.id).where(Publication.review_id == Review.id).correlate(Review).exists()
     ).group_by(Review.wb_account_id)).all()
     for account, total in accounts:
         jid = 'local-review-' + hashlib.sha256((VERSION + ':' + account).encode()).hexdigest()[:24]
@@ -47,6 +48,7 @@ async def step(job_id, session_factory=Session, limit=500):
         ids = list(db.scalars(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
             Review.wb_account_id == state['account_id'], Review.is_answered == False,
             Review.status != 'publishing', ~Review.marketplace.like('%_question'),
+            ~select(Publication.id).where(Publication.review_id == Review.id).correlate(Review).exists(),
             Draft.id > state.get('cursor_id', '')).order_by(Draft.id).limit(limit)))
     served = 0
     for did in ids:
@@ -61,7 +63,8 @@ async def step(job_id, session_factory=Session, limit=500):
             if db.scalar(select(GenerationClaim.review_id).where(GenerationClaim.review_id == rid, GenerationClaim.expires_at > time.time())):
                 job.status = 'queued'; db.commit(); return  # revisit without losing the cursor
             verified = changed = False
-            if draft and review and not review.is_answered and review.status != 'publishing':
+            publishing = db.scalar(select(Publication.id).where(Publication.review_id == rid))
+            if draft and review and not review.is_answered and review.status != 'publishing' and not publishing:
                 product = db.get(Product, review.product_id)
                 rules = matching_owner_rules(db, product)
                 protected = manually_edited(draft)

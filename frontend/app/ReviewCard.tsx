@@ -28,13 +28,14 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   function register(id:string,flush:(()=>Promise<any>)|null){flusher.current=flush;return onRegister?.(id,flush)}
   async function preparePublication(){try{await flusher.current?.();await publish?.()}catch{/* DraftEditor or the parent shows the saving/publication error. */}}
   const q=r.draft?.quality||{},hasText=Boolean((r.text||'').trim());
+  const publicationAttention=['uncertain','mismatch'].includes(r.publication_status);
   const awaiting=!q.owner_rules?.passed&&(q.owner_rules?.status==='pending'||q.owner_rules?.checked===false);
   const contentIssue=Boolean(q.text_issues?.length||q.owner_rules?.violations?.length);
-  const needsCheck=r.rating<=3||r.manual||r.risk!=='NORMAL'||contentIssue||!q.passed||(String(r.draft?.model||'').startsWith('safety-fallback')&&!q.repair_audit?.rules_rechecked_at);
+  const needsCheck=publicationAttention||r.rating<=3||r.manual||r.risk!=='NORMAL'||contentIssue||!q.passed||(String(r.draft?.model||'').startsWith('safety-fallback')&&!q.repair_audit?.rules_rechecked_at);
   const technical=Boolean(q.owner_rules?.technical_error||q.owner_rules?.status==='error')&&!q.owner_rules?.passed;
-  const personal=r.rating<=3||r.manual||r.risk!=='NORMAL';
-  const status=r.is_answered?'Отправлено':generating?'Готовится':generationError?'Нужно повторить':!r.draft?'Нужен ответ':technical&&!personal&&!contentIssue?'Сбой проверки правил':awaiting&&!personal&&!contentIssue?'Ожидает проверки правил':needsCheck?'Нужна проверка':'Готов к отправке';
-  const reason=r.is_answered?'Ответ уже опубликован':generating?'Текущий текст сохраняется до завершения':generationError||(!r.draft?'Подготовьте черновик':r.rating<=3?'Низкая оценка: проверьте ответ перед отправкой':r.manual?'Опасный симптом: нужна личная проверка':q.issues?.join('; ')||'Перед отправкой проверьте текст');
+  const personal=r.rating<=3||r.manual||r.risk!=='NORMAL'||publicationAttention;
+  const status=r.is_answered?'Отправлено':generating?'Готовится':generationError?'Нужно повторить':!r.draft?'Нужен ответ':publicationAttention?'Нужна сверка публикации':technical&&!personal&&!contentIssue?'Сбой проверки правил':awaiting&&!personal&&!contentIssue?'Ожидает проверки правил':needsCheck?'Нужна проверка':'Готов к отправке';
+  const reason=r.is_answered?'Ответ уже опубликован':generating?'Текущий текст сохраняется до завершения':generationError||(!r.draft?'Подготовьте черновик':publicationAttention?'Проверьте результат предыдущей отправки перед повторной публикацией':r.rating<=3?'Низкая оценка: проверьте ответ перед отправкой':r.manual?'Опасный симптом: нужна личная проверка':q.issues?.join('; ')||'Перед отправкой проверьте текст');
   const blocked=busy||generating||!canManage||!assistantEnabled||dirty;
   const retryLabel=/ещё готовится|ожидание|задание сохранено/.test(generationError)?'Продолжить ожидание':'Повторить попытку';
   return <article className={'card review compact-review '+(r.rating<=3?'negative':'positive')}>

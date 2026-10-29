@@ -3,7 +3,7 @@ import asyncio
 import time
 from uuid import uuid4
 from sqlalchemy import select, func
-from .db import Session, Job, Draft, Review, Product, GenerationClaim, now
+from .db import Session, Job, Draft, Review, Product, GenerationClaim, Publication, now
 from .generation_control import exclusive_generation, FastPathUnavailable
 
 VERSION = 'review-repair-2026-10-25-v3'
@@ -200,7 +200,8 @@ async def _recheck_one(job_id, session_factory=Session):
             quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
-            review.status = 'manual_review' if review.manual or not quality['passed'] else 'draft_ready'
+            if not db.scalar(select(Publication.id).where(Publication.review_id == review.id)):
+                review.status = 'manual_review' if review.manual or not quality['passed'] else 'draft_ready'
             db.commit()
             return quality['passed']
     passed = await exclusive_generation(rid, operation, session_factory) if rid else False
