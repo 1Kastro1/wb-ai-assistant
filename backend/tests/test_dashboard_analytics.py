@@ -52,7 +52,7 @@ class AnalyticsCases:
                           and (not days or r['age']<days) and (not product or r['product']==product)]
                     result=analytics(db,days=days,product_id=self.scope+product if product else '',account_id=self.scope)
                     manual=lambda r:not r['answered'] and (r['rating']<=3 or r['manual'] or r['risk']!='NORMAL'
-                        or r['status']=='manual_review' or (r['draft'] and (r['passed'] is False or r['model'].startswith('safety-fallback'))))
+                        or (r['status']=='manual_review' and r['passed'] is not True) or (r['draft'] and (r['passed'] is False or r['model'].startswith('safety-fallback'))))
                     ready=lambda r:not r['answered'] and r['draft'] and r['rating']>=4 and not r['manual'] and r['risk']=='NORMAL' and r['status']=='draft_ready' and r['passed'] is True
                     self.assertEqual(result['total'],len(rows))
                     self.assertEqual(result['unanswered'],sum(not r['answered'] for r in rows))

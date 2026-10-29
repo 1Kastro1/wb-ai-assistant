@@ -115,6 +115,21 @@ def test_fast_repair_does_not_restart_cancelled_work(client):
         assert db.get(Draft,'positive').revision==3
 
 
+def test_fragrance_bundle_is_not_sold_as_a_standalone_holder(client, monkeypatch):
+    from app import assortment_questions as catalog
+    r,p=example()
+    r.wb_account_id='owner'
+    bundle=S(id='yandex:owner:1859520',name='Меловой ароматизатор в машину Eikosha Air Spencer R90 Squash и держатель на решетку дефлектора Cantule',marketplace='yandex',brand='EIKOSHA')
+    holder=S(id='yandex:owner:999',name='EIKOSHA Держатель на дефлектор CANTULE',marketplace='yandex',brand='EIKOSHA')
+    monkeypatch.setattr(catalog,'store_products',lambda *a:[bundle])
+    assert catalog.review_vent_holder(None,r,p) is None
+    monkeypatch.setattr(catalog,'store_products',lambda *a:[bundle,holder])
+    assert catalog.review_vent_holder(None,r,p)['wb_nm_id']==holder.id
+    r.text='Как купить держатель на дефлектор?'
+    result=catalog.assortment_question_answer(None,r,p,lambda *a:[])
+    assert '999' in result['answer'] and '1859520' not in result['answer']
+
+
 def test_recheck_receives_owner_and_catalog_holder_evidence_and_rejects_changed_facts(client, monkeypatch):
     seed()
     from app import services,owner_reply_policy
