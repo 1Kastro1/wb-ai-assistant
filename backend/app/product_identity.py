@@ -1,10 +1,10 @@
-"""Flag a conflicting leading manufacturer name; never guess or overwrite identity."""
+"""Flag a conflicting manufacturer mention; never guess or overwrite identity."""
 import re
 from sqlalchemy import and_, or_, func
 from .db import Product
 
-# Only a leading manufacturer is evidence. Vehicle applications later in a title
-# (e.g. a Denso part for Toyota) are deliberately not compared with the brand.
+# Only known manufacturers are compared. Vehicle applications and explicit
+# "for <brand>" mentions are deliberately not treated as identity evidence.
 MANUFACTURERS = ('SOFT99', 'EIKOSHA', 'KANGAROO', 'GIGAS', 'TCL', 'AVANTECH', 'KOITO', 'ADVICS', 'DENSO', 'NGK', 'LERATON')
 
 
