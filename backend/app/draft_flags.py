@@ -21,7 +21,7 @@ def flag_sql(name, dialect):
     technical = f"(not {truth('owner_rules.passed')} and ({truth('owner_rules.technical_error')} or coalesce({value('owner_rules.status')}, '') = 'error'))"
     pending = f"({technical} or coalesce({value('owner_rules.status')}, '') = 'pending' or not {truth('owner_rules.checked', 'true')})"
     defects = f"(coalesce({value('text_issues')}, '[]') <> '[]' or coalesce({value('owner_rules.violations')}, '[]') <> '[]')"
-    fallback = f"(model LIKE 'safety-fallback%' and coalesce({value('repair_audit.rules_rechecked_at')}, '') = '')"
+    fallback = f"(substr(model, 1, 15) = 'safety-fallback' and coalesce({value('repair_audit.rules_rechecked_at')}, '') = '')"
     return {'passed': passed, 'technical': technical, 'pending': pending,
             'attention': f'coalesce(({defects} or (not {pending} and ({passed} = false or {fallback}))), false)'}[name]
 
