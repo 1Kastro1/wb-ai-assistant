@@ -26,6 +26,13 @@
     "label": "Рекомендации для вопросов — Щётки стеклоочистителя",
     "local_positive": false
   },
+  "100031f26f364f0d5a88a93a7033113adbfd2a8fba923184c7c0abd24c73a791": {
+    "label": "Стиль и формат ответа на отзыв",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "12663c9c280102f250241d51389f13d39ccd6eb52df1ee76cea088795a831c74": {
     "label": "Подбор через Uniqom. Применяй при вопросе о подборе детали или совместимости. Ес",
     "local_positive": false
@@ -277,6 +284,13 @@
     ],
     "local_positive": true
   },
+  "8f809c97759c2ea57f0620cbc0516c6c44367032f4bf2f84482c5be4f3de04fb": {
+    "label": "Смысл отзыва и полезный ответ",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "93af82cf5218f3ff53d8de50b3c88591e6388bd00bb7710eeeb2ab152c7f6d50": {
     "label": "Стиль и полнота ответа на вопрос",
     "local_positive": false
@@ -365,6 +379,15 @@
     ],
     "local_positive": true,
     "workflow": true
+  },
+  "c2800fa84ad41d236fe4f22cb8a9a2c46d5f66deb34b8978e6d511782ea07f5e": {
+    "empty_inapplicable": true,
+    "family": "electrical",
+    "label": "Рекомендации для отзывов — Лампы и автомобильная электрика",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
   },
   "c4da058656a8f0e3b6818027a94cd64bb61b0c957262222891adf498acd4f2fc": {
     "label": "Решение проблемы в отзыве: объяснение и следующий шаг. Когда покупатель описал п",

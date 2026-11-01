@@ -79,9 +79,17 @@ class OllamaProvider:
         try:
             match = re.search(r'\{.*\}', raw, re.S)
             payload = json.loads(match.group(0) if match else raw)
-            variants = [str(value).strip() for value in payload.get('variants', []) if str(value).strip()]
-            return variants[:count] or [raw]
+            if not isinstance(payload, dict) or not isinstance(payload.get('variants'), list):
+                raise ValueError('invalid variants')
+            variants = payload['variants']
+            if not variants or any(not isinstance(value, str) or not value.strip() for value in variants):
+                raise ValueError('invalid variant text')
+            return [value.strip() for value in variants[:count]]
         except (ValueError, TypeError, json.JSONDecodeError):
+            if not raw.strip() or raw.lstrip().startswith(('{', '[', '```')):
+                raise ValueError('Некорректный ответ модели; подготовка будет повторена') from None
+            # Older local templates may return plain customer text despite the
+            # requested JSON format. It still goes through the quality gate.
             return [raw]
 
 

@@ -170,10 +170,10 @@ def test_rejected_model_reply_is_replaced_by_new_safe_model_reply(client, monkey
     result = client.post('/reviews/safety-retry-review/draft', json={})
     assert result.status_code == 200
     draft = result.json()
-    assert len(calls) == 4
+    assert len(calls) == 2
     assert draft['model'] != 'safety-fallback-1.2'
     assert draft['quality']['score'] > 95
-    assert draft['quality']['candidates_evaluated'] == 3
+    assert draft['quality']['candidates_evaluated'] == 1
     assert 'напишите продавцу' not in draft['text'].lower()
     assert validate_reply(draft['text']) == draft['text']
 

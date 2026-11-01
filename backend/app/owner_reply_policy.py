@@ -169,6 +169,9 @@ def local_issues(reply, rules, review=None):
         issues.append('Не направлять через полученный заказ')
     if config['no_reask'] and review is not None and has_redundant_clarification(reply, review.text):
         issues.append('Не переспрашивать уже описанную проблему')
+    if any('одну благодарность' in rule.lower() for rule in rules):
+        if len(re.findall(r'\b(?:спасибо|благодарим|благодарю|благодарны)\b', reply, re.I)) > 1:
+            issues.append('Использовать одну благодарность без повторов')
     if rules and review is not None and not (getattr(review, 'marketplace', '') or '').endswith('_question'):
         analysis = analyze_customer_message(review.text, getattr(review, 'rating', None))
         for topic in missing_complaints(analysis, reply):
@@ -184,7 +187,8 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
 
 
 async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=None,
-                              allow_fast_positive=False, instruction='', local_only=False, check_only=False):
+                              allow_fast_positive=False, instruction='', local_only=False, check_only=False,
+                              defer_semantic=False):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
@@ -237,6 +241,11 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     if semantic and protected:
         result.update(checked=False)
         result['issues'].append('Проверьте дополнительные правила магазина: вывод каталога или предупреждение безопасности сохранены без переформулировки.')
+    elif semantic and defer_semantic:
+        # Generation has already observed an unavailable model. Save the draft
+        # and retry verification durably rather than spending a second deadline.
+        result.update(checked=False, technical_error=True, reason='сервис модели недоступен')
+        result['issues'].append('Ответ сохранён; проверка правил продолжится в фоне после восстановления сервиса модели.')
     elif semantic:
         # A model repair may resolve the initial local defects. Recompute them
         # against the final text below instead of retaining stale warnings.

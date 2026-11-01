@@ -7,7 +7,7 @@ import time
 from sqlalchemy import select, func
 from .db import Session, Job, Review, Draft, Product, User, GenerationClaim, Publication, now
 
-VERSION = 'positive-recheck-2026-11-01-v1'
+VERSION = 'positive-recheck-2026-11-01-concise-v2'
 
 
 def scope(account, since=''):
@@ -17,17 +17,18 @@ def scope(account, since=''):
         ~select(Publication.id).where(Publication.review_id == Review.id).correlate(Review).exists())
 
 
-def enqueue(db, actor_id, account, since=''):
+def enqueue(db, actor_id, account, since='', *, refresh_templates=False):
     actor = db.get(User, actor_id)
     if not actor or not actor.enabled or actor.role != 'owner':
         raise ValueError('Нужен действующий владелец')
-    jid = 'positive-recheck-' + hashlib.sha256((VERSION + ':' + account + ':' + since).encode()).hexdigest()[:24]
+    jid = 'positive-recheck-' + hashlib.sha256((VERSION + ':' + account + ':' + since + (':refresh' if refresh_templates else '')).encode()).hexdigest()[:24]
     existing = db.get(Job, jid)
     if existing:
         return existing  # Never reset progress or restart cancelled work.
     total = db.scalar(select(func.count()).select_from(Draft).join(Review, Review.id == Draft.review_id).where(*scope(account, since))) or 0
     job = Job(id=jid, kind='draft_recheck', priority=35, max_attempts=1000000,
         result={'account_id': account, 'positive_recheck': True, 'version': VERSION, 'total': total, 'since': since,
+                'refresh_templates': refresh_templates,
                 'requested_by': actor_id, 'message': 'Быстрая перепроверка положительных отзывов без модели'})
     db.add(job); db.commit()
     return job
@@ -37,7 +38,7 @@ async def step(job_id, session_factory=Session, limit=500):
     from .draft_audit import manually_edited
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
-    from .rule_execution import positive_template
+    from .rule_execution import positive_template, legacy_positive_template
     from .services import assess_reply
     from .generation_control import FastPathUnavailable
     started = time.monotonic()
@@ -70,7 +71,9 @@ async def step(job_id, session_factory=Session, limit=500):
                 template = positive_template(review, rules, product=product)
                 # Preserve current valid answers and all employee edits. Only
                 # exact audited templates may pass locally; arbitrary prose defers.
-                candidate = draft.text if protected or (draft.quality or {}).get('passed') else template
+                refresh = bool(state.get('refresh_templates') and not protected and template
+                               and legacy_positive_template(draft.text, review, rules))
+                candidate = template if refresh else draft.text if protected or (draft.quality or {}).get('passed') else template
                 if candidate:
                     try:
                         answer, verdict = await enforce_owner_rules(candidate, review, product, rules, [],
@@ -112,7 +115,8 @@ async def step(job_id, session_factory=Session, limit=500):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--actor', required=True); parser.add_argument('--store', required=True); parser.add_argument('--since', default='')
+    parser.add_argument('--refresh-templates', action='store_true')
     args = parser.parse_args()
     with Session() as db:
-        job = enqueue(db, args.actor, args.store, args.since)
+        job = enqueue(db, args.actor, args.store, args.since, refresh_templates=args.refresh_templates)
         print(json.dumps({'id': job.id, 'status': job.status, 'total': job.result['total']}), flush=True)

@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '4.0'
+QUALITY_EVALUATOR_VERSION = '4.1'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -433,7 +433,9 @@ def assess_reply(review, product, reply, verified_facts=None):
         'relevance': {'label': 'Соответствие отзыву', 'score': 0, 'max': 12},
         'resolution': {'label': 'Полезность решения', 'score': 0, 'max': 18},
     }
-    if (60 if review.rating >= 4 else 120) <= len(reply) <= 900:
+    from .rule_execution import simple_positive
+    minimum_length = 25 if simple_positive(review) else 60 if review.rating >= 4 else 120
+    if minimum_length <= len(reply) <= 900:
         score += 15
         breakdown['substance']['score'] = 15
     else:
@@ -954,6 +956,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         reply, forced_model = local_positive, 'positive-local-2.0'
         selection_note = 'Краткая благодарность без выдуманных свойств; правила проверены программно'
     web_search_failed = False
+    model_outage = False
     if reply and 'короче' in instruction.lower():
         if specific_case:
             reply = specific_case['answer']
@@ -998,12 +1001,14 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         model_unavailable = False
         budget = GenerationBudget()
         model_started = time.monotonic()
+        # One usable answer is enough. Additional drafts are an explicit owner
+        # request, not a prerequisite for every ordinary review.
+        candidate_target = MIN_AI_CANDIDATES if re.search(r'(?:три|3)\s+(?:разн\w*\s+)?(?:ответ|вариант)', requested_instruction, re.I) else 1
         try:
-            seed_candidates = await budget.run(lambda: ollama.reply_variants(messages, MIN_AI_CANDIDATES))
+            seed_candidates = await budget.run(lambda: ollama.reply_variants(messages, candidate_target))
         except Exception as error:
             from .batch_processing import transient
-            if retry_outages and transient(error):
-                raise
+            model_outage = transient(error)
             fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
             # A connection failure should immediately use the safe local path instead
             # of holding the browser open for several identical network retries.
@@ -1017,24 +1022,30 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
                 checked_candidate = validate_reply(mask_vin(last_candidate))
                 candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates], verified_facts)
                 repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
-                if not repeated and candidate_quality['score'] >= best_quality['score']:
+                if not repeated and (bool(candidate_quality['passed']), candidate_quality['score']) >= (bool(best_quality.get('passed')), best_quality['score']):
                     best_reply, best_quality = checked_candidate, candidate_quality
                 if not repeated and candidate_quality.get('similarity', 0) < 0.86:
                     valid_candidates.append(checked_candidate)
                 issues = list(candidate_quality['issues'])
                 if repeated:
                     issues.append('написать новый текст, заметно отличающийся от предыдущего черновика')
-                if len(valid_candidates) >= MIN_AI_CANDIDATES and best_quality['score'] >= MIN_DRAFT_QUALITY:
+                if len(valid_candidates) >= candidate_target and best_quality.get('passed'):
                     break
-                if candidate_quality['score'] >= MIN_DRAFT_QUALITY:
+                if candidate_target > 1 and candidate_quality['passed']:
                     issues.append('создать ещё один самостоятельный вариант, чтобы выбрать лучший')
             except TimeoutError:
                 fallback_reason = 'timeout'
+                model_outage = best_reply is None
                 # Keep the best checked candidate or the existing safe fallback.
                 break
             except Exception as error:
                 # Ollama may be temporarily unavailable or may produce a reply that
                 # violates a hard rule. Retry with the concrete validation feedback.
+                from .batch_processing import transient
+                if transient(error):
+                    model_outage = best_reply is None
+                    fallback_reason = 'unavailable'
+                    break
                 issues = [str(error) or 'ответ не прошёл проверку безопасности']
             if attempt < MAX_GENERATION_ATTEMPTS - 1:
                 attempt_messages = messages + [
@@ -1066,7 +1077,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         reply, review, product, memories, verified_facts,
         lambda value: assess_reply(review, product, value, verified_facts),
         protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
-        local_only=fast_only, **({'check_seconds': 120} if recovery else {}))
+        local_only=fast_only, defer_semantic=model_outage)
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
