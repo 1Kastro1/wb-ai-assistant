@@ -1,4 +1,5 @@
 import unittest
+import re
 from types import SimpleNamespace
 from app.reply_policy import analyze_customer_message
 from app.safety import review_intent, rule_reply, validate_reply
@@ -27,7 +28,8 @@ class PositiveComparisonTests(unittest.TestCase):
         self.assertEqual(len(answers), 3)
         for answer in answers:
             self.assertNotIn('Свеча NGK', answer)
-            self.assertGreaterEqual(len(answer), 120)
+            self.assertLessEqual(len(answer), 100)
+            self.assertEqual(len(re.findall(r'спасибо|благодарим', answer, re.I)), 1)
             self.assertNotIn('совместим', answer)
             validate_reply(answer)
 

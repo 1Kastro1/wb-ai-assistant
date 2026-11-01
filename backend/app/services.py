@@ -22,7 +22,7 @@ from .generation_budget import GenerationBudget
 from .generation_control import exclusive_generation, FastPathUnavailable, GenerationBusy, ReviewSkipped, record_outcome
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
-from .rule_execution import select_rules, positive_template
+from .rule_execution import select_rules, positive_template, simple_positive
 from .reply_policy import analyze_customer_message, missing_complaints, customer_reply_policy, official_support_reply, has_redundant_clarification, semantic_reply_issues
 from .shared_marketplaces import POLICY_VERSION, equivalent_products, shared_counters, internet_fitment_enabled
 from .db import IS_SQLITE
@@ -433,7 +433,6 @@ def assess_reply(review, product, reply, verified_facts=None):
         'relevance': {'label': 'Соответствие отзыву', 'score': 0, 'max': 12},
         'resolution': {'label': 'Полезность решения', 'score': 0, 'max': 18},
     }
-    from .rule_execution import simple_positive
     minimum_length = 25 if simple_positive(review) else 60 if review.rating >= 4 else 120
     if minimum_length <= len(reply) <= 900:
         score += 15
