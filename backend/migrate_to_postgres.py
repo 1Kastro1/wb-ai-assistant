@@ -15,7 +15,7 @@ from sqlalchemy import Integer, create_engine, func, select, text
 from app.db import Base
 
 
-EXCLUDED_TABLES = {'alembic_version', 'wb_accounts', 'sessions', 'jobs', 'actions', 'publication_jobs'}
+EXCLUDED_TABLES = {'alembic_version', 'wb_accounts', 'sessions', 'jobs', 'actions', 'publication_jobs', 'generation_claims', 'generation_outcomes'}
 EXCLUDED_SETTINGS = {'automation_schedule', 'scheduler_status', 'portable_sync'}
 
 

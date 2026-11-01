@@ -18,7 +18,7 @@ from .db import Session, Setting, setting, set_setting, IS_SQLITE, engine, Gener
 PORTABLE_MAGIC = b'WBAIPORT1'
 PORTABLE_HEADER = len(PORTABLE_MAGIC) + 16 + 12
 
-SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,15))
+SUPPORTED_BACKUP_REVISIONS=tuple(f'{number:04d}' for number in range(1,16))
 AUTH_TABLES=('wb_accounts','sessions','users','registration_requests','team_invites')
 
 
@@ -28,6 +28,13 @@ def _ensure_queue_tables():
     with engine.begin() as connection:
         GenerationClaim.__table__.create(connection, checkfirst=True)
         GenerationOutcome.__table__.create(connection, checkfirst=True)
+    # Restoring a supported older file must make new read projections usable
+    # immediately, without waiting for an application restart.
+    from alembic.config import Config
+    from alembic import command
+    cfg = Config(str(Path(__file__).parent.parent / 'alembic.ini'))
+    cfg.set_main_option('script_location', str(Path(__file__).parent.parent / 'migrations'))
+    command.upgrade(cfg, 'head')
 
 
 def _table_exists(connection,table):
