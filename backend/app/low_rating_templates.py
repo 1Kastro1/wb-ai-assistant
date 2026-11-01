@@ -2,6 +2,14 @@
 import re
 from .db import Product
 
+SCENT_MESSAGES = {
+    'аромат в машине так себе звучит', 'слабо пахнет', 'аромат слабый', 'запах слабый',
+    'почти не пахнет', 'не пахнет', 'запах не понравился', 'аромат не понравился',
+    'перестал пахнуть через неделю', 'быстро выветрился', 'аромат быстро выветрился',
+    'пахнет один день',
+}
+SURFACE_MESSAGES = {'воск хороший но не стоит ждать чудо паутину видно', 'паутину видно', 'паутинка осталась'}
+
 
 def template_key(review, product):
     if not review or not product or review.marketplace not in ('wb', 'ozon', 'yandex'):
@@ -21,12 +29,16 @@ def template_key(review, product):
     if specific:
         return None
     topics = set(analysis['complaints'])
+    # A recognized complaint word does not prove there are no other problems.
+    # Only reviewed complete buyer phrases qualify; added/unrecognized context
+    # always stays with a person, even if the draft happens to match a template.
+    message = ' '.join(re.sub(r'[^а-яa-z0-9\s]', ' ', text.lower().replace('ё','е')).split())
     name = product.name.lower()
     if product.brand.upper() == 'EIKOSHA' and re.search(r'мелов|баноч|air spencer', name) and not re.search(r'giga|стерж', name):
-        if topics and topics <= {'WEAK_SCENT', 'SCENT_IMPRESSION', 'ODOR_COMPLAINT'}:
+        if message in SCENT_MESSAGES and topics and topics <= {'WEAK_SCENT', 'SCENT_IMPRESSION', 'ODOR_COMPLAINT'}:
             return 'eikosha_scent'
     from .product_guidance import fusso_instruction
-    if topics == {'SURFACE_MARKS'} and fusso_instruction(product):
+    if message in SURFACE_MESSAGES and topics == {'SURFACE_MARKS'} and fusso_instruction(product):
         return 'fusso_surface'
     return None
 

@@ -54,10 +54,30 @@ def test_changing_low_rating_scope_revokes_prepared_jobs(client, ready):
     assert not ready
 
 
-@pytest.mark.parametrize('text', ['Аромат слабый, верните деньги','Аромат слабый и болит голова','Не пахнет. Банка протекла','Аромат слабый, упаковка порвана'])
+@pytest.mark.parametrize('text', ['Аромат слабый, верните деньги','Аромат слабый и болит голова','Не пахнет. Банка протекла','Аромат слабый, упаковка порвана','Аромат слабый. Ребёнок попробовал содержимое','Аромат слабый. Испортилась панель'])
 def test_mixed_or_sensitive_scent_is_not_a_template(text):
     from types import SimpleNamespace
     from app.low_rating_templates import template_key
     review=SimpleNamespace(text=text,rating=2,marketplace='wb',risk='NORMAL',manual=False,safety_critical=False)
     product=SimpleNamespace(name='Меловой ароматизатор EIKOSHA',brand='EIKOSHA')
     assert template_key(review,product) is None
+
+
+@pytest.mark.parametrize('name,brand,text',[
+    ('Меловой ароматизатор для авто MARINE BLUE SQUASH A-106','EIKOSHA','Аромат в машине так себе звучит.....'),
+    ('Меловой ароматизатор для авто MARINE BLUE SQUASH A-106','EIKOSHA','Слабо пахнет'),
+    ('Полироль для автомобиля защитный Fusso 12 Months','SOFT99','Воск хороший, но не стоит ждать чудо, паутину видно'),
+])
+def test_product_template_matches_the_actual_generation_route(client,ready,name,brand,text):
+    from app.low_rating_templates import approved_template
+    from app.owner_reply_policy import apply_local_preferences,apply_signature
+    from app.product_guidance import fusso_instruction
+    from app.services import trusted_product_facts
+    with Session() as db:
+        r,d,p=db.get(Review,'ownerreview'),db.get(Draft,'ownerreview'),db.get(Product,'owner')
+        p.name,p.brand=name,brand;r.rating,r.text=3,text
+        facts=trusted_product_facts(db,p)
+        if fusso_instruction(p):facts+=[fusso_instruction(p)]
+        answer,_=apply_local_preferences(rule_reply(r,p,facts=facts),r,[])
+        d.text=d.original=apply_signature(answer,[]);db.commit()
+        assert approved_template(db,r,d)

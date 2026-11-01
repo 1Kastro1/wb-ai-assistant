@@ -39,14 +39,14 @@ def queue_overview(db, auth, store_id):
                   'Ожидает свободного места в очереди' if waiting else 'Выполняется на сервере')
         if job.kind == 'wb_excluded_recovery':
             reason = 'Приоритет Wildberries. ' + reason
-        tasks.append({'id': job.id, 'kind': job.kind, 'label': LABELS.get(job.kind, job.kind),
+        tasks.append({'id': job.id, 'kind': job.kind, 'label': 'Обновление ответов по правилам' if state.get('policy_regeneration') else LABELS.get(job.kind, job.kind),
                       'store_id': state.get('account_id'), 'store_name': store.name if store else 'Общие задачи',
                       'provider': store.provider if store else '', 'status': job.status,
                       'progress': job.progress, 'reason': reason, 'retry_at': retry_at,
                       'created_at': job.created_at, 'updated_at': state.get('updated_at') or state.get('started_at') or job.created_at,
                       'processed': state.get('processed', state.get('checked', state.get('checkpoint', {}).get('processed', 0))),
                       'total': state.get('total'), 'message': state.get('message', ''),
-                      'saved': state.get('processed') if job.kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft') else None,
+                      'saved': state.get('saved') if state.get('policy_regeneration') else state.get('processed') if job.kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft') else None,
                       'verified': state.get('verified'), 'failed': state.get('failed', 0),
                       'attention': state.get('attention', 0), 'deferred': state.get('deferred', 0),
                       'stage': 'Отправка готовых ответов' if job.kind == 'scheduled_publication' else 'Проверка сохранённого текста' if state.get('check_only') or state.get('positive_recheck') else 'Генерация ответов' if 'draft' in job.kind else 'Синхронизация',
