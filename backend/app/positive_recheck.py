@@ -29,6 +29,7 @@ def enqueue(db, actor_id, account, since='', *, refresh_templates=False):
     job = Job(id=jid, kind='draft_recheck', priority=35, max_attempts=1000000,
         result={'account_id': account, 'positive_recheck': True, 'version': VERSION, 'total': total, 'since': since,
                 'refresh_templates': refresh_templates,
+                'background': bool(refresh_templates and not since),
                 'requested_by': actor_id, 'message': 'Быстрая перепроверка положительных отзывов без модели'})
     db.add(job); db.commit()
     return job
