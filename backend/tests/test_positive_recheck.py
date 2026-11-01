@@ -32,6 +32,10 @@ def test_local_positive_recheck_preserves_edits_publications_and_defers_complain
         job=repair.enqueue(db,'owner-user','owner','2026-11-01'); jid=job.id
         assert repair.enqueue(db,'owner-user','owner','2026-11-01').id==jid
         assert job.result['total']==4
+        from app.queue_policy import next_job
+        db.add(Job(id='older-model-check',kind='draft_recheck',created_at='2026-01-01',
+                   result={'retry_draft_id':'old-draft'}));db.commit()
+        assert next_job(db).id==jid
     asyncio.run(repair.step(jid,limit=2))
     with Session() as db:
         cursor=db.get(Job,jid).result['cursor_id']

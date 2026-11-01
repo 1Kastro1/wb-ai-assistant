@@ -173,7 +173,7 @@ async def _recheck_one(job_id, session_factory=Session):
             protected = manually_edited(draft)
             answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
                 assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
-                check_seconds=45 if scan else 120 if check_only else 600, check_only=check_only,
+                check_seconds=45, check_only=check_only,
                 allow_fast_positive=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())

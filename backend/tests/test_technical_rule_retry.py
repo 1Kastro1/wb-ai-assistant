@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from app.db import Session, Product, Review, Draft, Job
+from app.db import Session, Product, Review, Draft, Job, Publication
 from app.draft_audit import recheck_step
 from app.rule_retry import enqueue
 
@@ -64,6 +64,17 @@ def test_explicit_saved_reply_recheck_precedes_background_scans(client):
         assert next_job(db).id == job.id
 
 
+def test_single_generation_and_newest_explicit_check_do_not_wait_for_old_retries(client):
+    from app.queue_policy import next_job
+    with Session() as db:
+        db.add_all([Job(id='old-check',kind='draft_recheck',created_at='2026-01-01',result={'retry_draft_id':'old'}),
+            Job(id='new-check',kind='draft_recheck',created_at='2026-11-01',result={'retry_draft_id':'new'}),
+            Job(id='generate',kind='single_draft',created_at='2026-11-01',result={})]);db.commit()
+        assert next_job(db).id=='generate'
+        db.get(Job,'generate').status='completed';db.commit()
+        assert next_job(db).id=='new-check'
+
+
 @pytest.mark.parametrize('state', ['passed', 'pending'])
 def test_stale_manual_status_does_not_override_verified_or_pending_rules(client, state):
     seed_error()
@@ -78,6 +89,16 @@ def test_stale_manual_status_does_not_override_verified_or_pending_rules(client,
     assert client.get('/work-queue', params={'view': 'manual'}).json()['total'] == 0
 
 
+def test_uncertain_publication_stays_in_personal_review_even_with_verified_positive_text(client):
+    seed_error()
+    with Session() as db:
+        draft=db.get(Draft,'d');draft.model='positive-local'
+        draft.quality={'passed':True,'text_issues':[],'owner_rules':{'passed':True,'checked':True,'violations':[]}}
+        db.add(Publication(id='uncertain-publication',review_id='r',action_id='old',status='uncertain'));db.commit()
+    assert client.get('/reviews/page',params={'manual_only':True}).json()['total']==1
+    assert client.get('/work-queue',params={'view':'manual'}).json()['total']==1
+
+
 @pytest.mark.parametrize('passed', [True, False])
 def test_check_only_preserves_text_revision_and_limits_retries(client, monkeypatch, passed):
     seed_error()
@@ -87,6 +108,7 @@ def test_check_only_preserves_text_revision_and_limits_retries(client, monkeypat
     monkeypatch.setattr(services, 'assess_reply', lambda *a, **k: {'passed': True, 'issues': [], 'score': 96})
     async def check(answer, *args, **kwargs):
         assert kwargs['check_only'] is True
+        assert kwargs['check_seconds'] == 45
         return answer, {'passed': passed, 'checked': passed, 'technical_error': not passed,
                         'matched': 1, 'violations': [], 'issues': [] if passed else ['таймаут']}
     monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
