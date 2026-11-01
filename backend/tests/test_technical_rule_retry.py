@@ -64,6 +64,17 @@ def test_explicit_saved_reply_recheck_precedes_background_scans(client):
         assert next_job(db).id == job.id
 
 
+def test_single_generation_and_newest_explicit_check_do_not_wait_for_old_retries(client):
+    from app.queue_policy import next_job
+    with Session() as db:
+        db.add_all([Job(id='old-check',kind='draft_recheck',created_at='2026-01-01',result={'retry_draft_id':'old'}),
+            Job(id='new-check',kind='draft_recheck',created_at='2026-11-01',result={'retry_draft_id':'new'}),
+            Job(id='generate',kind='single_draft',created_at='2026-11-01',result={})]);db.commit()
+        assert next_job(db).id=='generate'
+        db.get(Job,'generate').status='completed';db.commit()
+        assert next_job(db).id=='new-check'
+
+
 @pytest.mark.parametrize('state', ['passed', 'pending'])
 def test_stale_manual_status_does_not_override_verified_or_pending_rules(client, state):
     seed_error()

@@ -17,10 +17,11 @@ def next_job(db, kinds=None):
     # backoff has not expired stays out of the queue; imports can use that gap.
     interactive = case((Job.result['positive_recheck'].as_boolean() == True, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
-                       (Job.result['retry_draft_id'].as_string().is_not(None), 0),
-                       (Job.kind == 'wb_excluded_recovery', 1), else_=2)
+                       (Job.result['retry_draft_id'].as_string().is_not(None), 1),
+                       (Job.kind == 'wb_excluded_recovery', 2), else_=3)
     served = func.coalesce(Job.result['last_served_at'].as_string(), Job.created_at)
-    return db.scalar(statement.order_by(interactive, served, Job.priority, Job.created_at, Job.id).limit(1))
+    requested_check = case((Job.result['retry_draft_id'].as_string().is_not(None), Job.created_at), else_='')
+    return db.scalar(statement.order_by(interactive, requested_check.desc(), served, Job.priority, Job.created_at, Job.id).limit(1))
 
 
 def other_waiting(db, job_id):
