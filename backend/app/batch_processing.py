@@ -42,7 +42,7 @@ def transient(error):
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code in (408, 429) or error.response.status_code >= 500
     message = str(error).lower()
-    return bool(re.search(r'http (?:408|429|5\d\d)\b', message)) or any(word in message for word in ('timeout', 'timed out', 'таймаут', 'недоступ', 'не отвечает', 'соединени', 'локальный ai', 'локальная модель'))
+    return bool(re.search(r'http (?:408|429|5\d\d)\b', message)) or any(word in message for word in ('timeout', 'timed out', 'таймаут', 'недоступ', 'не отвечает', 'соединени', 'локальный ai', 'локальная модель', 'некорректный ответ модели'))
 
 
 def business_skip(error):

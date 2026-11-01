@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2026-11-01-positive'
+VERSION = 'context-rules-2026-11-01-concise'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -113,16 +113,37 @@ def select_rules(rules, review, product):
 
 
 POSITIVE_BODIES = (
-    'Благодарим Вас за высокую оценку! Спасибо, что нашли время оценить покупку. Желаем Вам приятного использования и хорошего дня.',
-    'Спасибо за высокую оценку! Нам важно Ваше мнение о покупке. Благодарим за уделённое время и желаем приятного использования.',
-    'Благодарим за Вашу оценку! Спасибо за доверие к нашему магазину. Желаем Вам приятного использования покупки и хорошего дня.',
+    'Спасибо за высокую оценку!',
+    'Благодарим Вас за оценку покупки!',
+    'Спасибо за Вашу оценку!',
 )
 
 SHORT_PRAISE_BODIES = (
-    'Спасибо за высокую оценку и добрые слова! Желаем Вам приятного использования покупки.',
-    'Благодарим за положительный отзыв! Желаем Вам хорошего дня и приятного использования.',
+    'Спасибо за высокую оценку и добрые слова!',
+    'Благодарим Вас за положительный отзыв!',
     'Спасибо за Вашу оценку! Рады, что покупка оставила хорошее впечатление.',
 )
+
+# Exact old built-in wording only. Used by the explicit, bounded refresh job;
+# employee text and arbitrary previously approved prose are never rewritten.
+LEGACY_POSITIVE_BODIES = (
+    'Благодарим Вас за высокую оценку! Спасибо, что нашли время оценить покупку. Желаем Вам приятного использования и хорошего дня.',
+    'Спасибо за высокую оценку! Нам важно Ваше мнение о покупке. Благодарим за уделённое время и желаем приятного использования.',
+    'Благодарим за Вашу оценку! Спасибо за доверие к нашему магазину. Желаем Вам приятного использования покупки и хорошего дня.',
+    'Спасибо за высокую оценку и добрые слова! Желаем Вам приятного использования покупки.',
+    'Благодарим за положительный отзыв! Желаем Вам хорошего дня и приятного использования.',
+)
+
+
+def legacy_positive_template(answer, review, rules):
+    from .owner_reply_policy import apply_local_preferences, apply_signature
+    if not simple_positive(review):
+        return False
+    for body in LEGACY_POSITIVE_BODIES:
+        value, _ = apply_local_preferences('Добрый день! ' + body, review, rules)
+        if answer == apply_signature(value, rules):
+            return True
+    return False
 
 
 def positive_body(review, revision=0):
