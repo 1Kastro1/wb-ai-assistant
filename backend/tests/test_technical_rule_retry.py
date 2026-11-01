@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from app.db import Session, Product, Review, Draft, Job
+from app.db import Session, Product, Review, Draft, Job, Publication
 from app.draft_audit import recheck_step
 from app.rule_retry import enqueue
 
@@ -87,6 +87,16 @@ def test_stale_manual_status_does_not_override_verified_or_pending_rules(client,
         db.commit()
     assert client.get('/reviews/page', params={'manual_only': True}).json()['total'] == 0
     assert client.get('/work-queue', params={'view': 'manual'}).json()['total'] == 0
+
+
+def test_uncertain_publication_stays_in_personal_review_even_with_verified_positive_text(client):
+    seed_error()
+    with Session() as db:
+        draft=db.get(Draft,'d');draft.model='positive-local'
+        draft.quality={'passed':True,'text_issues':[],'owner_rules':{'passed':True,'checked':True,'violations':[]}}
+        db.add(Publication(id='uncertain-publication',review_id='r',action_id='old',status='uncertain'));db.commit()
+    assert client.get('/reviews/page',params={'manual_only':True}).json()['total']==1
+    assert client.get('/work-queue',params={'view':'manual'}).json()['total']==1
 
 
 @pytest.mark.parametrize('passed', [True, False])
