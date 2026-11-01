@@ -897,6 +897,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     product = db.get(Product, review.product_id)
     verified_facts = trusted_product_facts(db, product)
     specific_case = specific_review_case(review, product)
+    from .product_guidance import fusso_instruction
+    if review_intent(review.text) == 'SURFACE_MARKS' and fusso_instruction(product):
+        verified_facts += [fusso_instruction(product)]
     if specific_case:verified_facts = verified_facts + specific_case['sources']
     if review_intent(review.text)=='DIM_LIGHT' and 'галоген' in product.name.lower():
         verified_facts = verified_facts + [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]

@@ -134,6 +134,18 @@ def eikosha_placement(product, facts):
     return advice
 
 
+def fusso_instruction(product):
+    """Same published procedure for the light/dark 12 Months wax; no SKU inference."""
+    name = getattr(product, 'name', '').lower()
+    if (getattr(product, 'brand', '').replace(' ', '').upper() != 'SOFT99'
+            or not re.search(r'fusso.*12|12.*fusso', name) or 'набор' in name):
+        return None
+    return {'kind':'instruction', 'source_type':'manufacturer', 'verification_status':'VERIFIED',
+        'source':'https://www.soft99.co.jp/en/products/detail/00300/',
+        'also_supported_by':'https://www.soft99.co.jp/en/products/detail/00298/',
+        'text':'Способ применения Fusso Coat 12 Months: Вымойте автомобиль и полностью высушите кузов. Нанесите состав тонким равномерным слоем. После высыхания покрытия (5–20 минут в зависимости от температуры) располируйте мягкой сухой тканью.'}
+
+
 def product_usage_reply(review, product, facts, revision=0):
     from .reply_policy import analyze_customer_message, faded_scent, yellow_light_complaint
     analysis = analyze_customer_message(review.text, review.rating)
@@ -141,11 +153,10 @@ def product_usage_reply(review, product, facts, revision=0):
         return None
     complaints = set(analysis['complaints'])
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
-    if (getattr(product, 'brand', '').replace(' ', '').upper() == 'SOFT99'
-            and re.search(r'fusso.*12|12.*fusso', name) and 'SURFACE_MARKS' in complaints
+    if (fusso_instruction(product) and 'SURFACE_MARKS' in complaints
             and not complaints - {'SURFACE_MARKS', 'NO_RESULT'}):
         intro = ['Спасибо за отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.'][int(revision) % 3]
-        instruction = usage_excerpt(facts)
+        instruction = usage_excerpt([fusso_instruction(product)])
         return ('Добрый день! ' + intro + ' Сожалеем, что паутинка осталась заметна. '
             'Fusso создаёт защитное покрытие; для удаления уже имеющихся царапин нужна предварительная полировка с учётом состояния лака. '
             + ('Для нанесения защитного слоя: ' + instruction if instruction else 'Наносите защитный состав по инструкции на Вашей упаковке.'))

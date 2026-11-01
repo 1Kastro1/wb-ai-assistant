@@ -20,7 +20,7 @@ FACTS = [{'kind':'instruction','verification_status':'VERIFIED','source_type':'m
     ('Аромат в машине так себе звучит.....',SCENT,['Если хочется','дефлекторе','держателя'],['слабее, чем']),
     ('Пахнет 1 день, таких денег не стоит',SCENT,['быстро перестал','держател'],['что именно']),
     ('Запах как у туалетного дезодоранта.',SCENT,['не подошёл','индивидуально'],['вскройте','откройте','дефлектор']),
-    ('Воск хороший, но не стоит ждать чудо, паутину видно',FUSSO,['паутинка','предварительная полировка','тонким','5–20','Располируйте'],['что именно','Способ применения Fusso']),
+    ('Воск хороший, но не стоит ждать чудо, паутину видно',FUSSO,['паутинка','предварительная полировка','тонким','5–20','располируйте'],['что именно','Способ применения Fusso']),
 ])
 def test_screenshot_and_neighboring_cases_keep_context_without_a_model(text,product,expected,forbidden):
     review=Row(text=text,rating=3,risk='NORMAL')
@@ -38,11 +38,13 @@ def test_positive_or_negated_observations_are_not_new_complaints(text):
     assert not set(analysis['complaints']) & {'SCENT_IMPRESSION','SURFACE_MARKS','WEAK_SCENT','ODOR_COMPLAINT'}
 
 
-def test_fusso_unknown_variant_does_not_invent_application_time():
-    answer=rule_reply(Row(text='Паутину видно',rating=3,risk='NORMAL'),FUSSO,facts=[])
-    assert 'упаковке' in answer and 'минут' not in answer
+def test_fusso_manufacturer_procedure_overrides_legacy_card_and_is_scoped_to_the_model():
+    answer=rule_reply(Row(text='Паутину видно',rating=3,risk='NORMAL'),FUSSO,facts=[{'text':'Способ применения: Нанесите на влажную губку.','verification_status':'VERIFIED'}])
+    assert 'сухой' in answer and 'тонким' in answer and 'влажную' not in answer
     other=Row(name='Полироль другая',brand='OTHER',category='',facts=[])
     assert 'Fusso' not in safe_fallback_reply(Row(text='Паутину видно',rating=3,risk='NORMAL'),other)
+    from app.product_guidance import fusso_instruction
+    assert not fusso_instruction(Row(name='Fusso Speed and Barrier',brand='SOFT99'))
 
 
 def test_generation_uses_local_guidance_and_a_short_independent_rule_deadline(client,monkeypatch):

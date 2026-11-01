@@ -65,6 +65,8 @@ async def step(job_id, session_factory=Session, limit=100):
                 and not db.scalar(select(Publication.id).where(Publication.review_id == rid)))
             if eligible and (draft.quality or {}).get('context_guidance', {}).get('version') != VERSION:
                 product = db.get(Product, review.product_id); facts = trusted_product_facts(db, product)
+                from .product_guidance import fusso_instruction
+                if fusso_instruction(product): facts += [fusso_instruction(product)]
                 answer = candidate(review, product, draft, facts)
                 if answer:
                     rules = matching_owner_rules(db, product)
@@ -75,6 +77,8 @@ async def step(job_id, session_factory=Session, limit=100):
                         verdict = saved_rule_quality(answer, rules, None, changed=True, review=review)
                         quality = attach_rule_quality({**(draft.quality or {}), **assess_reply(review, product, answer, facts)}, verdict)
                         quality['context_guidance'] = {'version': VERSION, 'at': now()}
+                        quality['sources'] = [{'text':f.get('text',''), 'source':f.get('source',''),
+                            'verification_status':'VERIFIED'} for f in facts if f.get('verification_status')=='VERIFIED']
                         draft.text, draft.revision = answer, draft.revision + 1
                         draft.edits = [*(draft.edits or []), {'old': old, 'new': answer, 'by': 'automation', 'at': now(), 'reason': VERSION}]
                         draft.quality = quality; draft.model = 'context-guidance-1.0'
