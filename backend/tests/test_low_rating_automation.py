@@ -54,7 +54,7 @@ def test_changing_low_rating_scope_revokes_prepared_jobs(client, ready):
     assert not ready
 
 
-@pytest.mark.parametrize('text', ['Аромат слабый, верните деньги','Аромат слабый и болит голова','Не пахнет. Банка протекла','Аромат слабый, упаковка порвана','Аромат слабый. Ребёнок попробовал содержимое','Аромат слабый. Испортилась панель'])
+@pytest.mark.parametrize('text', ['Аромат слабый, верните деньги','Аромат слабый и болит голова','Не пахнет. Банка протекла','Аромат слабый, упаковка порвана','Аромат слабый. Ребёнок попробовал содержимое','Аромат слабый. Испортилась панель','Аромат слабый 🤮','Аромат слабый 火'])
 def test_mixed_or_sensitive_scent_is_not_a_template(text):
     from types import SimpleNamespace
     from app.low_rating_templates import template_key

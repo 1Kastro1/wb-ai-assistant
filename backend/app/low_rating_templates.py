@@ -32,7 +32,10 @@ def template_key(review, product):
     # A recognized complaint word does not prove there are no other problems.
     # Only reviewed complete buyer phrases qualify; added/unrecognized context
     # always stays with a person, even if the draft happens to match a template.
-    message = ' '.join(re.sub(r'[^а-яa-z0-9\s]', ' ', text.lower().replace('ё','е')).split())
+    normalized = text.lower().replace('ё','е')
+    if re.search(r'[^а-яa-z0-9\s.,!?;:…«»"()—–-]', normalized):
+        return None  # Do not erase meaningful emoji or unrecognized scripts.
+    message = ' '.join(re.sub(r'[^а-яa-z0-9\s]', ' ', normalized).split())
     name = product.name.lower()
     if product.brand.upper() == 'EIKOSHA' and re.search(r'мелов|баноч|air spencer', name) and not re.search(r'giga|стерж', name):
         if message in SCENT_MESSAGES and topics and topics <= {'WEAK_SCENT', 'SCENT_IMPRESSION', 'ODOR_COMPLAINT'}:
