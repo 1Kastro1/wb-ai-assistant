@@ -55,7 +55,7 @@ class PostgresOperations(unittest.TestCase):
         try:
             with factory() as db:
                 previous = {key: db.get(Setting,key).value if db.get(Setting,key) else None for key in keys}
-                db.add(User(id=prefix,username=prefix,password_hash='unused',role='owner',enabled=True))
+                db.add(User(id=prefix,username=prefix,display_name='Test owner',password_hash='unused',role='owner',enabled=True))
                 db.add(StoreProfile(id=prefix,name='Test',provider='wb'))
                 db.add(Account(id=prefix,encrypted_token='unused'))
                 db.add(Product(id=prefix,name='Автотовар',brand='TEST')); db.flush()
