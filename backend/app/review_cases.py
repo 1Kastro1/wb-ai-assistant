@@ -19,7 +19,7 @@ def specific_review_case(review, product):
         return {'key': key, 'answer': thanks + answer, 'sources': sources}
 
     if not text and review.rating <= 3:
-        return result('rating_only', 'Сожалеем, что покупка оставила такое впечатление. Подскажите, пожалуйста, что именно Вас не устроило и почему Вы поставили такую оценку? Это поможет нам ответить по существу.')
+        return result('rating_only', 'Сожалеем, что покупка оставила такое впечатление. Подскажите, пожалуйста, что именно Вас не устроило? Это поможет нам ответить по существу.')
 
     # Never turn braking failure, overheating or grinding into a bedding-in reply.
     braking_failure = re.search(r'не тормоз|плохо тормоз|хуже тормоз|перегрев|дым|заклини|скрежет|провалива|вибрац|биени', text)

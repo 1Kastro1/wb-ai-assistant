@@ -771,6 +771,7 @@ class StoreConnection(Payload):
 
 
 class ScheduleInput(Payload):
+    publication_low_ratings: bool | None = None
     publication_markets: dict[str, bool] | None = None
     publication_enabled: bool | None = None
     publication_hours: int | None = Field(default=None, ge=1, le=168)
@@ -946,6 +947,20 @@ async def test_store(store_id: str, auth: AUTH, db: DB):
     return {'ok':True, 'provider':store.provider}
 
 
+@app.get('/settings/review-policy')
+def review_policy_get(auth: OWNER, db: DB):
+    from .review_regeneration import runtime
+    return runtime(db)
+
+
+@app.post('/settings/review-policy/regenerate')
+def review_policy_regenerate(auth: OWNER, db: DB, background: BackgroundTasks):
+    from .review_regeneration import enqueue_all, runtime
+    enqueue_all(db, auth['user_id'])
+    background.add_task(run_job_queue)
+    return runtime(db)
+
+
 @app.get('/settings/schedule')
 def schedule_get(auth: AUTH, db: DB):
     from .automation_schedule import schedule_status
@@ -990,7 +1005,7 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
         reason = availability_reason(db)
         if reason:
             raise ValueError(reason)
-        if not (value.get('publication_reviews') or value.get('publication_questions')):
+        if not (value.get('publication_reviews') or value.get('publication_questions') or value.get('publication_low_ratings')):
             raise ValueError('Выберите ответы на отзывы или вопросы для автоматической выгрузки.')
         if publication_changed or not current.get('publication_authorization'):
             value.update(publication_authorized_by=auth['user_id'], publication_authorization=str(uuid4()), publication_authorized_at=now())

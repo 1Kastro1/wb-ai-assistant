@@ -8,7 +8,7 @@ from .db import Session, Setting, Job, User, StoreProfile, Account, Review, Draf
 KIND = 'scheduled_publication'
 PROVIDERS = ('wb', 'ozon', 'yandex')
 BATCH_SIZE = 200
-FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions')
+FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions', 'publication_low_ratings')
 
 
 def market_enabled(schedule, provider):
@@ -59,10 +59,14 @@ def candidate_query(store_id, schedule, cursor=None):
     kinds = []
     if schedule.get('publication_reviews', True):
         kinds.append(and_(~question, Review.rating >= 4))
+    if schedule.get('publication_low_ratings', False):
+        kinds.append(and_(~question, Review.rating.between(1, 3)))
     if schedule.get('publication_questions', True):
         kinds.append(question)
     query = select(Review).join(Draft, Draft.review_id == Review.id).where(
-        Review.wb_account_id == store_id, Review.is_answered == False, Review.status == 'draft_ready',
+        Review.wb_account_id == store_id, Review.is_answered == False, or_(Review.status == 'draft_ready', and_(
+            Review.status == 'manual_review', Review.rating.between(1, 3), ~question,
+            bool(schedule.get('publication_low_ratings', False)))),
         Review.manual == False, Review.safety_critical == False, Review.risk == 'NORMAL',
         Draft.quality_passed == True, Draft.quality_pending == False, Draft.quality_technical == False,
         Draft.quality_attention == False, or_(*kinds) if kinds else False,
@@ -75,7 +79,8 @@ def candidate_query(store_id, schedule, cursor=None):
 
 def eligibility_reason(db, review, draft, schedule):
     from .services import matching_owner_rules, saved_rule_quality, validate_reply
-    if not review or not draft or review.is_answered or review.status != 'draft_ready':
+    low = bool(review and not review.marketplace.endswith('_question') and 1 <= review.rating <= 3)
+    if not review or not draft or review.is_answered or review.status not in (('draft_ready', 'manual_review') if low else ('draft_ready',)):
         return 'Ответ больше не готов к отправке.'
     question = review.marketplace.endswith('_question')
     provider = review.marketplace.removesuffix('_question')
@@ -83,9 +88,13 @@ def eligibility_reason(db, review, draft, schedule):
     if not store or provider != store.provider or provider not in PROVIDERS:
         return 'Маркетплейс обращения не совпадает с магазином.'
     if (review.manual or review.safety_critical or review.risk != 'NORMAL' or
-        not question and (review.rating <= 3 or not schedule.get('publication_reviews', True)) or
+        not question and (not schedule.get('publication_low_ratings', False) if low else not schedule.get('publication_reviews', True)) or
         question and not schedule.get('publication_questions', True)):
         return 'Нужна личная проверка или этот тип ответов выключен.'
+    if low:
+        from .low_rating_templates import approved_template
+        if not approved_template(db, review, draft):
+            return 'Для низкой оценки нет подходящего проверенного шаблона. Нужна личная проверка.'
     if db.scalar(select(Publication.id).where(Publication.review_id == review.id)):
         return 'Публикация уже выполнялась; повторная отправка исключена.'
     quality = draft.quality or {}

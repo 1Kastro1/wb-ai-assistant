@@ -16,7 +16,7 @@ function component(file){
 }
 test('legacy schedules preserve both groups and payload contains no hidden service settings',()=>{
  const values=scheduleValues({enabled:true,reviews_hours:4,questions_hours:8,drafts_hours:12,drafts_enabled:true});
- assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false,publication_enabled:false,publication_hours:1,publication_reviews:true,publication_questions:true,publication_markets:{wb:true,ozon:true,yandex:true}});
+ assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false,publication_enabled:false,publication_hours:1,publication_reviews:true,publication_questions:true,publication_low_ratings:false,publication_markets:{wb:true,ozon:true,yandex:true}});
  assert.equal(scheduleValues({enabled:false,drafts_enabled:true}).drafts_enabled,false);
  const separate=schedulePayload({...values,reviews_sync_enabled:false,question_drafts_enabled:true,question_drafts_hours:2});
  assert.equal(separate.questions_sync_enabled,true);assert.equal(separate.question_drafts_hours,2);assert.equal(separate.drafts_hours,12);
@@ -30,7 +30,7 @@ test('reviews and questions each have independent update and generation controls
  const Panel=component(path.resolve('app/AutomationSettings.tsx')).default;
  const markup=renderToStaticMarkup(React.createElement(Panel,{schedule:{enabled:false},onSave:async()=>{}}));
  assert.equal((markup.match(/type="number"/g)||[]).length,5);
- assert.equal((markup.match(/type="checkbox"/g)||[]).length,7);
+ assert.equal((markup.match(/type="checkbox"/g)||[]).length,8);
  assert.match(markup,/aria-label="Отзывы"/);assert.match(markup,/aria-label="Вопросы"/);
  assert.match(markup,/Обновление данных/);assert.match(markup,/Генерация ответов/);
  assert.match(markup,/даже если закрыть сайт/);assert.match(markup,/после вашего подтверждения/);
@@ -66,4 +66,15 @@ test('sidebar separates connection from publication and groups navigation',()=>{
  const html=renderToStaticMarkup(React.createElement(Sidebar,{user:{display_name:'Владелец'},stores:{active:'wb',items:[{id:'wb',name:'Магазин',provider:'wb',connected:true,publication_state:'disabled'}]},page:'Главная',nav:[['','Главная'],['','История действий'],['','Память'],['','Настройки']],pending:0,unread:0,busy:false,onPage:()=>{},onStore:()=>{},onLogout:()=>{}}));
  assert.match(html,/API подключён/);assert.match(html,/Выгрузка выключена/);
  assert.match(html,/КОНТРОЛЬ/);assert.match(html,/УПРАВЛЕНИЕ/);assert.match(html,/aria-current="page"/);
+});
+
+ test('low ratings are opt-in and valid as the only publication scope',()=>{
+ const values=scheduleValues({enabled:true,publication_enabled:true});
+ assert.equal(values.publication_low_ratings,false);
+ assert.equal(schedulePayload({...values,publication_reviews:false,publication_questions:false,publication_low_ratings:true}).publication_low_ratings,true);
+ const Header=component(path.resolve('app/SettingsHeader.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Header,{active:'automation',onChange:()=>{},owner:true}));
+ assert.equal((html.match(/aria-current="page"/g)||[]).length,1);
+ const member=renderToStaticMarkup(React.createElement(Header,{active:'answers',onChange:()=>{},owner:false}));
+ assert.doesNotMatch(member,/Безопасность|Автоматизация|Команда/);
 });

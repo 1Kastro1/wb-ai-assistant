@@ -1,6 +1,7 @@
 'use client';
 import {useEffect,useState} from 'react';
 import AppIcon from './AppIcon';
+import ReviewPolicyCampaign from './ReviewPolicyCampaign';
 import PublicationAutomation from './PublicationAutomation';
 import {scheduleValues,schedulePayload} from './automation-settings.mjs';
 import './automation-settings.css';
@@ -31,6 +32,7 @@ export default function AutomationSettings({schedule,onSave,busy=false,assistant
    </div>;})}
   </section>)}</div>
   <PublicationAutomation values={values} schedule={schedule} update={update} busy={saving||busy} dirty={dirty} assistantEnabled={assistantEnabled}/>
+  <ReviewPolicyCampaign/>
   <div className="automation-background"><span className="automation-background-icon"><AppIcon name="История действий"/></span><div><b>Продолжит работу, даже если закрыть сайт</b><p>Обновление данных, подготовка и включённая выгрузка выполняются на сервере. Если автоматическая выгрузка выключена, ответы сохраняются как черновики — отправка после вашего подтверждения.</p></div></div>
   <footer className="automation-footer"><span>{dirty?'Есть несохранённые изменения':'Отзывы и вопросы — каждое по своему расписанию'}</span><button className="primary" type="submit" disabled={saving||busy||!dirty}>{saving?'Сохраняем…':'Сохранить расписание'}</button></footer>
   {error&&<p className="automation-feedback error" role="alert">{error}</p>}{message&&<p className="automation-feedback" role="status">{message}</p>}

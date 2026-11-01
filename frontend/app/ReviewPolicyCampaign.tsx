@@ -1,0 +1,12 @@
+'use client';
+import {useEffect,useState} from 'react';
+import {api} from './client';
+import {createBackgroundPoller} from './background-work.mjs';
+type Row=Record<string,any>;
+const statuses:Row={queued:'В очереди',running:'Обновляем',completed:'Завершено',failed:'Нужна проверка',cancelled:'Остановлено'};
+export default function ReviewPolicyCampaign(){
+ const [data,setData]=useState<Row>({stores:[]}),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ useEffect(()=>{const poller=createBackgroundPoller({load:()=>api('/settings/review-policy'),onValue:(v:Row)=>{setData(v);setError('')},onError:()=>setError('Не удалось обновить прогресс. Задания продолжают работать на сервере.'),isVisible:()=>!document.hidden,idleDelay:15000,errorDelay:30000});const wake=()=>poller.wake();document.addEventListener('visibilitychange',wake);poller.start();return()=>{poller.stop();document.removeEventListener('visibilitychange',wake)}},[]);
+ const active=(data.stores||[]).some((s:Row)=>['queued','running'].includes(s.status));
+ return <section className="review-policy-campaign" aria-label="Обновление сохранённых ответов"><div className="campaign-heading"><div><span className="automation-eyebrow">КАЧЕСТВО ОТВЕТОВ</span><h3>Обновление по текущим правилам</h3><p>Сохранённые неопубликованные ответы на отзывы во всех маркетах.</p></div><span className={'pill '+(active?'green':'')}>{active?'Работает на сервере':'Под вашим контролем'}</span></div><div className="campaign-stores">{(data.stores||[]).map((s:Row)=><article key={s.id}><div><b>{s.store}</b><small>{statuses[s.status]||s.status}</small></div><progress value={s.progress||0} max="100" aria-label={'Прогресс: '+s.store}/><p>Обработано {s.processed||0} из {s.total||0}</p><small>Сохранено: {s.saved||0} · защищено: {s.preserved||0} · ошибок: {s.errors||0}</small></article>)}</div><div className="campaign-footer"><p>Ручные правки, вопросы и опубликованные ответы сохраняются. При закрытии сайта обработка продолжится. Проверка правил и включённая автовыгрузка выполняются отдельно.</p><button type="button" disabled={busy||active} onClick={async()=>{setBusy(true);setError('');try{setData(await api('/settings/review-policy/regenerate','POST'))}catch(e){setError(e instanceof Error?e.message:'Не удалось запустить обновление')}finally{setBusy(false)}}}>{busy?'Запускаем…':active?'Обновление запущено':'Обновить ответы по правилам'}</button></div>{error&&<p role="alert">{error}</p>}</section>;
+}
