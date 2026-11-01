@@ -110,7 +110,6 @@ export default function App() {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('all'), [selected, setSelected] = useState<string[]>([]), [context, setContext] = useState<Row>({});
   const [performance, setPerformance] = useState('normal');
   const [token, setToken] = useState(''), [connectionConfig,setConnectionConfig]=useState<Row>({}), [memory, setMemory] = useState(''), [brand, setBrand] = useState(''), [brands, setBrands] = useState<Row[]>([]);
-  const [reviewCounts,setReviewCounts]=useState<Row>({});
   const reviewResultsKey=useRef(''),reviewSearchRequest=useRef(0),productSearchRequest=useRef(0),questionSearchRequest=useRef(0),activeJobs=useRef(false);
   const [reviewPage, setReviewPage] = useState<Row>({total:0,offset:0,has_more:false}), [questionPage, setQuestionPage] = useState<Row>({total:0,offset:0,has_more:false}), [jobs, setJobs] = useState<Row[]>([]), [quality, setQuality] = useState<Row>({});
   activeJobs.current=jobs.some(job=>['queued','running'].includes(job.status));
@@ -184,17 +183,15 @@ export default function App() {
     scrollReady.current=false;const request=++reviewSearchRequest.current,key=currentUser.id+':'+stores.active+':'+view+':'+searchQuery+':'+JSON.stringify(conditions),cached=reviewViews.current.get(key);setReviewLoading(true);
     setReviewLoadError('');
     try{
-      let loadedCounts=cached?.counts;
-      if(reuse&&cached&&Date.now()-cached.at<15000){reviewResultsKey.current=key;setReviews(cached.items);setReviewPage(cached.page);if(cached.counts)setReviewCounts(cached.counts);return}
+      if(reuse&&cached&&Date.now()-cached.at<15000){reviewResultsKey.current=key;setReviews(cached.items);setReviewPage(cached.page);return}
       if(!append&&reviewResultsKey.current!==key){reviewResultsKey.current=key;setReviews([]);setSelected([]);setReviewPage({total:0,offset:0,limit:30,has_more:false})}
-      void api('/reviews/counts?q='+encodeURIComponent(searchQuery),'GET',undefined,15000).then(counts=>{loadedCounts=counts;if(request===reviewSearchRequest.current){setReviewCounts(counts);const entry=reviewViews.current.get(key);if(entry)entry.counts=counts}}).catch(()=>{});
       const limit=append?30:Math.max(30,Math.min(100,cached?.items.length||viewPreferences.current.reviewLimit||30));
       const params=new URLSearchParams({q:searchQuery,unanswered:String(view==='unanswered'),attention:String(view==='attention'),max_rating:String(view==='negative'?3:5),limit:String(limit),offset:String(offset)});
       if(['positive','negative','rating_only','with_text','manual','context'].includes(view))params.set('view',view);
       if(view==='context')params.set('review_ids',(context.last_result_ids||[]).join(','));
       reviewFilterParams(view==='all'?conditions:emptyReviewFilters()).forEach((value,key)=>params.append(key,value));
       const result=await api('/reviews/page?'+params,'GET',undefined,45000);
-      if(request===reviewSearchRequest.current){reviewResultsKey.current=key;const items=append?[...(cached?.items||reviews),...result.items]:result.items;setReviews(items);setReviewPage(result);reviewViews.current.set(key,{items,page:result,at:Date.now(),counts:loadedCounts});viewPreferences.current.reviewLimit=Math.min(100,items.length);try{sessionStorage.setItem(viewKey,JSON.stringify(viewPreferences.current))}catch{}}
+      if(request===reviewSearchRequest.current){reviewResultsKey.current=key;const items=append?[...(cached?.items||reviews),...result.items]:result.items;setReviews(items);setReviewPage(result);reviewViews.current.set(key,{items,page:result,at:Date.now()});viewPreferences.current.reviewLimit=Math.min(100,items.length);try{sessionStorage.setItem(viewKey,JSON.stringify(viewPreferences.current))}catch{}}
     }catch(error){if(request===reviewSearchRequest.current)setReviewLoadError(error instanceof Error?error.message:'Не удалось загрузить отзывы');throw error}
     finally{if(request===reviewSearchRequest.current)setReviewLoading(false)}
   }
