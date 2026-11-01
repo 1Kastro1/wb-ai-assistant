@@ -16,7 +16,7 @@ function component(file){
 }
 test('legacy schedules preserve both groups and payload contains no hidden service settings',()=>{
  const values=scheduleValues({enabled:true,reviews_hours:4,questions_hours:8,drafts_hours:12,drafts_enabled:true});
- assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false,publication_enabled:false,publication_hours:1,publication_reviews:true,publication_questions:true});
+ assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false,publication_enabled:false,publication_hours:1,publication_reviews:true,publication_questions:true,publication_markets:{wb:true,ozon:true,yandex:true}});
  assert.equal(scheduleValues({enabled:false,drafts_enabled:true}).drafts_enabled,false);
  const separate=schedulePayload({...values,reviews_sync_enabled:false,question_drafts_enabled:true,question_drafts_hours:2});
  assert.equal(separate.questions_sync_enabled,true);assert.equal(separate.question_drafts_hours,2);assert.equal(separate.drafts_hours,12);
@@ -47,3 +47,23 @@ test('reviews and questions each have independent update and generation controls
   assert.match(html,/Wildberries/);assert.match(html,/Ozon/);assert.match(html,/Яндекс Маркет/);
   assert.match(html,/Выгрузка выключена/);assert.match(html,/по Москве/);
  });
+
+test('market switches keep their saved scope and communicate deferred saving',()=>{
+ const saved={enabled:true,publication_enabled:true,publication_markets:{wb:true,ozon:false,yandex:true}};
+ const values=scheduleValues(saved);
+ assert.equal(schedulePayload(values).publication_markets.ozon,false);
+ assert.deepEqual(scheduleValues({enabled:true}).publication_markets,{wb:true,ozon:true,yandex:true});
+ const Panel=component(path.resolve('app/AutomationSettings.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Panel,{schedule:{...saved,publication_runtime:{available:true,stores:[{id:'wb',provider:'wb',name:'Мой WB',enabled:true,connected:true},{id:'oz',provider:'ozon',name:'Мой Ozon',enabled:false,connected:true},{id:'ya',provider:'yandex',name:'Мой Яндекс',enabled:true,connected:true}]}},onSave:async()=>{}}));
+ assert.match(html,/aria-label="Автоматическая выгрузка: Wildberries"/);
+ assert.match(html,/aria-label="Автоматическая выгрузка: Ozon"/);
+ assert.match(html,/aria-label="Автоматическая выгрузка: Яндекс Маркет"/);
+ assert.match(html,/Выключено для маркета/);assert.match(html,/применяются после сохранения/);
+});
+
+test('sidebar separates connection from publication and groups navigation',()=>{
+ const Sidebar=component(path.resolve('app/AppSidebar.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Sidebar,{user:{display_name:'Владелец'},stores:{active:'wb',items:[{id:'wb',name:'Магазин',provider:'wb',connected:true,publication_state:'disabled'}]},page:'Главная',nav:[['','Главная'],['','История действий'],['','Память'],['','Настройки']],pending:0,unread:0,busy:false,onPage:()=>{},onStore:()=>{},onLogout:()=>{}}));
+ assert.match(html,/API подключён/);assert.match(html,/Выгрузка выключена/);
+ assert.match(html,/КОНТРОЛЬ/);assert.match(html,/УПРАВЛЕНИЕ/);assert.match(html,/aria-current="page"/);
+});

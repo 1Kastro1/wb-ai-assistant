@@ -771,6 +771,7 @@ class StoreConnection(Payload):
 
 
 class ScheduleInput(Payload):
+    publication_markets: dict[str, bool] | None = None
     publication_enabled: bool | None = None
     publication_hours: int | None = Field(default=None, ge=1, le=168)
     publication_reviews: bool | None = None
@@ -884,12 +885,18 @@ async def telegram_test(auth: OWNER, db: DB):
 
 @app.get('/stores')
 def stores(auth: AUTH, db: DB):
+    from .scheduled_publication import market_enabled, blocked_reason
+    schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
+    publication_on = bool(schedule['enabled'] and schedule['publication_enabled'])
+    publication_blocked = bool(blocked_reason(db, schedule)) if publication_on else False
     allowed = auth.get('store_ids') or []
     rows = list(db.scalars(select(StoreProfile).order_by(StoreProfile.created_at)))
     assigned = lambda store: auth['role'] == 'owner' or '*' in allowed or store.id in allowed
     active = active_store(db, auth) if rows else ''
     return {'active': active, 'items': [{**public(s), 'config': {k:v for k,v in (s.config or {}).items() if k in ('client_id','business_id')} if assigned(s) else {},
                                       'connected': bool(db.get(Account, s.id)), 'accessible': True,
+                                      'publication_state': ('disabled' if not publication_on or not market_enabled(schedule, s.provider)
+                                          else 'paused' if publication_blocked or not db.get(Account, s.id) else 'enabled') if auth['role'] == 'owner' else None,
                                       'can_operate': assigned(s) and ('*' in auth.get('permissions', []) or s.provider + ':operate' in auth.get('permissions', [])),
                                       'reviews': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id, ~Review.marketplace.like('%_question'))) or 0,
                                       'questions': db.scalar(select(func.count()).select_from(Review).where(Review.wb_account_id == s.id, Review.marketplace.like('%_question'))) or 0} for s in rows]}
@@ -953,6 +960,10 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
     row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update())
     current = normalize_schedule(row.value if row else {})
     updates = {key: value for key, value in body.model_dump(exclude_unset=True).items() if value is not None}
+    if 'publication_markets' in updates:
+        if set(updates['publication_markets']) - {'wb', 'ozon', 'yandex'}:
+            raise ValueError('Неизвестный маркетплейс в расписании выгрузки.')
+        updates['publication_markets'] = {**current['publication_markets'], **updates['publication_markets']}
     value = {**current, **updates}
     if 'sync_hours' in updates:
         hours = updates['sync_hours']
@@ -973,6 +984,8 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
         raise ValueError('Сначала включите ассистента для подготовки ответов')
     from .scheduled_publication import FIELDS, availability_reason
     publication_changed = any(key in updates and value.get(key) != current.get(key) for key in FIELDS)
+    changed_markets = {provider for provider in ('wb', 'ozon', 'yandex')
+                       if value['publication_markets'][provider] != current['publication_markets'][provider]}
     if value.get('publication_enabled'):
         reason = availability_reason(db)
         if reason:
@@ -987,6 +1000,16 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
             if pending_job.status == 'queued': pending_job.status = 'cancelled'
         for key in list(value):
             if key.startswith('last_publication:'): value.pop(key)
+    elif changed_markets:
+        # The existing consent remains valid for unaffected markets. Recheck the
+        # market switch under the same settings lock immediately before reserving.
+        affected = list(db.scalars(select(StoreProfile.id).where(StoreProfile.provider.in_(changed_markets))))
+        for pending_job in db.scalars(select(Job).where(Job.kind == 'scheduled_publication',
+                Job.status.in_(('queued', 'running')), Job.result['account_id'].as_string().in_(affected))):
+            pending_job.cancel_requested = True
+            if pending_job.status == 'queued': pending_job.status = 'cancelled'
+        for store_id in affected:
+            value.pop('last_publication:' + store_id, None)
     # Start newly enabled tasks promptly; changing an interval keeps its last run.
     reset_kinds = []
     for kind, field in (('reviews', 'reviews_sync_enabled'), ('questions', 'questions_sync_enabled'),

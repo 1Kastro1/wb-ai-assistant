@@ -46,6 +46,8 @@ def authenticity_concern(text):
 
 def faded_scent(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
+    if re.search(r'(?:пахнет|пах|запах держ\w*|аромат держ\w*)\s+(?:(?:всего|только|лишь)\s+)?(?:1|один|одну|два|две|2|3|три|пару)\s*(?:день|дня|сут\w*|час\w*)\b', value):
+        return True
     pattern = r'перестал[аио]?\s+пахн\w*|(?:запах|аромат)\w*[^.!?;]{0,35}?(?:исчез|пропал|выветри[лв])\w*|(?:исчез|пропал|выветри[лв])\w*[^.!?;]{0,35}?(?:запах|аромат)\w*'
     for match in re.finditer(pattern, value):
         context = value[max(0,match.start()-25):match.end()]
@@ -104,6 +106,8 @@ COMPLAINT_PATTERNS = {
     'DIM_LIGHT': ('свет тусклый', 'тусклый свет', 'слабо светит', 'свет слабый'),
     'DELIVERY_ISSUE': ('долго достав', 'задержали достав', 'проблема с достав', 'не достав'),
     'SIZE_ISSUE': ('слишком коротк',),
+    'SCENT_IMPRESSION': ('аромат так себе', 'запах так себе'),
+    'SURFACE_MARKS': ('паутину видно', 'паутинку видно', 'видна паутин', 'царапины остались'),
 }
 TOPIC_WORDS = {
     'AUTHENTICITY': ('оригинал', 'подлин', 'дистрибьютор', 'поддел'),
@@ -122,6 +126,8 @@ TOPIC_WORDS = {
     'DIM_LIGHT': ('свет', 'ламп', 'ярк', 'напряж'),
     'DELIVERY_ISSUE': ('достав', 'получен', 'заказ'),
     'SIZE_ISSUE': ('длин', 'корот', 'размер'),
+    'SCENT_IMPRESSION': ('аромат', 'запах'),
+    'SURFACE_MARKS': ('паутин', 'царапин', 'полиров'),
 }
 
 COMPLAINT_LABELS = {
@@ -133,6 +139,7 @@ COMPLAINT_LABELS = {
     'ODOR_COMPLAINT':'неприятный запах', 'WEAK_SCENT':'слабый аромат',
     'DIM_LIGHT':'тусклый свет', 'DELIVERY_ISSUE':'проблема с доставкой',
     'SIZE_ISSUE':'размер товара',
+    'SCENT_IMPRESSION':'впечатление об аромате', 'SURFACE_MARKS':'видимые царапины и паутинка',
 }
 
 
@@ -172,6 +179,10 @@ def analyze_customer_message(text, rating=None):
         complaints.append('MISSING_PARTS')
     if yellow_light_complaint(text) and 'DIM_LIGHT' not in complaints:complaints.append('DIM_LIGHT')
     if (faded_scent(text) or subtle_scent_complaint(text)) and 'WEAK_SCENT' not in complaints:complaints.append('WEAK_SCENT')
+    if re.search(r'(?:аромат|запах)[^.!?;]{0,35}так\s+себе|так\s+себе[^.!?;]{0,20}(?:аромат|запах)', value) and 'SCENT_IMPRESSION' not in complaints:
+        complaints.append('SCENT_IMPRESSION')
+    if re.search(r'(?:пах\w*|запах|аромат)[^.!?;]{0,35}(?:туалетн\w*|освежител\w*\s+(?:для\s+)?туалета)', value) and not re.search(r'\bне\s+(?:как|похож)', value):
+        if 'ODOR_COMPLAINT' not in complaints: complaints.append('ODOR_COMPLAINT')
     if any(x in value for x in ('производител', 'япони', 'китай', 'страна', 'оригинал')) and any(x in value for x in ('х/з', 'хз', 'непонят', 'неизвест', 'без маркиров')) and any(x in value for x in ('приш', 'получ', 'присла')):
         if 'DESCRIPTION_MISMATCH' not in complaints:
             complaints.append('DESCRIPTION_MISMATCH')
@@ -260,6 +271,11 @@ def semantic_reply_issues(review, product, reply):
         issues.append('не заменять частичное одобрение похвалой всему набору')
     if buyer.strip() and len(re.findall(r'спасибо|благодарим', text)) > 1:
         issues.append('убрать повторную благодарность')
+    fragrance = getattr(product, 'brand', '').upper() == 'EIKOSHA' or 'ароматизатор' in name
+    if fragrance and 'ODOR_COMPLAINT' in analysis['complaints'] and 'WEAK_SCENT' not in analysis['complaints'] and re.search(r'вскройте|откройте|усилить запах|усиления аромата', text):
+        issues.append('ответить на неприятный запах, не предлагать открытие банки или усиление аромата')
+    if 'SURFACE_MARKS' in analysis['complaints'] and 'fusso' in name and not ('полиров' in text and 'защит' in text):
+        issues.append('объяснить отличие защитного покрытия Fusso от удаления царапин полировкой')
     if analysis.get('resolved') and re.search(r'одобрил\w*\s+возврат', buyer) and not re.search(r'одобр|решен|решён|вопрос.*реш', text):
         issues.append('учесть уже одобренный возврат')
     return issues
@@ -291,6 +307,8 @@ def contextual_complaint_reply(analysis, revision=0):
         'DIM_LIGHT': 'свет оказался тусклым',
         'DELIVERY_ISSUE': 'при доставке заказа возникли затруднения',
         'SIZE_ISSUE': 'длина товара оказалась для Вас недостаточной',
+        'SCENT_IMPRESSION': 'впечатление от аромата оказалось неоднозначным',
+        'SURFACE_MARKS': 'после обработки остались видны царапины и паутинка',
     }
     details = [clauses[kind] for kind in analysis['complaints']]
     if not details:

@@ -14,6 +14,9 @@ DEFAULTS = {'enabled': False, 'reviews_hours': 3, 'questions_hours': 3,
 def normalize_schedule(raw):
     raw = raw or {}
     value = {**DEFAULTS, **raw}
+    markets = raw.get('publication_markets')
+    value['publication_markets'] = {provider: bool(markets.get(provider, True)) if isinstance(markets, dict) else True
+                                    for provider in ('wb', 'ozon', 'yandex')}
     for kind in ('reviews', 'questions'):
         value[kind + '_hours'] = int(raw.get(kind + '_hours', raw.get('sync_hours', 3)))
         value[kind + '_sync_enabled'] = bool(raw.get(kind + '_sync_enabled', raw.get('sync_enabled', value['enabled'])))

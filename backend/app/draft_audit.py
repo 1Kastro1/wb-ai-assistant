@@ -115,6 +115,10 @@ async def repair_step(job_id, session_factory=Session, limit=25):
 
 async def recheck_step(job_id, session_factory=Session):
     with session_factory() as db:
+        if (db.get(Job, job_id).result or {}).get('context_guidance_repair'):
+            from .context_guidance_repair import step
+            return await step(job_id, session_factory)
+    with session_factory() as db:
         if (db.get(Job, job_id).result or {}).get('positive_recheck'):
             from .positive_recheck import step
             return await step(job_id, session_factory)
