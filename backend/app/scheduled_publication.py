@@ -11,6 +11,10 @@ BATCH_SIZE = 200
 FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions')
 
 
+def market_enabled(schedule, provider):
+    return (schedule.get('publication_markets') or {}).get(provider, True)
+
+
 def availability_reason(db):
     from .config import REAL_PUBLISH
     if not REAL_PUBLISH or setting(db, 'test_mode', True) or setting(db, 'safe_mode', False):
@@ -45,6 +49,8 @@ def authorized_job(db, job_id, *, lock=False):
     store = db.get(StoreProfile, store_id)
     if reason or not store or store.provider not in PROVIDERS or not db.get(Account, store_id):
         raise ValueError(reason or 'Магазин больше не подключён.')
+    if not market_enabled(schedule, store.provider):
+        raise ValueError('Автоматическая выгрузка для этого маркетплейса выключена.')
     return schedule, job
 
 
@@ -114,7 +120,7 @@ def eligibility_reason(db, review, draft, schedule):
 
 
 def enqueue(db, schedule, store, current):
-    if not schedule.get('publication_enabled') or blocked_reason(db, schedule):
+    if not schedule.get('publication_enabled') or not market_enabled(schedule, store.provider) or blocked_reason(db, schedule):
         return False
     last_key = f'last_publication:{store.id}'
     if current - float(schedule.get(last_key, 0)) < int(schedule.get('publication_hours', 1)) * 3600:
@@ -230,13 +236,14 @@ def runtime(db, schedule):
             .order_by(Job.created_at.desc()).limit(1))
         state = {**(job.result or {}), **publication_counts(db, job)} if job else {}
         pending = job and job.status in ('queued', 'running') and not job.cancel_requested
+        selected = market_enabled(schedule, store.provider)
         last = float(schedule.get(f'last_publication:{store.id}', 0))
         due = max(time.time(), last + int(schedule.get('publication_hours', 1)) * 3600)
-        stores.append({'id': store.id, 'name': store.name, 'provider': store.provider, 'connected': connected,
+        stores.append({'id': store.id, 'name': store.name, 'provider': store.provider, 'connected': connected, 'enabled': selected,
             'status': job.status if job else 'idle', 'job_id': job.id if job else None,
             'scanned': state.get('scanned', 0), 'published': state.get('published', 0),
             'skipped': state.get('skipped', 0), 'uncertain': state.get('uncertain', 0),
             'message': state.get('message', ''), 'last_reason': state.get('last_reason', ''), 'finished_at': state.get('finished_at'),
             'updated_at': state.get('updated_at'), 'next_at': datetime.fromtimestamp(due, timezone.utc).isoformat()
-            if connected and schedule.get('publication_enabled') and not reason and not pending else None})
+            if connected and selected and schedule.get('publication_enabled') and not reason and not pending else None})
     return {'available': not availability_reason(db), 'availability_reason': availability_reason(db), 'blocked_reason': reason, 'stores': stores}

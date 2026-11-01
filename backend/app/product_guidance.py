@@ -96,7 +96,7 @@ def usage_excerpt(facts):
         if fact.get('verification_status') != 'VERIFIED':
             continue
         text = plain_text(fact.get('text', ''))
-        heading = re.search(r'(?:способ применения|инструкция по применению|применение)\s*:', text, re.I)
+        heading = re.search(r'(?:способ применения|инструкция по применению|применение)[^:\n]{0,100}:', text, re.I)
         if heading:
             text = text[heading.end():]
             text = re.split(r'\n\s*(?:состав|хранение|характеристики|артикул|меры предосторожности)\s*:', text, flags=re.I)[0]
@@ -110,7 +110,7 @@ def usage_excerpt(facts):
                 continue
             if not heading and fact.get('kind') != 'instruction' and not re.search(r'нанесите|наносите|распылите|встряхните|протрите|потрите|смойте|оставьте|удалите|уберите|рекомендуется\s+обработ|смочите|разместите|закрепите|установите|откройте|не используйте', sentence, re.I):
                 continue
-            action = re.search(r'нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|уберите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
+            action = re.search(r'вымойте|высушите|располируйте|нанес|нанос|распыл|встрях|протр|протир|потрите|смой|смыв|смыть|выдерж|оставьте|удалите|уберите|обработ|не допуска|не использ|не примен|проверьте|проверить|установ|размест|закреп|открой|открыть', sentence, re.I)
             if (action or re.search(r'подожд|смоч|охлад|включ|выключ|\d+\s*(?:[–-]\s*\d+\s*)?(?:секунд|минут)', sentence, re.I)) and sentence not in result and len(' '.join(result + [sentence])) <= 2000:
                 result.append(sentence)
     return '; '.join(sentence.rstrip('.') for sentence in result) + ('.' if result else '')
@@ -140,6 +140,15 @@ def product_usage_reply(review, product, facts, revision=0):
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
     complaints = set(analysis['complaints'])
+    name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
+    if (getattr(product, 'brand', '').replace(' ', '').upper() == 'SOFT99'
+            and re.search(r'fusso.*12|12.*fusso', name) and 'SURFACE_MARKS' in complaints
+            and not complaints - {'SURFACE_MARKS', 'NO_RESULT'}):
+        intro = ['Спасибо за отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.'][int(revision) % 3]
+        instruction = usage_excerpt(facts)
+        return ('Добрый день! ' + intro + ' Сожалеем, что паутинка осталась заметна. '
+            'Fusso создаёт защитное покрытие; для удаления уже имеющихся царапин нужна предварительная полировка с учётом состояния лака. '
+            + ('Для нанесения защитного слоя: ' + instruction if instruction else 'Наносите защитный состав по инструкции на Вашей упаковке.'))
     if review.rating >= 4 and analysis['sentiment'] == 'positive' and not analysis['is_question']:
         return positive_review_reply(review, product, revision)
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
@@ -196,6 +205,8 @@ def product_usage_reply(review, product, facts, revision=0):
         return f'Здравствуйте! {thanks} Извините, что свет оказался тусклым{color} и не оправдал Ваших ожиданий. При недостаточном напряжении питания галогенная лампа светит слабее — это одна из возможных причин, которую стоит проверить. Рекомендуем в сервисе проверить напряжение на лампах и их установку, а также сверить маркировку с заявленными характеристиками.'
     cleaner_quality = is_cleaner(product) and any(marker in text for marker in ('плохое качество', 'качество плохое', 'некачеств'))
     allowed_complaints = {'NO_RESULT', 'ODOR_COMPLAINT', 'WEAK_SCENT'} | ({'QUALITY_ISSUE'} if cleaner_quality else set()) | ({'RESIDUE'} if 'полироль' in name else set())
+    if getattr(product, 'brand', '').upper() == 'EIKOSHA' or 'ароматизатор' in name:
+        allowed_complaints.add('SCENT_IMPRESSION')
     if complaints == {'NO_RESULT', 'WEAK_SCENT'}:
         complaints.discard('NO_RESULT')
     if complaints - allowed_complaints:
@@ -220,7 +231,7 @@ def product_usage_reply(review, product, facts, revision=0):
         return f'Здравствуйте! {thanks} Извините, что обработка не дала ожидаемого результата. STEAM DEO не предназначен для создания густого облака дыма: пар служит для распределения средства по салону и системе вентиляции, поэтому интенсивное паровыделение не требуется. При этом Ваше замечание об отсутствии эффекта важно рассмотреть отдельно; для проверки обратитесь в официальную поддержку маркетплейса с описанием запуска и запаха, который остался после обработки.'
     fragrance = getattr(product, 'brand', '').upper() == 'EIKOSHA' or any(x in name for x in ('ароматизатор', 'автопарфюм'))
     intro = ['Здравствуйте! Спасибо за отзыв.', 'Здравствуйте! Благодарим за обратную связь.', 'Здравствуйте! Спасибо, что поделились впечатлением.'][int(revision) % 3]
-    if fragrance and complaints & {'WEAK_SCENT', 'ODOR_COMPLAINT'}:
+    if fragrance and complaints & {'WEAK_SCENT', 'ODOR_COMPLAINT', 'SCENT_IMPRESSION'} and not complaints - {'WEAK_SCENT', 'ODOR_COMPLAINT', 'SCENT_IMPRESSION'}:
         parts = [intro]
         if analysis['sentiment']=='mixed' and 'ODOR_COMPLAINT' not in complaints and 'аромат Вам понравился' in positive_detail(review.text):
             parts.append('Рады, что сам аромат Вам понравился.')
@@ -239,6 +250,15 @@ def product_usage_reply(review, product, facts, revision=0):
                 parts.append('Попробуйте расположить ароматизатор ближе к потоку воздуха согласно его инструкции; сменные стержни GIGA устанавливаются в предназначенный для них корпус.')
             else:
                 parts.append('Если инструкция Вашей модели допускает размещение ближе к потоку воздуха, можно выбрать такое положение; требования к корпусу и креплению сверяйте с её инструкцией.')
+        if 'SCENT_IMPRESSION' in complaints and not complaints & {'WEAK_SCENT', 'ODOR_COMPLAINT'}:
+            parts.append('Сожалеем, что впечатление от аромата оказалось неоднозначным.')
+            can = getattr(product,'brand','').upper()=='EIKOSHA' and bool(re.search(r'мелов|баноч|air spencer|\ba-?\d+|\br90\b',name,re.I)) and not re.search(r'giga|стерж|\bv-?\d+',name,re.I)
+            if can:
+                parts.append('Если хочется более заметного аромата, попробуйте разместить баночку на дефлекторе с помощью совместимого держателя: поток воздуха поможет распространению аромата по салону. Саму баночку без держателя к решётке не крепят.')
+                holder = next((f for f in facts or [] if f.get('kind')=='vent_holder' and f.get('verification_status')=='VERIFIED' and f.get('article_label')),None)
+                if holder: parts.append('Подходящий держатель: ' + holder['article_label'] + '; перед заказом сверьте форму ламелей с его инструкцией.')
+            else:
+                parts.append('Если речь об интенсивности, сверьте место размещения с инструкцией Вашей модели; если не подошла сама композиция, можно выбрать другой аромат по Вашим предпочтениям.')
         if 'ODOR_COMPLAINT' in complaints:
             feeling = 'аромат не вполне Вам подошёл' if re.search(r'не\s+особо', text) else 'запах Вам не подошёл'
             parts.append('Нам жаль, что ' + feeling + '. Восприятие запахов индивидуально; можно выбрать другую композицию по Вашим предпочтениям.')

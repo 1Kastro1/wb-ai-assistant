@@ -192,3 +192,45 @@ def test_updated_rules_block_old_verified_drafts(client, ready):
             text='Всегда добавляй подпись: С уважением, ГК Юником.'));db.commit()
     for jid in jobs(): asyncio.run(automatic.run_step(jid))
     assert not ready
+
+
+def test_individual_market_switch_persists_and_leaves_other_jobs_and_consent_intact(client, ready):
+    result=enable(client)
+    assert result['publication_markets']=={'wb':True,'ozon':True,'yandex':True}
+    with Session() as db:
+        consent=setting(db,'automation_schedule')['publication_authorization']
+        before={j.result['account_id']:j.id for j in db.scalars(select(Job))}
+    response=client.patch('/settings/schedule',json={'publication_markets':{'ozon':False}})
+    assert response.status_code==200
+    saved=client.get('/settings/schedule').json()
+    assert saved['publication_markets']=={'wb':True,'ozon':False,'yandex':True}
+    oz=next(s for s in saved['publication_runtime']['stores'] if s['provider']=='ozon')
+    assert not oz['enabled'] and oz['next_at'] is None
+    with Session() as db:
+        assert setting(db,'automation_schedule')['publication_authorization']==consent
+        assert db.get(Job,before['oz']).status=='cancelled'
+        assert all(db.get(Job,before[s]).status=='queued' for s in ('owner','ya'))
+    for jid in jobs():asyncio.run(automatic.run_step(jid))
+    assert {row[0] for row in ready}=={'owner','ya'}
+    assert client.patch('/settings/schedule',json={'publication_markets':{'ozon':True}}).status_code==200
+    for jid in jobs():asyncio.run(automatic.run_step(jid))
+    assert len(ready)==6
+
+
+def test_market_disabled_after_snapshot_cannot_reserve_a_publication(client, ready, monkeypatch):
+    enable(client)
+    original=services.confirm_action
+    async def disable(db,aid,**kwargs):
+        assert client.patch('/settings/schedule',json={'publication_markets':{'wb':False,'ozon':False,'yandex':False}}).status_code==200
+        return await original(db,aid,**kwargs)
+    monkeypatch.setattr(services,'confirm_action',disable)
+    for jid in jobs():asyncio.run(automatic.run_step(jid))
+    assert not ready
+
+
+def test_all_markets_can_be_paused_and_unknown_provider_is_rejected(client,ready):
+    enable(client,publication_markets={'wb':False,'ozon':False,'yandex':False})
+    assert not jobs()
+    assert client.patch('/settings/schedule',json={'publication_markets':{'unknown':True}}).status_code==400
+    stores=client.get('/stores').json()['items']
+    assert all(s['publication_state']=='disabled' for s in stores)

@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '4.1'
+QUALITY_EVALUATOR_VERSION = '4.2'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -900,7 +900,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if specific_case:verified_facts = verified_facts + specific_case['sources']
     if review_intent(review.text)=='DIM_LIGHT' and 'галоген' in product.name.lower():
         verified_facts = verified_facts + [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]
-    if review_intent(review.text) in ('WEAK_SCENT','AUTHENTICITY'):
+    if review_intent(review.text) in ('WEAK_SCENT','SCENT_IMPRESSION','AUTHENTICITY'):
         holder=review_vent_holder(db,review,product)
         if holder:verified_facts=verified_facts+[holder]
     memories = matching_owner_rules(db, product)
@@ -920,7 +920,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
     # Keep mandatory safety/return flows deterministic; ask the local model to improve ordinary replies.
-    structured_intents = ('AUTHENTICITY', 'NO_RESULT', 'DIM_LIGHT', 'WEAK_SCENT', 'ODOR_COMPLAINT', 'WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
+    structured_intents = ('AUTHENTICITY', 'NO_RESULT', 'DIM_LIGHT', 'WEAK_SCENT', 'ODOR_COMPLAINT', 'SCENT_IMPRESSION', 'SURFACE_MARKS', 'WRONG_ITEM', 'MISSING_PARTS', 'DAMAGED_ITEM', 'FITMENT_PROBLEM', 'DESCRIPTION_MISMATCH')
     forced_model = None
     comparison_texts = []
     candidates_evaluated = max(1, len(rule_candidates))
@@ -1067,7 +1067,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         reply, review, product, memories, verified_facts,
         lambda value: assess_reply(review, product, value, verified_facts),
         protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
-        local_only=fast_only, defer_semantic=model_outage)
+        local_only=fast_only, defer_semantic=model_outage,
+        check_seconds=8 if model.startswith('safety-rules') and review_intent(review.text) in structured_intents else None)
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
