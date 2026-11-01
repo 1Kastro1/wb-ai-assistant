@@ -12,6 +12,34 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_verified_positive_stale_status_and_short_praise_fast_lane(self):
+        from app.services import manual_review_condition
+        from app.batch_processing import fast_condition
+        url = make_url(os.environ['DATABASE_URL'])
+        self.assertEqual(url.database, 'wb_workbench_tests')
+        engine = create_engine(url); Base.metadata.create_all(engine); factory = sessionmaker(engine)
+        prefix = 'positive-fast-' + uuid4().hex
+        try:
+            with factory() as db:
+                db.add(Product(id=prefix, name='Лампочки')); db.flush()
+                for suffix, text, passed, checked in [('verified','Отличные лампочки.',True,True),
+                    ('pending','Хорошая штука',False,False),('complaint','Отлично, но не работает',False,True)]:
+                    db.add(Review(id=prefix+suffix, wb_review_id=prefix+suffix, product_id=prefix,
+                        text=text, rating=5, status='manual_review', risk='NORMAL', manual=False)); db.flush()
+                    db.add(Draft(id=prefix+suffix, review_id=prefix+suffix, text='Reply', original='Reply',
+                        quality={'passed':passed,'text_issues':[], 'owner_rules':{'passed':passed,
+                            'checked':checked,'status':'pending' if not checked else 'verified','violations':[]}}))
+                db.commit()
+                base = select(Review.id).outerjoin(Draft, Draft.review_id == Review.id).where(Review.id.startswith(prefix))
+                self.assertEqual(set(db.scalars(base.where(manual_review_condition()))), {prefix+'complaint'})
+                self.assertEqual(set(db.scalars(base.where(fast_condition()))), {prefix+'verified',prefix+'pending'})
+        finally:
+            with factory() as db:
+                db.execute(delete(Draft).where(Draft.id.startswith(prefix)))
+                db.execute(delete(Review).where(Review.id.startswith(prefix)))
+                db.execute(delete(Product).where(Product.id == prefix)); db.commit()
+            engine.dispose()
+
     def test_technical_filter_never_hides_low_ratings_or_content_defects(self):
         from app.services import manual_review_condition, technical_review_condition
         url = make_url(os.environ['DATABASE_URL'])

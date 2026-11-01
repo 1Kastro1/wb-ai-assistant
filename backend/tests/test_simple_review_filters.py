@@ -2,14 +2,14 @@
 import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from app.db import Product, Review, Draft
+from app.db import Product, Review, Draft, Publication
 from app.services import _review_query,review_filter_counts
 
 
 class SimpleReviewFilterTests(unittest.TestCase):
     def setUp(self):
         self.engine=create_engine('sqlite://')
-        for model in (Product,Review,Draft):
+        for model in (Product,Review,Draft,Publication):
             model.__table__.create(self.engine)
         self.db=Session(self.engine)
         self.db.add(Product(id='p',name='Cleaner',brand='Test'))

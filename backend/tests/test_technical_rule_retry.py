@@ -54,6 +54,30 @@ def test_enqueue_is_idempotent(client):
         db.commit()
 
 
+def test_explicit_saved_reply_recheck_precedes_background_scans(client):
+    from app.queue_policy import next_job
+    seed_error()
+    with Session() as db:
+        db.add(Job(id='old-policy-scan', kind='draft_recheck', created_at='2026-01-01', result={'policy_scan':True}))
+        job = enqueue(db, db.get(Draft,'d'), db.get(Review,'r'), 'owner')
+        db.commit()
+        assert next_job(db).id == job.id
+
+
+@pytest.mark.parametrize('state', ['passed', 'pending'])
+def test_stale_manual_status_does_not_override_verified_or_pending_rules(client, state):
+    seed_error()
+    with Session() as db:
+        draft = db.get(Draft, 'd')
+        draft.model = 'positive-local-2.0'
+        draft.quality = {'passed': state == 'passed', 'text_issues': [], 'owner_rules': {
+            'passed': state == 'passed', 'checked': state == 'passed', 'status': 'verified' if state == 'passed' else 'pending',
+            'violations': [], 'issues': []}}
+        db.commit()
+    assert client.get('/reviews/page', params={'manual_only': True}).json()['total'] == 0
+    assert client.get('/work-queue', params={'view': 'manual'}).json()['total'] == 0
+
+
 @pytest.mark.parametrize('passed', [True, False])
 def test_check_only_preserves_text_revision_and_limits_retries(client, monkeypatch, passed):
     seed_error()

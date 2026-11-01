@@ -22,13 +22,14 @@ def start_job(**result):
         db.commit()
 
 
-def test_fast_answers_finish_while_model_is_blocked_and_new_reviews_join(client, seeded, monkeypatch):
+@pytest.mark.parametrize('fast_text', ['', 'Отличные лампочки.', 'Хорошая штука'])
+def test_fast_answers_finish_while_model_is_blocked_and_new_reviews_join(client, seeded, monkeypatch, fast_text):
     with Session() as db:
         db.get(Review, 'r1').created_at = '2026-01-01'
         db.get(Review, 'r2').created_at = '2026-01-02'
         db.get(Review, 'r3').created_at = '2026-01-03'
         review = db.get(Review, 'r4')
-        review.text, review.rating, review.manual, review.risk = '', 5, False, 'NORMAL'
+        review.text, review.rating, review.manual, review.risk = fast_text, 5, False, 'NORMAL'
         db.commit()
     start_job()
     events = []

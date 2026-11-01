@@ -6,7 +6,7 @@ import time
 import httpx
 from sqlalchemy import select, func, or_
 from sqlalchemy.exc import OperationalError
-from .db import Session, Job, Review, Draft, GenerationOutcome, Memory, now
+from .db import Session, Job, Review, Draft, GenerationOutcome, Memory, now, IS_SQLITE
 from . import rule_execution
 from .generation_control import FastPathUnavailable, GenerationBusy, ReviewSkipped, batch_context
 
@@ -27,8 +27,12 @@ def fast_policy_version(db):
 
 
 def fast_condition():
-    blank = func.trim(func.replace(func.replace(func.replace(func.coalesce(Review.text, ''), '\n', ''), '\r', ''), '\t', '')) == ''
-    return (blank & Review.rating.in_((4, 5)) & (Review.risk == 'NORMAL')
+    from .rule_execution import SIMPLE_PRAISE_TEXTS
+    value = func.coalesce(Review.text, '')
+    value = func.unicode_casefold(value) if IS_SQLITE else func.lower(value)
+    value = func.replace(value, 'ё', 'е')
+    value = func.trim(value, ' .!…\n\r\t') if IS_SQLITE else func.btrim(value, ' .!…\n\r\t')
+    return (value.in_(SIMPLE_PRAISE_TEXTS) & Review.rating.in_((4, 5)) & (Review.risk == 'NORMAL')
             & (Review.manual == False) & (Review.safety_critical == False))
 
 
