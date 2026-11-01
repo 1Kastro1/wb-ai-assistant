@@ -87,6 +87,7 @@ def test_check_only_preserves_text_revision_and_limits_retries(client, monkeypat
     monkeypatch.setattr(services, 'assess_reply', lambda *a, **k: {'passed': True, 'issues': [], 'score': 96})
     async def check(answer, *args, **kwargs):
         assert kwargs['check_only'] is True
+        assert kwargs['check_seconds'] == 45
         return answer, {'passed': passed, 'checked': passed, 'technical_error': not passed,
                         'matched': 1, 'violations': [], 'issues': [] if passed else ['таймаут']}
     monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
