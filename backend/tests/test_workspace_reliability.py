@@ -60,17 +60,21 @@ def test_scoped_recheck_cannot_expand_member_store_access(client):
 
 def test_catalog_conflicts_are_filterable_and_never_rewrite_identity(client):
     with Session() as db:
-        db.add_all([Product(id='bad', name='Масло Soft99 G0020-001', brand='GIGAS'),
+        db.add_all([Product(id='bad', name='Масло Soft99 G0020-001', brand='DENSO'),
+            Product(id='family', name='Масло Soft99 G0020-001', brand='GIGAS'),
             Product(id='good', name='Свеча DENSO для Toyota', brand='DENSO'),
             Product(id='fit', name='Адаптер для NGK', brand='DENSO')]); db.flush()
-        for rid in ('bad', 'good', 'fit'):
+        for rid in ('bad', 'family', 'good', 'fit'):
             db.add(Review(id=rid, wb_review_id=rid, product_id=rid, rating=5, text=''))
         db.commit()
     result = client.get('/products/page?knowledge=identity').json()
     assert result['total'] == 1
     assert result['items'][0]['id'] == 'bad'
-    assert result['items'][0]['brand'] == 'GIGAS'
+    assert result['items'][0]['brand'] == 'DENSO'
     assert 'Soft99'.upper() in result['items'][0]['identity_warning']
+    all_items = client.get('/products/page').json()['items']
+    family = next(item for item in all_items if item['id'] == 'family')
+    assert family['brand'] == 'GIGAS' and not family['identity_warning']
 
 
 def test_recent_generation_is_store_scoped_and_excludes_undated_history(client):
