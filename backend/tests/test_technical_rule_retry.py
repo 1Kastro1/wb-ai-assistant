@@ -54,6 +54,16 @@ def test_enqueue_is_idempotent(client):
         db.commit()
 
 
+def test_explicit_saved_reply_recheck_precedes_background_scans(client):
+    from app.queue_policy import next_job
+    seed_error()
+    with Session() as db:
+        db.add(Job(id='old-policy-scan', kind='draft_recheck', created_at='2026-01-01', result={'policy_scan':True}))
+        job = enqueue(db, db.get(Draft,'d'), db.get(Review,'r'), 'owner')
+        db.commit()
+        assert next_job(db).id == job.id
+
+
 @pytest.mark.parametrize('state', ['passed', 'pending'])
 def test_stale_manual_status_does_not_override_verified_or_pending_rules(client, state):
     seed_error()
