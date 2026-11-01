@@ -29,6 +29,23 @@ def pending(db, kind, account_id):
         func.coalesce(Job.result['account_id'].as_string(), 'owner') == account_id).limit(1))
 
 
+def schedule_status(db, schedule, store_id, current):
+    result = {}
+    for kind, enabled_key, hours_key in (('reviews', 'reviews_sync_enabled', 'reviews_hours'),
+        ('questions', 'questions_sync_enabled', 'questions_hours'), ('drafts', 'drafts_enabled', 'drafts_hours'),
+        ('question_drafts', 'question_drafts_enabled', 'question_drafts_hours')):
+        running = pending(db, kind, store_id)
+        completed = db.scalar(select(Job).where(Job.kind == kind, Job.status == 'completed',
+            Job.result['account_id'].as_string() == store_id).order_by(Job.created_at.desc()).limit(1))
+        enabled = bool(schedule.get('enabled') and schedule.get(enabled_key))
+        last = float(schedule.get(f'last_{kind}:{store_id}', schedule.get('last_' + kind, 0) if store_id == 'owner' else 0))
+        due = max(current, last + max(1, int(schedule[hours_key])) * 3600)
+        result[kind] = {'enabled': enabled, 'pending_job': running,
+            'last_success': ((completed.result or {}).get('finished_at') or completed.created_at) if completed else None,
+            'next_eligible_at': datetime.fromtimestamp(due, timezone.utc).isoformat() if enabled and not running else None}
+    return result
+
+
 def enqueue_generation(db, schedule, store, kind, current):
     enabled = schedule.get('question_drafts_enabled') if kind == 'question_drafts' else schedule.get('drafts_enabled')
     if not schedule.get('enabled') or not enabled or not setting(db, 'assistant_enabled', True):

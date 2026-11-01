@@ -7,6 +7,31 @@ from app.db import Session, Review, Job
 PASSWORD='portable-backup-password-123'
 
 
+def test_revision_0014_restore_migrates_quality_flags_before_first_read(client, seeded):
+    from app.maintenance import backup, restore
+    from app.config import DATA
+    from app.db import engine, Draft, GenerationOutcome
+    with Session() as db:
+        db.add(Draft(id='manual-saved', review_id='r1', text='Employee text', original='Original', revision=9,
+                     quality={'passed': False, 'owner_rules': {'technical_error': True, 'checked': False}}))
+        db.commit()
+    name = backup()
+    with sqlite3.connect(DATA / 'backups' / name) as copy:
+        for field in ('passed', 'technical', 'pending', 'attention'):
+            copy.execute('ALTER TABLE generated_answers DROP COLUMN quality_' + field)
+        copy.execute('DROP INDEX ix_generation_outcomes_created_at')
+        copy.execute('ALTER TABLE generation_outcomes DROP COLUMN created_at')
+        copy.execute("UPDATE alembic_version SET version_num='0014'")
+        copy.commit()
+    engine.dispose()
+    restore(name)
+    with Session() as db:
+        saved = db.get(Draft, 'manual-saved')
+        assert (saved.text, saved.original, saved.revision) == ('Employee text', 'Original', 9)
+        assert saved.quality_technical and saved.quality_pending and not saved.quality_attention
+        assert db.scalar(select(func.count()).select_from(GenerationOutcome)) == 0
+
+
 def test_older_backup_restores_queue_tables_before_restart(client, seeded):
     from app.maintenance import backup, restore
     from app.config import DATA
@@ -40,7 +65,7 @@ def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requ
     encrypted.write_bytes(exported.content);_decrypt_portable(encrypted,decrypted,PASSWORD)
     _check_backup_database(decrypted)
     with sqlite3.connect(decrypted) as check:
-        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0014'
+        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0015'
         assert check.execute('SELECT count(*) FROM generation_claims').fetchone()[0]==0
         assert check.execute('SELECT count(*) FROM generation_outcomes').fetchone()[0]==1
         for table in ('users','sessions','registration_requests','team_invites'):

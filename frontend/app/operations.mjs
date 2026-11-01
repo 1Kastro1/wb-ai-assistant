@@ -3,6 +3,8 @@ export function draftState(item){
  if(item.is_answered)return 'Опубликован';
  if(!item.has_draft)return 'Ответ ещё не создан';
  if(item.manual)return 'Нужна личная проверка';
+ if(item.verification_state==='technical')return 'Текст сохранён · сервис проверки недоступен';
+ if(item.verification_state==='pending')return 'Текст сохранён · ожидает проверки правил';
  if(item.verification_passed&&item.status==='draft_ready')return 'Проверен · ожидает подтверждения';
  return 'Черновик сохранён · нужна проверка';
 }

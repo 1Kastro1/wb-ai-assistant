@@ -15,7 +15,7 @@ from sqlalchemy import Integer, create_engine, func, select, text
 from app.db import Base
 
 
-EXCLUDED_TABLES = {'alembic_version', 'wb_accounts', 'sessions', 'jobs', 'actions', 'publication_jobs'}
+EXCLUDED_TABLES = {'alembic_version', 'wb_accounts', 'sessions', 'jobs', 'actions', 'publication_jobs', 'generation_claims', 'generation_outcomes'}
 EXCLUDED_SETTINGS = {'automation_schedule', 'scheduler_status', 'portable_sync'}
 
 
@@ -39,7 +39,8 @@ def copy_database(source_path: Path, destination) -> dict[str, int]:
                 if table.name in EXCLUDED_TABLES:
                     continue
                 copied = 0
-                rows = src.execute(select(table)).mappings()
+                writable = [column for column in table.columns if column.computed is None]
+                rows = src.execute(select(*writable)).mappings()
                 while batch := rows.fetchmany(500):
                     values = [dict(row) for row in batch]
                     if table.name == 'app_settings':

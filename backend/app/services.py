@@ -256,28 +256,18 @@ def remember_web_instruction_sources(product, sources):
 
 
 def technical_review_condition():
-    rules = Draft.quality['owner_rules']
-    return (Review.is_answered == False) & (func.coalesce(rules['passed'].as_boolean(), False) == False) & or_(
-        func.coalesce(rules['technical_error'].as_boolean(), False) == True,
-        rules['status'].as_string() == 'error')
+    return (Review.is_answered == False) & (Draft.quality_technical == True)
 
 
 def manual_review_condition():
-    rules = Draft.quality['owner_rules']
-    awaiting = func.coalesce(or_(technical_review_condition(), rules['status'].as_string() == 'pending',
-                                rules['checked'].as_boolean() == False), False)
-    # Content defects survive an outage; the outage itself is not a complaint.
-    defects = func.coalesce(Draft.quality['text_issues'].as_string(), '[]') != '[]'
-    violations = func.coalesce(Draft.quality['owner_rules']['violations'].as_string(), '[]') != '[]'
     # Read the small attention set once instead of probing publication history
     # for every review in a full-store count.
     publication_attention = Review.id.in_(select(Publication.review_id).where(
         Publication.status.in_(('uncertain', 'mismatch'))))
     return (Review.is_answered == False) & or_((Review.rating <= 3) & ~Review.marketplace.like('%_question'), Review.manual == True,
-        Review.risk != 'NORMAL', defects, violations, publication_attention,
-        (~awaiting) & or_((Review.status == 'manual_review') & (func.coalesce(Draft.quality['passed'].as_boolean(), False) == False),
-            Draft.quality['passed'].as_boolean() == False,
-            Draft.model.startswith('safety-fallback') & (func.coalesce(Draft.quality['repair_audit']['rules_rechecked_at'].as_string(), '') == '')))
+        Review.risk != 'NORMAL', Draft.quality_attention == True, publication_attention,
+        (~func.coalesce(Draft.quality_pending, False)) & (Review.status == 'manual_review') &
+        (func.coalesce(Draft.quality_passed, False) == False))
 
 
 def _review_query(filters):
@@ -631,7 +621,7 @@ def analytics(db, days=0, product_id='', account_id=''):
         'negative': negative or 0,
         'manual': manual or 0,
         'published': published or 0,
-        'ready': db.scalar(select(func.count()).select_from(Review).join(Draft).where(*filters,Review.is_answered==False,Review.rating>=4,Review.manual==False,Review.risk=='NORMAL',Review.status=='draft_ready',Draft.quality['passed'].as_boolean()==True)) or 0,
+        'ready': db.scalar(select(func.count()).select_from(Review).join(Draft).where(*filters,Review.is_answered==False,Review.rating>=4,Review.manual==False,Review.risk=='NORMAL',Review.status=='draft_ready',Draft.quality_passed==True)) or 0,
         'failed_jobs': db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['failed','interrupted']),*([Job.result['account_id'].as_string()==account_id] if account_id else []))) or 0,
         'average': round(float(average), 2) if average is not None else 0,
         'drafts': db.scalar(select(func.count()).select_from(Draft).join(Review).where(*filters)),
@@ -646,6 +636,7 @@ def question_intent(text):
     if vehicle_identifiers(text) or oem_numbers(text):return 'совместимость'
     value = (text or '').lower().replace('ё', 'е')
     if re.search(r'входит|в комплекте|комплектуется', value):return 'комплектность'
+    if re.search(r'как.*(?:откр|активир)|с какой стороны.*откр|(?:снимать|снять|открыть).*крыш|крыш.*(?:снимать|снять|открывать)|не пахнет|запаха нет|нет запаха', value):return 'применение'
     patterns = (
         ('крепление', r'держател|закрепител|креплен|как.*(?:закреп|крепить)|где.*(?:размест|постав|располож)'),
         ('применение', r'как (?:использ|примен)|инструкц|сколько нанос|разводит|дозиров'),
@@ -653,7 +644,7 @@ def question_intent(text):
         ('комплектность', r'комплект|входит|сколько штук|насадк|упаковк'),
         ('размер', r'размер|длин|ширин|высот|объ[её]м|вес'),
         ('состав', r'состав|материал|содержит|безопасен'),
-        ('наличие', r'налич|когда будет|цвет|вариант|запах'),
+        ('наличие', r'налич|когда будет|когда появ|есть ли.*(?:цвет|вариант|запах|аромат)'),
     )
     for label, pattern in patterns:
         if re.search(pattern, value):
