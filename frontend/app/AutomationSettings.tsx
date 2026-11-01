@@ -1,6 +1,7 @@
 'use client';
 import {useEffect,useState} from 'react';
 import AppIcon from './AppIcon';
+import PublicationAutomation from './PublicationAutomation';
 import {scheduleValues,schedulePayload} from './automation-settings.mjs';
 import './automation-settings.css';
 type Row=Record<string,any>;
@@ -9,7 +10,7 @@ export default function AutomationSettings({schedule,onSave,busy=false,assistant
  const [values,setValues]=useState<Row>(saved),[dirty,setDirty]=useState(false),[saving,setSaving]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
  useEffect(()=>{if(!dirty)setValues(JSON.parse(signature));},[signature,dirty]);
  const update=(change:Row)=>{setValues(current=>({...current,...change}));setDirty(true);setError('');setMessage('');};
- const enabled=saved.reviews_sync_enabled||saved.questions_sync_enabled||saved.drafts_enabled||saved.question_drafts_enabled;
+ const enabled=saved.reviews_sync_enabled||saved.questions_sync_enabled||saved.drafts_enabled||saved.question_drafts_enabled||saved.publication_enabled;
  return <form className="automation-settings" onSubmit={async event=>{event.preventDefault();setError('');setMessage('');setSaving(true);try{await onSave(schedulePayload(values));setDirty(false);setMessage('Расписание сохранено на сервере.');}catch(error){setError(error instanceof Error?error.message:'Не удалось сохранить расписание. Повторите попытку.');}finally{setSaving(false);}}}>
   <div className="automation-heading"><div><span className="automation-eyebrow">ВАШЕ РАСПИСАНИЕ</span><h2>Автоматизация</h2><p>Обновление данных и подготовка ответов без вашего участия.</p></div><span className={'automation-status '+(enabled?'is-on':'')}><i/>{enabled?'Работает в фоне':'На паузе'}</span></div>
   <div className="automation-cards">{[
@@ -29,7 +30,8 @@ export default function AutomationSettings({schedule,onSave,busy=false,assistant
     {control.generation&&!assistantEnabled&&<small className="automation-assistant-note">Для генерации включите ассистента.</small>}
    </div>;})}
   </section>)}</div>
-  <div className="automation-background"><span className="automation-background-icon"><AppIcon name="История действий"/></span><div><b>Продолжит работу, даже если закрыть сайт</b><p>Расписание выполняется на сервере для всех подключённых магазинов. Ответы сохраняются как черновики — отправка после вашего подтверждения.</p></div></div>
+  <PublicationAutomation values={values} schedule={schedule} update={update} busy={saving||busy} dirty={dirty} assistantEnabled={assistantEnabled}/>
+  <div className="automation-background"><span className="automation-background-icon"><AppIcon name="История действий"/></span><div><b>Продолжит работу, даже если закрыть сайт</b><p>Обновление данных, подготовка и включённая выгрузка выполняются на сервере. Если автоматическая выгрузка выключена, ответы сохраняются как черновики — отправка после вашего подтверждения.</p></div></div>
   <footer className="automation-footer"><span>{dirty?'Есть несохранённые изменения':'Отзывы и вопросы — каждое по своему расписанию'}</span><button className="primary" type="submit" disabled={saving||busy||!dirty}>{saving?'Сохраняем…':'Сохранить расписание'}</button></footer>
   {error&&<p className="automation-feedback error" role="alert">{error}</p>}{message&&<p className="automation-feedback" role="status">{message}</p>}
  </form>;

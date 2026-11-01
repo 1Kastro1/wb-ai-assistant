@@ -1192,7 +1192,7 @@ def propose_publish(db, review_ids):
     return public(action)
 
 
-async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_approval=None):
+async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_approval=None, scheduled_job_id=None):
     # Reserve the action and unique per-review publication slots atomically.
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
@@ -1218,11 +1218,25 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
         raise ValueError('Режим изменён после подготовки действия. Подготовьте новое подтверждение')
     if not test and not REAL_PUBLISH:
         raise ValueError('Реальная публикация не разрешена при запуске приложения')
+    scheduled_config = None
+    if scheduled_job_id:
+        from .scheduled_publication import authorized_job
+        scheduled_config, scheduled_job = authorized_job(db, scheduled_job_id, lock=True)
+        if (action.payload.get('scheduled_job_id') != scheduled_job_id or
+            scheduled_config.get('publication_authorized_by') != actor_id):
+            raise ValueError('Расписание не разрешает эту отправку.')
     for item in sorted(action.payload['items'], key=lambda entry: entry['review_id']):
         review = db.scalar(select(Review).where(Review.id == item['review_id']).with_for_update().execution_options(populate_existing=True))
         draft = db.scalar(select(Draft).where(Draft.id == item['draft_id']).with_for_update().execution_options(populate_existing=True))
         if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
+        if scheduled_config is not None:
+            from .scheduled_publication import eligibility_reason
+            if review.wb_account_id != scheduled_job.result['account_id']:
+                raise ValueError('Ответ принадлежит другому магазину.')
+            reason = eligibility_reason(db, review, draft, scheduled_config)
+            if reason:
+                raise ValueError(reason)
         rules = matching_owner_rules(db, db.get(Product, review.product_id), for_questions=review.marketplace.endswith('_question'))
         owner_approval = False
         if bulk_approval:
@@ -1246,7 +1260,7 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
         if not test:
             if db.scalar(select(Publication).where(Publication.review_id == review.id)):
                 raise ValueError('Для ответа уже выполнялась публикация. Сначала проверьте его в маркетплейсе')
-            db.add(Publication(id=str(uuid4()), review_id=review.id, action_id=action.id, status='in_flight'))
+            db.add(Publication(id=str(uuid4()), review_id=review.id, action_id=action.id, status='in_flight', scheduled_job_id=scheduled_job_id or ''))
             review.status = 'publishing'
     action.status = 'executing'
     db.commit()

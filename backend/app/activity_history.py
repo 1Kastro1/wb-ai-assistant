@@ -10,7 +10,7 @@ def important_activity():
     event = Activity.details['event'].as_string()
     changes = or_(
         event.in_(RULE_EVENTS | {'rule_enabled', 'rule_disabled', 'registration_accepted',
-                               'registration_rejected', 'user_deleted', 'product_knowledge_refreshed'}),
+                               'registration_rejected', 'user_deleted', 'product_knowledge_refreshed', 'scheduled_publication_completed'}),
         Activity.path.in_(['/stores', '/users', '/auth/password', '/actions/publish',
                           '/auto-replies/start', '/auto-replies/pause', '/jobs/drafts',
                           '/jobs/selected-drafts', '/jobs/question-drafts',

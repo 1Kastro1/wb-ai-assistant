@@ -201,6 +201,7 @@ class Publication(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     review_id: Mapped[str] = mapped_column(ForeignKey('reviews.id'), unique=True)
     action_id: Mapped[str] = mapped_column(String)
+    scheduled_job_id: Mapped[str] = mapped_column(String, default='', server_default='', index=True)
     status: Mapped[str] = mapped_column(String)
 
 
