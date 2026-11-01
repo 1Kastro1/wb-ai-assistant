@@ -50,6 +50,13 @@
     "label": "Вопросы о качестве и оригинальности",
     "local_positive": false
   },
+  "15e8656f51f272ceca4846bd8db914207f1cf079b07ee2f287ff656d4c3c2689": {
+    "label": "Смысл отзыва и полезный ответ. Прочитай отзыв целиком: различай похвалу, конкретные жалобы, вопрос, предположе",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "1a66b9ca617c835bc691d4f7e95e56b5e59ba42bac483b7a7db78a86185e66a3": {
     "family": "oils",
     "label": "Рекомендации для вопросов — Масла и технические жидкости",
@@ -89,6 +96,15 @@
     "family": "electrical",
     "label": "Рекомендации для вопросов — Лампы и автомобильная электрика",
     "local_positive": false
+  },
+  "329e0dd6ff04dba7f720f7ac0432b4149fae6db1a945bccaf73628072ee3dd44": {
+    "empty_inapplicable": true,
+    "family": "fragrance",
+    "label": "Ароматизаторы: отвечай на конкретное замечание, различая слабый аромат, быстрое исчезновение, неприятную компо",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
   },
   "33a138fbfb48ffd9681035b007022f00000b0128c7df7a94d397be353d3845d0": {
     "family": "belts",
@@ -167,6 +183,15 @@
   "4dfa25e8732faeb041b57049142d0e142fcaf6ac0a87d1393984b405bf239364": {
     "label": "Комплектация, маркировка, даты и хранение в вопросах",
     "local_positive": false
+  },
+  "52d3193fb16ce74da6a00925dae2bfe43a0a6b07e1aebda58e4f3f434c1a1ce1": {
+    "empty_inapplicable": true,
+    "family": "body_care",
+    "label": "Рекомендации для отзывов — Средства для кузова, стёкол и защитные покрытия. Только по соответствующей жалобе д",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
   },
   "55aca2779dfc093e5698d82374396712e89b5eed6441dec64c4388b95506ba68": {
     "empty_inapplicable": true,

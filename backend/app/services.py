@@ -859,6 +859,14 @@ async def generate_question_draft(db, question, instruction=''):
     return public(draft)
 
 
+def recovery_protected(db, review, draft, recovery):
+    if isinstance(recovery, dict) and recovery.get('policy_regeneration'):
+        from .review_regeneration import protected_draft
+        return protected_draft(db, review, draft, recovery)
+    from .bulk_recovery import protected_draft
+    return protected_draft(db, review, draft) or (isinstance(recovery, str) and review.wb_account_id != recovery)
+
+
 async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip_existing=False, recovery=False):
     async def operation():
         # Re-read after acquiring the cross-process claim. Bulk work never overwrites edits.
@@ -866,7 +874,7 @@ async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip
         if recovery:
             from .bulk_recovery import protected_draft
             recovery_review = db.get(Review, review_id)
-            if protected_draft(db, recovery_review, db.scalar(select(Draft).where(Draft.review_id == review_id))) or (isinstance(recovery, str) and recovery_review.wb_account_id != recovery):
+            if recovery_protected(db, recovery_review, db.scalar(select(Draft).where(Draft.review_id == review_id)), recovery):
                 raise ReviewSkipped('Ручные правки или начатая публикация сохранены')
         if skip_existing:
             review = db.get(Review, review_id)
@@ -1071,7 +1079,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         lambda value: assess_reply(review, product, value, verified_facts),
         protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
         local_only=fast_only, defer_semantic=model_outage,
-        check_seconds=8 if model.startswith('safety-rules') and review_intent(review.text) in structured_intents else None)
+        check_seconds=8 if (isinstance(recovery, dict) and recovery.get('policy_regeneration')) or model.startswith('safety-rules') and review_intent(review.text) in structured_intents else None)
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
@@ -1097,7 +1105,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if draft:
         if recovery and matching_owner_rules(db, product) != memories:
             raise GenerationBusy('Правила изменились во время подготовки; повторяем проверку')
-        edit_draft(db, draft.id, reply, draft.revision, recovery=recovery)
+        edit_draft(db, draft.id, reply, draft.revision, recovery=recovery, learn_preferences=not bool(recovery), commit=not isinstance(recovery, dict))
         draft.model = model
         draft.quality = quality
     else:
@@ -1113,7 +1121,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     return public(draft)
 
 
-def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=True, recovery=False):
+def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=True, recovery=False, commit=True):
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
     review_id = db.scalar(select(Draft.review_id).where(Draft.id == draft_id))
@@ -1126,7 +1134,7 @@ def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=Tru
         raise ValueError('Этот ответ уже публикуется или опубликован')
     if recovery:
         from .bulk_recovery import protected_draft
-        if protected_draft(db, review, draft) or (isinstance(recovery, str) and review.wb_account_id != recovery):
+        if recovery_protected(db, review, draft, recovery):
             raise ReviewSkipped('Ручные правки или начатая публикация сохранены')
     value = validate_reply(value)
     old = draft.text
@@ -1150,7 +1158,8 @@ def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=Tru
     if learn_preferences:
         learn_from_edit(db, draft, old, value)
     review.status = 'manual_review' if review.manual or not draft.quality['passed'] else 'draft_ready'
-    db.commit()
+    if commit: db.commit()
+    else: db.flush()
     return public(draft)
 
 

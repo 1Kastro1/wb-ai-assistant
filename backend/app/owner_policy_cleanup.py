@@ -39,7 +39,7 @@ def plan(db, policy=POLICY):
     return result
 
 
-def apply(db, actor_id, backup_dir=None, policy=POLICY):
+def apply(db, actor_id, backup_dir=None, policy=POLICY, enqueue_checks=True):
     actor = db.get(User, actor_id)
     if not actor or not actor.enabled or actor.role != 'owner':
         raise ValueError('Изменение правил разрешено только действующему владельцу')
@@ -68,7 +68,7 @@ def apply(db, actor_id, backup_dir=None, policy=POLICY):
     accounts = db.execute(select(Review.wb_account_id, func.count(Draft.id)).join(Draft, Draft.review_id == Review.id).where(
         Review.is_answered == False, Review.status != 'publishing').group_by(Review.wb_account_id)).all()
     jobs = []
-    for account, total in accounts:
+    for account, total in accounts if enqueue_checks else []:
         job = Job(id='policy-check-' + hashlib.sha256((policy['version'] + ':' + account).encode()).hexdigest()[:24],
             kind='draft_recheck', priority=80, max_attempts=1000000,
             result={'account_id': account, 'policy_scan': True, 'policy_version': policy['version'],
