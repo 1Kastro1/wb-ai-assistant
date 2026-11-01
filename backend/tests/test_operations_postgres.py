@@ -12,6 +12,37 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_projected_flags_migrate_existing_rows_and_update_on_writes(self):
+        import importlib.util
+        import json
+        from sqlalchemy import text
+        from pathlib import Path
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        url = make_url(os.environ['DATABASE_URL'])
+        self.assertEqual(url.database, 'wb_workbench_tests')
+        engine = create_engine(url)
+        schema = 'flags_migration_' + uuid4().hex
+        spec = importlib.util.spec_from_file_location('flags_migration', Path(__file__).parents[1] / 'migrations/versions/0015_draft_flags.py')
+        migration = importlib.util.module_from_spec(spec); spec.loader.exec_module(migration)
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql('CREATE SCHEMA ' + schema)
+                connection.exec_driver_sql('SET LOCAL search_path TO ' + schema)
+                connection.exec_driver_sql("CREATE TABLE generated_answers (id text PRIMARY KEY, quality jsonb NOT NULL, model text, text text, revision integer)")
+                connection.exec_driver_sql("CREATE TABLE generation_outcomes (job_id text, review_id text, attention boolean)")
+                connection.execute(text("INSERT INTO generated_answers VALUES ('saved', CAST(:quality AS jsonb), 'safety-fallback', 'Employee text', 9)"), {'quality': json.dumps({'passed': False, 'owner_rules': {'technical_error': True, 'checked': False}})})
+                with Operations.context(MigrationContext.configure(connection)):
+                    migration.upgrade(); migration.upgrade()
+                    self.assertEqual(tuple(connection.exec_driver_sql('SELECT quality_passed, quality_technical, quality_pending, quality_attention, text, revision FROM generated_answers').one()), (False, True, True, False, 'Employee text', 9))
+                    connection.execute(text('UPDATE generated_answers SET quality = CAST(:quality AS jsonb)'), {'quality': json.dumps({'passed': True, 'owner_rules': {'passed': True, 'checked': True}, 'repair_audit': {'rules_rechecked_at': 'today'}})})
+                    self.assertEqual(tuple(connection.exec_driver_sql('SELECT quality_passed, quality_technical, quality_pending, quality_attention FROM generated_answers').one()), (True, False, False, False))
+                    migration.downgrade()
+                connection.exec_driver_sql('SET LOCAL search_path TO public')
+                connection.exec_driver_sql('DROP SCHEMA ' + schema + ' CASCADE')
+        finally:
+            engine.dispose()
+
     def test_verified_positive_stale_status_and_short_praise_fast_lane(self):
         from app.services import manual_review_condition
         from app.batch_processing import fast_condition

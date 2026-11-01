@@ -1,8 +1,20 @@
 """Bounded, store-scoped timing summaries without buyer text or model prompts."""
 from collections import Counter
 from statistics import median
-from sqlalchemy import select
-from .db import Draft, Review, Job
+from sqlalchemy import select, func, case
+from datetime import datetime, timedelta, timezone
+from .db import Draft, Review, Job, GenerationOutcome
+
+
+def recent_generation(db, store_id, minutes=30):
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    # Old outcomes deliberately have no timestamp: no invented historical rate.
+    saved, verified = db.execute(select(func.count(), func.sum(case((Draft.quality_passed == True, 1), else_=0)))
+        .select_from(GenerationOutcome).join(Review, Review.id == GenerationOutcome.review_id)
+        .outerjoin(Draft, Draft.review_id == Review.id)
+        .where(GenerationOutcome.created_at >= cutoff, Review.wb_account_id == store_id)).one()
+    return {'window_minutes': minutes, 'saved': saved or 0, 'verified': verified or 0,
+            'saved_per_minute': round((saved or 0) / minutes, 2)}
 
 GENERATION_KINDS = ('drafts', 'question_drafts', 'single_draft', 'single_question_draft')
 

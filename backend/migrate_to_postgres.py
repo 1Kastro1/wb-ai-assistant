@@ -39,7 +39,8 @@ def copy_database(source_path: Path, destination) -> dict[str, int]:
                 if table.name in EXCLUDED_TABLES:
                     continue
                 copied = 0
-                rows = src.execute(select(table)).mappings()
+                writable = [column for column in table.columns if column.computed is None]
+                rows = src.execute(select(*writable)).mappings()
                 while batch := rows.fetchmany(500):
                     values = [dict(row) for row in batch]
                     if table.name == 'app_settings':

@@ -2,7 +2,7 @@
 import time
 import json
 from datetime import datetime, timezone
-from sqlalchemy import select
+from sqlalchemy import select, func
 from .db import Job, StoreProfile, setting, public
 from .config import DATA
 
@@ -22,7 +22,9 @@ def queue_overview(db, auth, store_id):
     query = select(Job).where(Job.status.in_(('queued', 'running')))
     if auth['role'] != 'owner':
         query = query.where(Job.result['account_id'].as_string() == store_id)
-    rows = list(db.scalars(query.order_by(Job.priority, Job.created_at)))
+    from .queue_policy import queue_ordering
+    rows = list(db.scalars(query.order_by((Job.status == 'running').desc(),
+        (func.coalesce(Job.result['retry_at'].as_float(), 0) > timestamp), *queue_ordering())))
     stores = {s.id: s for s in db.scalars(select(StoreProfile))}
     running = [j for j in rows if j.status == 'running']
     tasks = []
@@ -44,6 +46,10 @@ def queue_overview(db, auth, store_id):
                       'created_at': job.created_at, 'updated_at': state.get('updated_at') or state.get('started_at') or job.created_at,
                       'processed': state.get('processed', state.get('checked', state.get('checkpoint', {}).get('processed', 0))),
                       'total': state.get('total'), 'message': state.get('message', ''),
+                      'saved': state.get('processed') if job.kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft') else None,
+                      'verified': state.get('verified'), 'failed': state.get('failed', 0),
+                      'attention': state.get('attention', 0), 'deferred': state.get('deferred', 0),
+                      'stage': 'Проверка сохранённого текста' if state.get('check_only') or state.get('positive_recheck') else 'Генерация ответов' if 'draft' in job.kind else 'Синхронизация',
                       'blocking_job': blocker.id if waiting and blocker else None})
     # Only a latest failed import is an unresolved sync incident. Old failures
     # remain in history after a later successful attempt.
@@ -62,7 +68,9 @@ def queue_overview(db, auth, store_id):
         backup = {key: backup.get(key) for key in ('created_at', 'name', 'size_mb', 'catalog_verified', 'restore_tested')}
     except (OSError, ValueError, TypeError):
         backup = None
+    from .generation_monitor import recent_generation
     return {'observed_at': datetime.now(timezone.utc).isoformat(), 'tasks': tasks, 'server_backup': backup,
+            'generation_window': recent_generation(db, store_id),
             'running_jobs': len(running), 'queued_jobs': sum(j.status == 'queued' for j in rows),
             'retry_jobs': sum((j.result or {}).get('retry_at', 0) > timestamp for j in rows),
             'sync_incidents': incidents,

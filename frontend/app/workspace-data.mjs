@@ -17,15 +17,17 @@ export function workspaceResources({page='shell',settingsTab='connections',owner
 
 /** Coalesces concurrent reads, applies each result immediately, and never caches errors. */
 export function createWorkspaceLoader(api,{ttl=15000,now=()=>Date.now()}={}){
- let cache=new Map(),generation=0;
- return {clear(){generation++;cache=new Map()},async load(resources,onValue,{force=false}={}){
+ let cache=new Map(),snapshots=new Map(),generation=0;
+ return {clear(){generation++;cache=new Map();snapshots=new Map()},async load(resources,onValue,{force=false}={}){
   const epoch=generation;
   const results=await Promise.allSettled(resources.map(async([key,path])=>{
    let entry=cache.get(path);
+   const previous=snapshots.get(path);
    if(!entry?.promise&&(force||!entry||now()-entry.at>ttl))entry=undefined;
    if(!entry){entry={promise:null,at:0,value:null};const record=entry;record.promise=api(path,'GET',undefined,path.split('?')[0]==='/analytics'?45000:15000).then(value=>{record.value=value;record.at=now();record.promise=null;return value}).catch(error=>{if(cache.get(path)===record)cache.delete(path);throw error});cache.set(path,record)}
-   const value=entry.promise?await entry.promise:entry.value;
-   if(epoch===generation)onValue(key,value);
+   let value;
+   try{value=entry.promise?await entry.promise:entry.value}catch(error){if(previous&&epoch===generation)onValue(key,previous.value,{at:previous.at,stale:true});throw error}
+   if(epoch===generation){snapshots.set(path,{value,at:entry.at});onValue(key,value,{at:entry.at,stale:false})}
    return value;
   }));
   return results;

@@ -13,6 +13,10 @@ def next_job(db, kinds=None):
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
     if kinds is not None:
         statement = statement.where(Job.kind.in_(kinds))
+    return db.scalar(statement.order_by(*queue_ordering()).limit(1))
+
+
+def queue_ordering():
     # Direct clicks first, then the owner's priority WB recovery. A retry whose
     # backoff has not expired stays out of the queue; imports can use that gap.
     urgent_positive = ((Job.result['positive_recheck'].as_boolean() == True)
@@ -23,7 +27,7 @@ def next_job(db, kinds=None):
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)
     served = func.coalesce(Job.result['last_served_at'].as_string(), Job.created_at)
     requested_check = case((Job.result['retry_draft_id'].as_string().is_not(None), Job.created_at), else_='')
-    return db.scalar(statement.order_by(interactive, requested_check.desc(), served, Job.priority, Job.created_at, Job.id).limit(1))
+    return (interactive, requested_check.desc(), served, Job.priority, Job.created_at, Job.id)
 
 
 def other_waiting(db, job_id):

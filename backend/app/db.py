@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import re
-from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint, Float
+from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint, Float, Computed
+from .draft_flags import DraftFlag
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.dialects.postgresql import JSONB
 from .config import DATABASE, DATABASE_URL
@@ -163,6 +164,10 @@ class Draft(Base):
     model: Mapped[str] = mapped_column(String, default='rules-v1')
     prompt_version: Mapped[str] = mapped_column(String, default='1.0')
     quality: Mapped[dict] = mapped_column(JSON().with_variant(JSONB(), 'postgresql'), default=dict)
+    quality_passed: Mapped[bool | None] = mapped_column(Boolean, Computed(DraftFlag('passed')), nullable=True)
+    quality_technical: Mapped[bool] = mapped_column(Boolean, Computed(DraftFlag('technical')))
+    quality_pending: Mapped[bool] = mapped_column(Boolean, Computed(DraftFlag('pending')))
+    quality_attention: Mapped[bool] = mapped_column(Boolean, Computed(DraftFlag('attention')))
     created_by: Mapped[str] = mapped_column(String, default='')
     updated_by: Mapped[str] = mapped_column(String, default='')
 
@@ -352,6 +357,7 @@ class GenerationOutcome(Base):
     job_id: Mapped[str] = mapped_column(String, primary_key=True)
     review_id: Mapped[str] = mapped_column(String, primary_key=True)
     attention: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[str] = mapped_column(String, default=now, server_default='', index=True)
 
 
 class Job(Base):

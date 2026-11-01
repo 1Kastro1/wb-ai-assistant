@@ -936,7 +936,9 @@ async def test_store(store_id: str, auth: AUTH, db: DB):
 
 @app.get('/settings/schedule')
 def schedule_get(auth: AUTH, db: DB):
-    return normalize_schedule(setting(db, 'automation_schedule', {}))
+    from .automation_schedule import schedule_status
+    schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
+    return {**schedule, 'runtime': schedule_status(db, schedule, active_store(db, auth), time.time())}
 
 
 @app.patch('/settings/schedule')
@@ -996,7 +998,7 @@ def automated_draft_scope(account_id):
 
 
 def auto_replies_status(db,auth=None):
-    schedule = schedule_get(None, db)
+    schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
     enabled = bool(schedule.get('enabled') and schedule.get('drafts_enabled'))
     account_id=active_store(db,auth) if auth else setting(db,'active_store','owner')
     current_job = db.scalar(select(Job).where(automated_draft_scope(account_id), Job.status.in_(['queued', 'running'])).order_by(Job.created_at.desc()))
@@ -1027,7 +1029,7 @@ async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR,
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
-    schedule = schedule_get(auth, db)
+    schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
     since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     current = time.time()
     schedule.update({'enabled': True, 'drafts_enabled': True,
@@ -1050,7 +1052,7 @@ def pause_auto_replies(auth: MARKET_OPERATOR, db: DB):
     store = db.get(StoreProfile, active_store(db, auth))
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
-    schedule = schedule_get(auth, db)
+    schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
     schedule['drafts_enabled'] = False
     schedule['generation_enabled'] = bool(schedule.get('question_drafts_enabled'))
     schedule['enabled'] = bool(schedule.get('sync_enabled', True) or schedule.get('question_drafts_enabled'))
@@ -1813,12 +1815,15 @@ def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset:
     limit, offset = min(200, max(1, limit)), max(0, offset)
     store = db.get(StoreProfile, active_store(db, auth))
     scope = product_scope(store)
-    if knowledge not in ('all', 'ready', 'missing', 'priority'):
+    if knowledge not in ('all', 'ready', 'missing', 'priority', 'identity'):
         raise HTTPException(422, 'Неизвестный фильтр сведений')
     conditions = [scope]
     if knowledge in ('ready', 'missing'):
         trusted = knowledge_condition(db)
         conditions.append(trusted if knowledge == 'ready' else ~trusted)
+    if knowledge == 'identity':
+        from .product_identity import identity_conflict_condition
+        conditions.append(identity_conflict_condition())
     if knowledge == 'priority':
         conditions.extend([~knowledge_condition(db), Product.id.in_(priority_products(store.id))])
     query = select(Product).where(*conditions)
@@ -1827,7 +1832,8 @@ def products_paginated(auth: AUTH, db: DB, q: str = '', limit: int = 60, offset:
         condition = product_search_condition(q)
         query, count_query = query.where(condition), count_query.where(condition)
     domains={row.key.removeprefix('official_domain:'):row.value for row in db.scalars(select(Setting).where(Setting.key.startswith('official_domain:')))}
-    items = [{**public(p), 'official_domain': domains.get(p.id, '')}
+    from .product_identity import identity_warning
+    items = [{**public(p), 'official_domain': domains.get(p.id, ''), 'identity_warning': identity_warning(p)}
              for p in db.scalars(query.order_by(Product.name, Product.id).offset(offset).limit(limit))]
     total = db.scalar(count_query) or 0
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset, 'has_more': offset + len(items) < total, 'knowledge': knowledge}
@@ -2032,6 +2038,7 @@ def _marketplace_stats(auth, db, days=0):
 
 @app.get('/work-queue')
 def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: int = 50, offset: int = 0, view: str = 'all'):
+    from .services import manual_review_condition
     if kind not in ('', 'reviews', 'questions'):
         raise HTTPException(422, 'Неизвестный тип обращения')
     ids = [s.id for s in db.scalars(select(StoreProfile)) if not store_id or s.id == store_id]
@@ -2040,7 +2047,7 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
     conditions = [Review.wb_account_id.in_(ids), Review.is_answered == False]
     if kind:
         conditions.append(Review.marketplace.like('%_question') if kind == 'questions' else ~Review.marketplace.like('%_question'))
-    if view not in ('all', 'recent', 'backlog', 'manual', 'ready', 'missing'):
+    if view not in ('all', 'recent', 'backlog', 'manual', 'technical', 'pending', 'ready', 'missing'):
         raise HTTPException(422, 'Неизвестный вид очереди')
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     draft_exists = select(Draft.id).where(Draft.review_id == Review.id).correlate(Review).exists()
@@ -2053,18 +2060,23 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
         conditions.append((Review.manual == True) | (Review.risk != 'NORMAL') |
                           ((Review.status == 'manual_review') & ~draft_exists) |
                           ((~Review.marketplace.like('%_question')) & (Review.rating <= 3)) | draft_attention)
+    if view in ('technical', 'pending'):
+        flag = Draft.quality_technical if view == 'technical' else Draft.quality_pending
+        conditions.append(select(Draft.id).where(Draft.review_id == Review.id, flag == True).correlate(Review).exists())
     if view == 'missing': conditions.append(~draft_exists)
-    if view == 'ready': conditions.extend([Review.manual == False, Review.status == 'draft_ready', select(Draft.id).where(Draft.review_id == Review.id, Draft.quality['passed'].as_boolean() == True).correlate(Review).exists()])
+    if view == 'ready': conditions.extend([Review.manual == False, Review.status == 'draft_ready', select(Draft.id).where(Draft.review_id == Review.id, Draft.quality_passed == True).correlate(Review).exists()])
     limit, offset = min(100, max(1, limit)), max(0, offset)
     total = db.scalar(select(func.count()).select_from(Review).where(*conditions)) or 0
-    rows = db.execute(select(Review, Product.name, StoreProfile.name, StoreProfile.provider, Draft.id, Draft.quality).join(Product, Product.id == Review.product_id).join(StoreProfile, StoreProfile.id == Review.wb_account_id).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions).order_by(Review.manual.desc(), Review.created_at.desc(), Review.id).offset(offset).limit(limit)).all()
+    rows = db.execute(select(Review, Product.name, StoreProfile.name, StoreProfile.provider, Draft.id, Draft.quality, manual_review_condition()).join(Product, Product.id == Review.product_id).join(StoreProfile, StoreProfile.id == Review.wb_account_id).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions).order_by(Review.manual.desc(), Review.created_at.desc(), Review.id).offset(offset).limit(limit)).all()
     return {'items': [{'id': review.id, 'store_id': review.wb_account_id, 'store_name': name, 'provider': provider,
                        'kind': 'questions' if review.marketplace.endswith('_question') else 'reviews',
                        'product': product, 'text': review.text, 'rating': review.rating, 'created_at': review.created_at,
-                       'manual': review.manual, 'status': review.status, 'has_draft': draft_id is not None,
+                       'manual': bool(requires_manual), 'status': review.status, 'has_draft': draft_id is not None,
+                       'draft_id': draft_id,
+                       'verification_state': ('technical' if (quality or {}).get('owner_rules', {}).get('technical_error') or (quality or {}).get('owner_rules', {}).get('status') == 'error' else 'pending' if (quality or {}).get('owner_rules', {}).get('status') == 'pending' or (quality or {}).get('owner_rules', {}).get('checked') is False else 'passed' if (quality or {}).get('passed') else 'attention'),
                        'verification_passed': bool((quality or {}).get('passed')),
                        'reasons': list(dict.fromkeys(([{'HIGH': 'Описан опасный симптом', 'CAUTION': 'Шум или скрип требуют внимания'}.get(review.risk, 'Отмечено для ручной проверки')] if review.manual else []) + list((quality or {}).get('issues') or [])))[:5]}
-                      for review, product, name, provider, draft_id, quality in rows],
+                      for review, product, name, provider, draft_id, quality, requires_manual in rows],
             'total': total, 'limit': limit, 'offset': offset}
 
 
@@ -2202,10 +2214,11 @@ class DraftFeedback(Payload):
 
 
 @app.post('/drafts/{did}/recheck-rules')
-def retry_draft_rules(did: str, background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB):
+def retry_draft_rules(did: str, background: BackgroundTasks, auth: MARKET_OPERATOR, db: DB, store_id: str = ''):
     existing = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
     review = db.get(Review, existing.review_id) if existing else None
-    if not review or review.wb_account_id != active_store(db, auth):
+    scope = store_id if store_id and auth['role'] == 'owner' else active_store(db, auth)
+    if not review or review.wb_account_id != scope:
         raise HTTPException(404, 'Черновик не найден')
     can_operate_store(auth, db.get(StoreProfile, review.wb_account_id))
     if review.is_answered or review.status == 'publishing':
