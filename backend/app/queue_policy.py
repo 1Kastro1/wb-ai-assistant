@@ -15,7 +15,9 @@ def next_job(db, kinds=None):
         statement = statement.where(Job.kind.in_(kinds))
     # Direct clicks first, then the owner's priority WB recovery. A retry whose
     # backoff has not expired stays out of the queue; imports can use that gap.
-    interactive = case((Job.result['positive_recheck'].as_boolean() == True, -1),
+    urgent_positive = ((Job.result['positive_recheck'].as_boolean() == True)
+                       & Job.result['background'].as_boolean().is_not(True))
+    interactive = case((urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (Job.result['retry_draft_id'].as_string().is_not(None), 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)

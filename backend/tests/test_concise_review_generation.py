@@ -98,6 +98,7 @@ def test_explicit_refresh_only_replaces_exact_old_templates_and_keeps_manual_tex
         db.commit()
         job = positive_recheck.enqueue(db, 'owner-concise', 'owner', refresh_templates=True)
         jid = job.id
+        assert job.result['background'] is True
     judge = AsyncMock(side_effect=AssertionError('Refresh is model-free'))
     monkeypatch.setattr(ollama, 'structured', judge)
     asyncio.run(positive_recheck.step(jid))
@@ -107,6 +108,22 @@ def test_explicit_refresh_only_replaces_exact_old_templates_and_keeps_manual_tex
         assert len(db.get(Draft, 'legacy-concise').text) < len(old)
         assert db.get(Draft, 'human-draft').text == old and db.get(Draft, 'human-draft').revision == 8
     judge.assert_not_awaited()
+
+
+def test_historical_refresh_yields_to_clicks_and_rotates_with_background_generation(client):
+    from app.queue_policy import next_job
+    with Session() as db:
+        db.add(Job(id='historical-refresh', kind='draft_recheck', created_at='2026-01-01',
+            result={'positive_recheck':True, 'background':True}))
+        db.add(Job(id='interactive-click', kind='single_draft', created_at='2026-11-01', result={}))
+        db.add(Job(id='full-generation', kind='drafts', created_at='2026-11-01', result={}))
+        db.commit()
+        assert next_job(db).id == 'interactive-click'
+        db.get(Job, 'interactive-click').status = 'completed'; db.commit()
+        assert next_job(db).id == 'historical-refresh'
+        job = db.get(Job, 'historical-refresh')
+        job.result = {**job.result, 'last_served_at':'2026-11-02'}; db.commit()
+        assert next_job(db).id == 'full-generation'
 
 
 def test_known_model_outage_saves_batch_draft_and_queues_check_without_second_model_deadline(client, monkeypatch):
