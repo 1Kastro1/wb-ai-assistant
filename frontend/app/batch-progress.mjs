@@ -19,10 +19,16 @@ export function batchProgress(job) {
  const skipped = Math.max(0, Number(result.skipped) || 0);
  const attention = Math.max(0, Number(result.attention) || 0);
  const manualErrors = Math.max(0, Number(result.manual_errors) || 0);
- const total = result.total == null ? null : Math.max(0, Number(result.total) || 0);
  const attempted = processed + failed + skipped + manualErrors;
+ // Older selected jobs initially stored only eligible IDs in total, while
+ // skipped already included the selected reviews with existing answers.
+ const selectedTotal = result.remaining == null && result.selected_ids?.length
+  ? result.selected_ids.length + skipped : 0;
+ const total = result.total == null ? null : Math.max(0, Number(result.total) || 0,
+  Number(result.requested_total) || result.operation_requested_ids?.length || 0,
+  selectedTotal, attempted + Math.max(0, Number(result.remaining) || 0));
  const percent = job.status === 'completed' ? 100 : total > 0
-  ? Math.min(100, Math.round(attempted / total * 1000) / 10) : 0;
+  ? Math.min(99, Math.round(attempted / total * 1000) / 10) : 0;
  return {processed, failed, skipped, attention, total, attempted, percent,
   remaining: total == null ? null : Math.max(0, total - attempted)};
 }
