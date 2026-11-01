@@ -12,6 +12,85 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_publication_schedule_migration_preserves_existing_slots(self):
+        import importlib.util
+        from pathlib import Path
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        url=make_url(os.environ['DATABASE_URL']);self.assertEqual(url.database,'wb_workbench_tests')
+        engine=create_engine(url);schema='publication_migration_'+uuid4().hex
+        spec=importlib.util.spec_from_file_location('publication_migration',Path(__file__).parents[1]/'migrations/versions/0016_publication_schedule.py')
+        migration=importlib.util.module_from_spec(spec);spec.loader.exec_module(migration)
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql('CREATE SCHEMA '+schema)
+                connection.exec_driver_sql('SET LOCAL search_path TO '+schema)
+                connection.exec_driver_sql('CREATE TABLE publication_jobs(id text PRIMARY KEY,review_id text UNIQUE,action_id text,status text)')
+                connection.exec_driver_sql("INSERT INTO publication_jobs VALUES ('one','review','approved','published'),('two','other','interrupted','uncertain')")
+                with Operations.context(MigrationContext.configure(connection)):
+                    migration.upgrade();migration.upgrade()
+                    self.assertEqual(connection.exec_driver_sql('SELECT scheduled_job_id FROM publication_jobs ORDER BY id').scalars().all(),['',''])
+                    self.assertEqual(connection.exec_driver_sql('SELECT status FROM publication_jobs ORDER BY id').scalars().all(),['published','uncertain'])
+                    migration.downgrade()
+                    self.assertEqual(connection.exec_driver_sql('SELECT count(*) FROM publication_jobs').scalar(),2)
+                connection.exec_driver_sql('SET LOCAL search_path TO public')
+                connection.exec_driver_sql('DROP SCHEMA '+schema+' CASCADE')
+        finally:engine.dispose()
+
+    def test_scheduled_publication_reserves_one_slot_under_concurrent_confirmation(self):
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        from app import services, config
+        from app.db import User, Account, Publication, setting
+        url = make_url(os.environ['DATABASE_URL'])
+        self.assertEqual(url.database, 'wb_workbench_tests')
+        engine = create_engine(url); Base.metadata.create_all(engine); factory = sessionmaker(engine)
+        prefix = 'scheduled-race-' + uuid4().hex
+        keys = ('automation_schedule','test_mode','safe_mode','assistant_enabled')
+        calls = []
+        class Provider:
+            async def publish(self, db, review, reply):
+                calls.append(review.id); await asyncio.sleep(.05)
+        try:
+            with factory() as db:
+                previous = {key: db.get(Setting,key).value if db.get(Setting,key) else None for key in keys}
+                db.add(User(id=prefix,username=prefix,password_hash='unused',role='owner',enabled=True))
+                db.add(StoreProfile(id=prefix,name='Test',provider='wb'))
+                db.add(Account(id=prefix,encrypted_token='unused'))
+                db.add(Product(id=prefix,name='Автотовар',brand='TEST')); db.flush()
+                db.add(Review(id=prefix,wb_review_id=prefix,wb_account_id=prefix,product_id=prefix,
+                    marketplace='wb',rating=5,text='',status='draft_ready',manual=False,risk='NORMAL')); db.flush()
+                reply = 'Добрый день! Спасибо за высокую оценку!'
+                db.add(Draft(id=prefix,review_id=prefix,text=reply,original=reply,revision=1,quality={'passed':True}))
+                db.add(Job(id=prefix,kind='scheduled_publication',status='queued',result={'account_id':prefix,'authorization':prefix}))
+                set_setting(db,'automation_schedule',{'enabled':True,'publication_enabled':True,'publication_authorization':prefix,'publication_authorized_by':prefix,'publication_reviews':True})
+                for key,value in [('test_mode',False),('safe_mode',False),('assistant_enabled',True)]:set_setting(db,key,value)
+                for index in range(2):
+                    db.add(Action(id=prefix+str(index),kind='publish',payload={'scheduled_job_id':prefix,'test_mode':False,'items':[{'review_id':prefix,'draft_id':prefix,'revision':1,'text':reply,'rating':5,'manual':False}]}))
+                db.commit()
+            def confirm(index):
+                with factory() as db:
+                    try:
+                        asyncio.run(services.confirm_action(db,prefix+str(index),actor_id=prefix,scheduled_job_id=prefix));return True
+                    except ValueError:return False
+            with patch.object(config,'REAL_PUBLISH',True), patch.object(services,'REAL_PUBLISH',True), patch.object(services,'provider_for',lambda store:Provider()):
+                with ThreadPoolExecutor(max_workers=2) as pool: results=list(pool.map(confirm,range(2)))
+            self.assertEqual(sum(results),1);self.assertEqual(calls,[prefix])
+        finally:
+            with factory() as db:
+                db.execute(delete(Publication).where(Publication.review_id==prefix))
+                db.execute(delete(Action).where(Action.id.startswith(prefix)))
+                db.execute(delete(Job).where(Job.id==prefix));db.execute(delete(Draft).where(Draft.id==prefix))
+                db.execute(delete(Review).where(Review.id==prefix));db.execute(delete(Product).where(Product.id==prefix))
+                db.execute(delete(Account).where(Account.id==prefix));db.execute(delete(StoreProfile).where(StoreProfile.id==prefix))
+                db.execute(delete(User).where(User.id==prefix))
+                for key,value in previous.items():
+                    if value is None:db.execute(delete(Setting).where(Setting.key==key))
+                    else:set_setting(db,key,value)
+                db.commit()
+            engine.dispose()
+
     def test_projected_flags_migrate_existing_rows_and_update_on_writes(self):
         import importlib.util
         import json

@@ -84,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -721,9 +721,10 @@ def assistant_toggle(body: AssistantEnabled, auth: OWNER, db: DB):
         schedule['drafts_enabled'] = False
         schedule['question_drafts_enabled'] = False
         schedule['generation_enabled'] = False
+        schedule['publication_enabled'] = False
         schedule['enabled'] = bool(schedule.get('sync_enabled', schedule.get('enabled', False)))
         set_setting(db, 'automation_schedule', schedule)
-        for job in db.scalars(select(Job).where(Job.kind.in_(['drafts','question_drafts','single_draft','single_question_draft']), Job.status.in_(['queued', 'running']))):
+        for job in db.scalars(select(Job).where(Job.kind.in_(['drafts','question_drafts','single_draft','single_question_draft','scheduled_publication']), Job.status.in_(['queued', 'running']))):
             job.cancel_requested = True
             if job.status == 'queued':
                 job.status = 'cancelled'
@@ -770,6 +771,10 @@ class StoreConnection(Payload):
 
 
 class ScheduleInput(Payload):
+    publication_enabled: bool | None = None
+    publication_hours: int | None = Field(default=None, ge=1, le=168)
+    publication_reviews: bool | None = None
+    publication_questions: bool | None = None
     sync_hours: int | None = Field(default=None, ge=1, le=168)
     sync_enabled: bool | None = None
     generation_enabled: bool | None = None
@@ -938,7 +943,9 @@ async def test_store(store_id: str, auth: AUTH, db: DB):
 def schedule_get(auth: AUTH, db: DB):
     from .automation_schedule import schedule_status
     schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
-    return {**schedule, 'runtime': schedule_status(db, schedule, active_store(db, auth), time.time())}
+    from .scheduled_publication import runtime
+    visible = {key: value for key, value in schedule.items() if key not in ('publication_authorized_by', 'publication_authorization')}
+    return {**visible, 'runtime': schedule_status(db, schedule, active_store(db, auth), time.time()), 'publication_runtime': runtime(db, schedule) if auth['role'] == 'owner' else {}}
 
 
 @app.patch('/settings/schedule')
@@ -956,7 +963,7 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
         value['drafts_enabled'] = value['question_drafts_enabled'] = updates['generation_enabled']
         if 'drafts_hours' in updates and 'question_drafts_hours' not in updates:
             value['question_drafts_hours'] = updates['drafts_hours']
-    controls = ('reviews_sync_enabled', 'questions_sync_enabled', 'drafts_enabled', 'question_drafts_enabled')
+    controls = ('reviews_sync_enabled', 'questions_sync_enabled', 'drafts_enabled', 'question_drafts_enabled', 'publication_enabled')
     if any(key in updates for key in (*controls, 'sync_enabled', 'generation_enabled')):
         value['enabled'] = any(value[key] for key in controls)
     elif 'enabled' in updates:
@@ -964,6 +971,22 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
     value = normalize_schedule(value)
     if value.get('generation_enabled') and not setting(db, 'assistant_enabled', True):
         raise ValueError('Сначала включите ассистента для подготовки ответов')
+    from .scheduled_publication import FIELDS, availability_reason
+    publication_changed = any(key in updates and value.get(key) != current.get(key) for key in FIELDS)
+    if value.get('publication_enabled'):
+        reason = availability_reason(db)
+        if reason:
+            raise ValueError(reason)
+        if not (value.get('publication_reviews') or value.get('publication_questions')):
+            raise ValueError('Выберите ответы на отзывы или вопросы для автоматической выгрузки.')
+        if publication_changed or not current.get('publication_authorization'):
+            value.update(publication_authorized_by=auth['user_id'], publication_authorization=str(uuid4()), publication_authorized_at=now())
+    if publication_changed:
+        for pending_job in db.scalars(select(Job).where(Job.kind == 'scheduled_publication', Job.status.in_(('queued', 'running')))):
+            pending_job.cancel_requested = True
+            if pending_job.status == 'queued': pending_job.status = 'cancelled'
+        for key in list(value):
+            if key.startswith('last_publication:'): value.pop(key)
     # Start newly enabled tasks promptly; changing an interval keeps its last run.
     reset_kinds = []
     for kind, field in (('reviews', 'reviews_sync_enabled'), ('questions', 'questions_sync_enabled'),
@@ -990,7 +1013,7 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
     set_setting(db, 'automation_schedule', value)
     db.commit()
     background.add_task(run_job_queue)
-    return value
+    return schedule_get(auth, db)
 
 
 def automated_draft_scope(account_id):
@@ -1160,6 +1183,10 @@ async def execute_job(job_id):
                 else:
                     await send_step(job_id)
                 db.refresh(job)
+            elif kind == 'scheduled_publication':
+                from .scheduled_publication import run_step
+                await run_step(job_id)
+                db.refresh(job)
             elif kind == 'wb_excluded_recovery':
                 from .bulk_recovery import run_step
                 await run_step(job_id)
@@ -1265,7 +1292,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -1281,6 +1308,7 @@ async def execute_job(job_id):
                 job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Ожидает повторной попытки', 'account_id': account_id, 'detail': (str(error) or type(error).__name__)[:500], 'retry_at': time.time() + min(300, 30 * 2 ** min(job.attempts - 1, 3))}
             else:
                 default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'
+                if kind == 'scheduled_publication': default_message = 'Автоматическая выгрузка не завершена. Проверьте состояние магазинов.'
                 detail = (str(error) or type(error).__name__)[:500]
                 message = f'{default_message} {detail}'
                 job.status, job.result = 'failed', {**(job.result or {}), 'message':message, 'account_id': account_id, 'error_type': type(error).__name__, 'detail': detail, 'finished_at': now()}

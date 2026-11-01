@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 from .db import Job, StoreProfile, setting, public
 from .config import DATA
 
-LABELS = {'products': 'Обновление товаров', 'reviews': 'Обновление отзывов', 'questions': 'Обновление вопросов',
+LABELS = {'scheduled_publication': 'Автоматическая выгрузка готовых ответов', 'products': 'Обновление товаров', 'reviews': 'Обновление отзывов', 'questions': 'Обновление вопросов',
           'drafts': 'Ответы на отзывы', 'question_drafts': 'Ответы на вопросы',
           'single_draft': 'Ответ на отзыв', 'single_question_draft': 'Ответ на вопрос',
           'draft_audit': 'Перепроверка черновиков', 'draft_recheck': 'Проверка правил ответа',
@@ -49,7 +49,7 @@ def queue_overview(db, auth, store_id):
                       'saved': state.get('processed') if job.kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft') else None,
                       'verified': state.get('verified'), 'failed': state.get('failed', 0),
                       'attention': state.get('attention', 0), 'deferred': state.get('deferred', 0),
-                      'stage': 'Проверка сохранённого текста' if state.get('check_only') or state.get('positive_recheck') else 'Генерация ответов' if 'draft' in job.kind else 'Синхронизация',
+                      'stage': 'Отправка готовых ответов' if job.kind == 'scheduled_publication' else 'Проверка сохранённого текста' if state.get('check_only') or state.get('positive_recheck') else 'Генерация ответов' if 'draft' in job.kind else 'Синхронизация',
                       'blocking_job': blocker.id if waiting and blocker else None})
     # Only a latest failed import is an unresolved sync incident. Old failures
     # remain in history after a later successful attempt.

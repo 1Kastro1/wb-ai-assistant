@@ -16,23 +16,34 @@ function component(file){
 }
 test('legacy schedules preserve both groups and payload contains no hidden service settings',()=>{
  const values=scheduleValues({enabled:true,reviews_hours:4,questions_hours:8,drafts_hours:12,drafts_enabled:true});
- assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false});
+ assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false,publication_enabled:false,publication_hours:1,publication_reviews:true,publication_questions:true});
  assert.equal(scheduleValues({enabled:false,drafts_enabled:true}).drafts_enabled,false);
  const separate=schedulePayload({...values,reviews_sync_enabled:false,question_drafts_enabled:true,question_drafts_hours:2});
  assert.equal(separate.questions_sync_enabled,true);assert.equal(separate.question_drafts_hours,2);assert.equal(separate.drafts_hours,12);
 });
 test('intervals reject empty values, fractions and values outside one week',()=>{
  const values=scheduleValues({enabled:false});
- for(const key of ['reviews_hours','questions_hours','drafts_hours','question_drafts_hours'])for(const value of ['',0,169,1.5,'abc'])assert.throws(()=>schedulePayload({...values,[key]:value}));
+ for(const key of ['reviews_hours','questions_hours','drafts_hours','question_drafts_hours','publication_hours'])for(const value of ['',0,169,1.5,'abc'])assert.throws(()=>schedulePayload({...values,[key]:value}));
  assert.equal(schedulePayload({...values,reviews_hours:'3'}).reviews_hours,3);
 });
 test('reviews and questions each have independent update and generation controls',()=>{
  const Panel=component(path.resolve('app/AutomationSettings.tsx')).default;
  const markup=renderToStaticMarkup(React.createElement(Panel,{schedule:{enabled:false},onSave:async()=>{}}));
- assert.equal((markup.match(/type="number"/g)||[]).length,4);
- assert.equal((markup.match(/type="checkbox"/g)||[]).length,4);
+ assert.equal((markup.match(/type="number"/g)||[]).length,5);
+ assert.equal((markup.match(/type="checkbox"/g)||[]).length,7);
  assert.match(markup,/aria-label="Отзывы"/);assert.match(markup,/aria-label="Вопросы"/);
  assert.match(markup,/Обновление данных/);assert.match(markup,/Генерация ответов/);
  assert.match(markup,/даже если закрыть сайт/);assert.match(markup,/после вашего подтверждения/);
  assert.doesNotMatch(markup,/Минимальное качество|Каждые N дней|Резервная копия, каждые/);
 });
+
+ test('automatic publication requires an explicit switch and an answer type',()=>{
+  const values=scheduleValues({enabled:true,publication_enabled:true,publication_hours:3});
+  assert.equal(schedulePayload(values).publication_hours,3);
+  assert.throws(()=>schedulePayload({...values,publication_reviews:false,publication_questions:false}),/Выберите ответы/);
+  const Panel=component(path.resolve('app/AutomationSettings.tsx')).default;
+  const html=renderToStaticMarkup(React.createElement(Panel,{schedule:{enabled:true,publication_enabled:false,publication_runtime:{available:true,stores:[{id:'a',provider:'wb',name:'WB',connected:true},{id:'b',provider:'ozon',name:'Ozon',connected:true},{id:'c',provider:'yandex',name:'Яндекс',connected:true}]}},onSave:async()=>{}}));
+  assert.match(html,/Автоматическая выгрузка/);assert.match(html,/публиковаться покупателям автоматически/);
+  assert.match(html,/Wildberries/);assert.match(html,/Ozon/);assert.match(html,/Яндекс Маркет/);
+  assert.match(html,/Выгрузка выключена/);assert.match(html,/по Москве/);
+ });
