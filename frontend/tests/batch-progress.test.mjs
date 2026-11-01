@@ -43,6 +43,30 @@ test('fractional progress separates skipped, manual checks and technical errors'
  assert.equal(progress.failed,2);
 });
 
+test('selected jobs include existing drafts in the denominator before the worker starts',()=>{
+ const progress=batchProgress(job('selected','queued',{selected_ids:['a','b'],total:2,processed:0,skipped:28}));
+ assert.equal(progress.total,30);
+ assert.equal(progress.attempted,28);
+ assert.equal(progress.remaining,2);
+ assert.equal(progress.percent,93.3);
+ const current=batchProgress(job('selected','queued',{selected_ids:['a','b'],total:30,requested_total:30,remaining:2,skipped:28}));
+ assert.deepEqual(current,progress);
+});
+
+test('resumed selected jobs do not double count skipped reviews',()=>{
+ const progress=batchProgress(job('selected','queued',{selected_ids:['a','b'],total:30,remaining:1,processed:0,skipped:29}));
+ assert.equal(progress.total,30);
+ assert.equal(progress.remaining,1);
+ assert.equal(progress.attempted,29);
+});
+
+test('only completed server jobs can show 100 percent',()=>{
+ for(const status of ['queued','running','failed','cancelled']){
+  assert.equal(batchProgress(job('selected',status,{total:30,processed:2,skipped:28,remaining:0})).percent,99);
+ }
+ assert.equal(batchProgress(job('selected','completed',{total:30,processed:2,skipped:28,remaining:0})).percent,100);
+});
+
 test('full counters do not announce completion before server completes the job',()=>{
  assert.equal(batchStage(job('one','running',{total:44,processed:44})), 'Завершаем подготовку');
  assert.equal(batchStage(job('one','running',{total:44,processed:44,retrying:1})), 'Ожидаем повторной обработки');

@@ -160,6 +160,31 @@ def test_selected_requests_reuse_full_run_or_exclude_overlapping_ids(client, see
     assert first['id'] != full['id']
 
 
+def test_selected_progress_includes_skipped_drafts_before_start_and_after_resume(client, seeded, monkeypatch):
+    monkeypatch.setattr(main, 'run_job_queue', AsyncMock())
+    with Session() as db:
+        for rid in ('r1', 'r2'):
+            save(db, rid)
+    response = client.post('/jobs/selected-drafts', json={'review_ids': ['r1', 'r2', 'r3', 'r4']})
+    assert response.status_code == 200
+    job = response.json()
+    result = job['result']
+    assert (result['total'], result['requested_total'], result['remaining'], result['skipped']) == (4, 4, 2, 2)
+    compact = next(row for row in client.get('/jobs?compact=true').json() if row['id'] == job['id'])
+    assert compact['result']['requested_total'] == 4
+
+    async def generate(db, rid, instruction=''):
+        return save(db, rid)
+
+    monkeypatch.setattr(main, 'generate_draft', generate)
+    asyncio.run(main.run_sync_job(job['id']))
+    with Session() as db:
+        completed = db.get(Job, job['id'])
+        assert completed.status == 'completed'
+        assert (completed.result['total'], completed.result['processed'], completed.result['skipped'], completed.result['remaining']) == (4, 2, 2, 0)
+        assert db.get(Draft, 'answer-r1').text == 'Saved'
+
+
 def test_generation_claim_prevents_duplicates_and_releases_on_cancel(client):
     async def scenario():
         started = asyncio.Event()

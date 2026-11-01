@@ -1519,7 +1519,7 @@ async def schedule_selected_drafts(body: SelectedDraftsInput, background: Backgr
             raise HTTPException(409, 'У выбранных отзывов уже есть ответы или черновики. Ваши правки сохранены')
         job = Job(id=str(uuid4()), kind='drafts', priority=45, max_attempts=1,
                   result={'account_id': active, 'selected_ids': eligible, 'requested_by': auth['user_id'],
-                          'manual_batch': True, 'operation_key': body.operation_key, 'operation_requested_ids': sorted(ids), 'total': len(eligible), 'processed': 0, 'failed': 0,
+                          'manual_batch': True, 'operation_key': body.operation_key, 'operation_requested_ids': sorted(ids), 'requested_total': len(ids), 'total': len(ids), 'remaining': len(eligible), 'processed': 0, 'failed': 0,
                           'skipped': len(ids) - len(eligible), 'message': 'Выбранные отзывы поставлены в очередь'})
         db.add(job)
         db.commit()
@@ -1556,7 +1556,7 @@ def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
     if compact:
         fields = ('account_id', 'requested_by', 'manual_batch', 'operation_key', 'total', 'processed', 'failed',
                   'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since', 'last_served_at', 'retry_at', 'detail', 'checked', 'changed', 'manual_preserved',
-                  'skipped', 'attention', 'manual_errors', 'remaining', 'retrying', 'current_reviews', 'queue_version')
+                  'skipped', 'attention', 'manual_errors', 'remaining', 'retrying', 'current_reviews', 'queue_version', 'requested_total')
         columns = [column for column in Job.__table__.columns if column.name != 'result']
         query = select(*columns, *(Job.result[key].label('r_' + key) for key in fields))
         if auth['role'] != 'owner':
