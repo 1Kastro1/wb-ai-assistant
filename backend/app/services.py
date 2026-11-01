@@ -263,13 +263,17 @@ def technical_review_condition():
 
 
 def manual_review_condition():
-    technical = func.coalesce(technical_review_condition(), False)
+    rules = Draft.quality['owner_rules']
+    awaiting = func.coalesce(or_(technical_review_condition(), rules['status'].as_string() == 'pending',
+                                rules['checked'].as_boolean() == False), False)
     # Content defects survive an outage; the outage itself is not a complaint.
     defects = func.coalesce(Draft.quality['text_issues'].as_string(), '[]') != '[]'
     violations = func.coalesce(Draft.quality['owner_rules']['violations'].as_string(), '[]') != '[]'
+    publication_attention = select(Publication.id).where(Publication.review_id == Review.id,
+        Publication.status.in_(('uncertain', 'mismatch'))).correlate(Review).exists()
     return (Review.is_answered == False) & or_((Review.rating <= 3) & ~Review.marketplace.like('%_question'), Review.manual == True,
-        Review.risk != 'NORMAL', defects, violations,
-        (~technical) & or_(Review.status == 'manual_review',
+        Review.risk != 'NORMAL', defects, violations, publication_attention,
+        (~awaiting) & or_((Review.status == 'manual_review') & (func.coalesce(Draft.quality['passed'].as_boolean(), False) == False),
             Draft.quality['passed'].as_boolean() == False,
             Draft.model.startswith('safety-fallback') & (func.coalesce(Draft.quality['repair_audit']['rules_rechecked_at'].as_string(), '') == '')))
 

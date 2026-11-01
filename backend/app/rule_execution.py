@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-4'
+VERSION = 'context-rules-2026-11-01-positive'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -34,13 +34,17 @@ def empty_positive(review):
             and not (getattr(review, 'marketplace', '') or '').endswith('_question'))
 
 
+SIMPLE_PRAISE_TEXTS = frozenset({'', 'все супер', 'все отлично', 'все хорошо', 'отлично', 'супер',
+    'спасибо', 'рекомендую', 'все понравилось', 'товар хороший', 'хороший товар', 'понравилось',
+    'отличные лампочки', 'хорошая штука', 'отличный товар', 'отличное качество', 'хорошее качество',
+    'оригинал спасибо', 'оригинал. спасибо', 'отригинал. спасибо'})
+
+
 def simple_positive(review):
     """Exact whole-message praise only; never infer sentiment by substring."""
     text = (getattr(review, 'text', '') or '').casefold().replace('ё', 'е')
     text = re.sub(r'\s+', ' ', text).strip(' .!…\n\r\t')
-    if text not in {'', 'все супер', 'все отлично', 'все хорошо', 'отлично', 'супер',
-                    'спасибо', 'рекомендую', 'все понравилось', 'товар хороший',
-                    'хороший товар', 'понравилось'}:
+    if text not in SIMPLE_PRAISE_TEXTS:
         return False
     # Reuse all existing safety/audience gates without mutating the input row.
     from types import SimpleNamespace

@@ -12,7 +12,7 @@ def row(text, **extra):
     return S(id='praise',text=text,rating=5,risk='NORMAL',manual=False,safety_critical=False,marketplace='wb',**extra)
 
 
-@pytest.mark.parametrize('text',['Всё супер!','Все отлично!!!','  Хороший товар.  ','Рекомендую','Спасибо!'])
+@pytest.mark.parametrize('text',['Всё супер!','Все отлично!!!','  Хороший товар.  ','Рекомендую','Спасибо!', 'Отличные лампочки.', 'Хорошая штука', 'Отличный товар!', 'Отригинал. Спасибо.'])
 def test_only_exact_complete_praise_is_eligible(text):
     assert execution.simple_positive(row(text))
 
@@ -21,6 +21,7 @@ def test_only_exact_complete_praise_is_eligible(text):
     'Все супер, но флакон протек','Не все отлично','Спасибо, но не подошло','Отлично?',
     'Супер? Не работает!','Отлично. Запах слабый','Всё хорошо, электролит не протек',
     'хороший товар\nупаковка плохая','Все супер VIN RD1-5300053','Отлично, можно детям?',
+    'Отличные лампочки, но быстро перегорели', 'Хорошая штука, только не работает',
 ])
 def test_extra_meaning_never_enters_the_shortcut(text):
     assert not execution.simple_positive(row(text))

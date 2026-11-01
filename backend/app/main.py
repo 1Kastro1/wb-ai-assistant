@@ -2047,13 +2047,11 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
     if view == 'recent': conditions.append(Review.created_at >= cutoff)
     if view == 'backlog': conditions.append(Review.created_at < cutoff)
     if view == 'manual':
-        from .services import manual_review_condition, technical_review_condition
+        from .services import manual_review_condition
         draft_attention = select(Draft.id).where(Draft.review_id == Review.id,
             manual_review_condition()).correlate(Review).exists()
-        technical = select(Draft.id).where(Draft.review_id == Review.id,
-            technical_review_condition()).correlate(Review).exists()
         conditions.append((Review.manual == True) | (Review.risk != 'NORMAL') |
-                          ((Review.status == 'manual_review') & ~technical) |
+                          ((Review.status == 'manual_review') & ~draft_exists) |
                           ((~Review.marketplace.like('%_question')) & (Review.rating <= 3)) | draft_attention)
     if view == 'missing': conditions.append(~draft_exists)
     if view == 'ready': conditions.extend([Review.manual == False, Review.status == 'draft_ready', select(Draft.id).where(Draft.review_id == Review.id, Draft.quality['passed'].as_boolean() == True).correlate(Review).exists()])
