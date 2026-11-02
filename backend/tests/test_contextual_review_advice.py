@@ -19,6 +19,7 @@ def test_minty_filter_is_damage_and_refusal_at_receipt():
     assert 'отказаться от его получения' in answer
     assert 'Если заказ уже получен' in answer
     assert not analyze_customer_message('Приехал не мятый, всё хорошо',5)['complaints']
+    assert 'DAMAGED_ITEM' not in analyze_customer_message('Приехала мятая коробка',2)['complaints']
 
 def test_nitto_comparison_is_not_quality_praise():
     text='Цена. Это вес,он меньше чем у оригинала,290 против 340 оригинал,клапан черного цвета на картинке Оранж.Разница в150-200р.от оригинала,не стоит того.'
@@ -37,4 +38,5 @@ def test_nitto_comparison_is_not_quality_praise():
 
 def test_positive_original_review_remains_positive():
     assert not authenticity_concern('Оригинал, отличный фильтр, не подделка!')
+    assert not authenticity_concern('Расход меньше чем у оригинала, отлично!')
 

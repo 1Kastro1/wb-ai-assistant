@@ -37,7 +37,8 @@ def weak_cleaning_result(text):
 
 def authenticity_concern(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
-    if ('оригинал' in value and re.search(r'меньше\s+чем\s+у\s+оригинал|разниц\w*[^.!?]{0,30}от\s+оригинал', value)):
+    if ('оригинал' in value and re.search(r'вес|клапан', value)
+            and re.search(r'меньше\s+чем\s+у\s+оригинал|разниц\w*[^.!?]{0,30}от\s+оригинал', value)):
         return True
     if re.search(r'(?<!\w)не\s*оригинал|контрафакт|фальсификат|пален', value): return True
     if any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'(?:жалк\w*\s+)?п[ао]родия\s+на\b', value)):
@@ -160,7 +161,6 @@ def analyze_customer_message(text, rating=None):
     if rating is not None and rating <= 3 and re.fullmatch(r'коротк\w*[.!\s]*', value):
         complaints.append('SIZE_ISSUE')
     extra = {
-        'DAMAGED_ITEM': r'(?:приехал|пришел|пришла|пришло|получил)\w*\s+(?:весь\s+|вся\s+|все\s+)?(?:помят|мят)\w*',
         'PACKAGING_ISSUE': r'(?:короб\w*|упаков\w*)\s+(?:\w+\s+){0,2}(?:помят|мят|поврежд)|(?:помят|мят)\w*\s+(?:короб|упаков)',
         'WRONG_ITEM': r'прислал\w*\s+(?:две\s+)?разн\w*\s+щетк',
         'NO_RESULT': r'слабоват|плохо чист|через день[^.!?]{0,20}мутн',
@@ -174,6 +174,10 @@ def analyze_customer_message(text, rating=None):
     for kind, pattern in extra.items():
         if re.search(r'(?<!\w)(?:' + pattern + ')', value) and kind not in complaints:
             complaints.append(kind)
+    damaged_receipt = re.search(r'(?:приехал|пришел|пришла|пришло|получил)\w*\s+(?:весь\s+|вся\s+|все\s+)?(?:помят|мят)\w*', value)
+    if (damaged_receipt and not re.search(r'короб\w*|упаков\w*', value[max(0,damaged_receipt.start()-20):damaged_receipt.end()+20])
+            and 'DAMAGED_ITEM' not in complaints):
+        complaints.append('DAMAGED_ITEM')
     if re.search(r'ломанн\w*\s+мелк|пришло в ужас\w*\s+состояни', value) and 'DAMAGED_ITEM' not in complaints:
         complaints.append('DAMAGED_ITEM')
     if re.search(r'химозн|душноват', value) and 'ODOR_COMPLAINT' not in complaints:
