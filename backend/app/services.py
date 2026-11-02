@@ -1192,6 +1192,13 @@ def propose_publish(db, review_ids):
         draft = db.scalar(select(Draft).where(Draft.review_id == rid))
         if not review or not draft or review.is_answered or review.status == 'publishing':
             raise ValueError('Для каждого выбранного отзыва нужен доступный черновик')
+        from .publication_constraints import publication_restriction
+        restriction = publication_restriction(review)
+        if restriction:
+            if len(ids) == 1:
+                raise ValueError(restriction)
+            excluded.append(rid)
+            continue
         is_question = review.marketplace.endswith('_question')
         product = db.get(Product, review.product_id)
         rules = matching_owner_rules(db, product, for_questions=is_question)
@@ -1262,6 +1269,10 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
         draft = db.scalar(select(Draft).where(Draft.id == item['draft_id']).with_for_update().execution_options(populate_existing=True))
         if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
+        from .publication_constraints import publication_restriction
+        restriction = publication_restriction(review)
+        if restriction:
+            raise ValueError(restriction)
         if scheduled_config is not None:
             from .scheduled_publication import eligibility_reason
             if review.wb_account_id != scheduled_job.result['account_id']:

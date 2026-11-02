@@ -26,7 +26,7 @@ def ready(client, monkeypatch):
             for suffix, market, rating in [('review', provider, 5), ('question', provider+'_question', 0)]:
                 rid = store + suffix
                 db.add(Review(id=rid, wb_review_id=rid, wb_account_id=store, product_id=store,
-                    marketplace=market, rating=rating, text='', status='draft_ready', risk='NORMAL'))
+                    marketplace=market, rating=rating, text='Отлично!' if market == 'ozon' else '', status='draft_ready', risk='NORMAL'))
                 db.flush()
                 text = 'Добрый день! Спасибо за высокую оценку!'
                 db.add(Draft(id=rid, review_id=rid, text=text, original=text, revision=9, quality={'passed': True}))

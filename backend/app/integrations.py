@@ -497,7 +497,13 @@ class OzonProvider:
                 raise ValueError('Ozon не вернул SKU вопроса; публикация остановлена')
             await guard.request('ozon', 'question_publish', headers=self.headers(store, token), body={'question_id': question_id, 'sku': int(sku), 'text': text})
             return
-        await guard.request('ozon', 'publish', headers=self.headers(store, token), body={'review_id': review.wb_review_id, 'text': text})
+        from .publication_constraints import publication_restriction
+        restriction = publication_restriction(review)
+        if restriction:
+            raise ValueError(restriction)
+        result = await guard.request('ozon', 'publish', headers=self.headers(store, token), body={'review_id': review.wb_review_id, 'text': text})
+        if not isinstance(result, dict) or not isinstance(result.get('comment_id'), str) or not result['comment_id'].strip():
+            raise ValueError('Ozon не подтвердил создание комментария. Нужна сверка; автоповтор исключён.')
 
     async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)

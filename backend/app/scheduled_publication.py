@@ -120,6 +120,10 @@ def eligibility_reason(db, review, draft, schedule):
     low = bool(review and not review.marketplace.endswith('_question') and 1 <= review.rating <= 3)
     if not review or not draft or review.is_answered or review.status not in (('draft_ready', 'manual_review') if low else ('draft_ready',)):
         return 'Ответ больше не готов к отправке.'
+    from .publication_constraints import publication_restriction
+    restriction = publication_restriction(review)
+    if restriction:
+        return restriction
     question = review.marketplace.endswith('_question')
     provider = review.marketplace.removesuffix('_question')
     store = db.get(StoreProfile, review.wb_account_id)

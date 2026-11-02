@@ -206,6 +206,9 @@ def eligible(db, review, draft, rules):
 
 
 def exclusion_reason(db, review, draft, rules):
+    from .publication_constraints import publication_restriction
+    if publication_restriction(review):
+        return 'not_ready'
     if review.marketplace not in ('wb', 'ozon', 'yandex') or review.is_answered:
         return 'not_ready'
     if review.marketplace == 'yandex' and len(draft.text) > 4096:
@@ -247,6 +250,9 @@ def owner_content_issues(review, product, reply):
 
 def owner_review_reason(db, review, draft, rules):
     """Human approval can replace an unavailable automated verdict, never known content errors."""
+    from .publication_constraints import publication_restriction
+    if publication_restriction(review):
+        return 'not_ready'
     if (review.marketplace not in ('wb', 'ozon', 'yandex') or review.is_answered or
             review.status not in ('draft_ready', 'manual_review')):
         return 'not_ready'
