@@ -26,13 +26,15 @@ def queue_ordering():
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
     # An already approved publication gets one ordinary slice after waiting.
     # Its next checkpoint refreshes last_served_at, so other work still runs.
-    overdue_send = (Job.kind == 'wb_publish_send') & (served < cutoff)
+    overdue_send = Job.kind.in_(('wb_publish_send', 'scheduled_publication')) & (served < cutoff)
     generation_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
     batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts')),
-        (Job.kind == 'draft_recheck') & or_(Job.result['policy_regeneration'].as_boolean() == True,
+        (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
+            Job.result['policy_regeneration'].as_boolean() == True,
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))
     direct_waiting = select(Job.id).where(Job.status == 'queued', Job.cancel_requested == False,
-        Job.kind.in_(('single_draft', 'single_question_draft')),
+        or_(Job.kind.in_(('single_draft', 'single_question_draft')),
+            Job.result['retry_draft_id'].as_string().is_not(None)),
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
     overdue_generation = batch_generation & (served < generation_cutoff) & ~direct_waiting
     interactive = case((or_(overdue_send, overdue_generation), -2), (urgent_positive, -1),
@@ -46,3 +48,4 @@ def queue_ordering():
 def other_waiting(db, job_id):
     return bool(db.scalar(select(Job.id).where(Job.id != job_id, Job.status == 'queued',
         Job.cancel_requested == False, func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).limit(1)))
+

@@ -88,7 +88,7 @@ def recover_positive_verdict(db, review, draft):
     """
     from .rule_retry import technical_check
     from .rule_execution import verified_positive_reply
-    from .services import assess_reply, trusted_product_facts, matching_owner_rules
+    from .services import assess_reply, review_verified_facts, matching_owner_rules
     from .owner_reply_policy import saved_rule_quality, attach_rule_quality
     if not review or not draft or not technical_check(draft.quality):
         return False
@@ -101,13 +101,16 @@ def recover_positive_verdict(db, review, draft):
     rules = matching_owner_rules(db, product)
     if not verified_positive_reply(draft.text, review, rules, product=product):
         return False
-    quality = assess_reply(review, product, draft.text, trusted_product_facts(db, product))
+    facts = review_verified_facts(db, review, product, rules)
+    quality = assess_reply(review, product, draft.text, facts)
     verdict = saved_rule_quality(draft.text, rules, review=review)
     if not quality['passed'] or not verdict['passed']:
         return False
     draft.quality = attach_rule_quality({**(draft.quality or {}), **quality,
                                       'text_issues': list(quality.get('issues', []))}, verdict)
     review.status = 'draft_ready'
+    from .learned_reply_templates import remember_template
+    remember_template(db, review, product, rules, facts, draft)
     db.flush()
     return True
 
@@ -292,4 +295,5 @@ def runtime(db, schedule):
             'updated_at': state.get('updated_at'), 'next_at': datetime.fromtimestamp(due, timezone.utc).isoformat()
             if connected and selected and schedule.get('publication_enabled') and not reason and not pending else None})
     return {'available': not availability_reason(db), 'availability_reason': availability_reason(db), 'blocked_reason': reason, 'stores': stores}
+
 

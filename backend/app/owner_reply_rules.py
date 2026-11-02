@@ -39,6 +39,9 @@ def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None):
     scopes = {'global', 'brand:' + product.brand, 'category:' + product.category}
     scopes.update('product:' + item.id for item in counterparts)
     scopes.update('category:' + item.category for item in counterparts if item.category)
+    # Curated groups bridge different marketplace category names. Only product
+    # metadata supplies evidence; buyer wording cannot change a rule's scope.
+    scopes.update(category_rule_scopes(product))
     scopes = {_scope_key(value) for value in scopes}
     rows = [row for row in rule_rows
             if _scope_key(row.scope) in scopes
@@ -52,6 +55,33 @@ def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None):
 def _scope_key(value):
     kind, separator, target = (value or 'global').partition(':')
     return kind.strip().casefold() + (':' + target.strip().casefold() if separator else '')
+
+
+CATEGORY_RULE_GROUPS = {
+    'Щётки стеклоочистителя': {'wipers'},
+    'Автозапчасти': {'parts'},
+    'Тормозные колодки и диски': {'brakes'},
+    'Автохимия и очистители': {'chemicals', 'cosmetics', 'household', 'cleaners'},
+    'Фильтры': {'filters'},
+    'Ремни, ролики и натяжители': {'belts'},
+    'Рулевые детали и подвеска': {'suspension'},
+    'Масла и технические жидкости': {'oils'},
+    'Антифризы': {'antifreeze'},
+    'Лампы и автомобильная электрика': {'electrical'},
+    'Ароматизаторы': {'fragrance'},
+    'Кузов, стёкла и защитные покрытия': {'body_care'},
+}
+
+
+def category_rule_scopes(product):
+    from types import SimpleNamespace
+    from .rule_execution import category_evidence
+    families = category_evidence(SimpleNamespace(text=''), product)
+    scopes = {'category:' + name for name, accepted in CATEGORY_RULE_GROUPS.items() if families & accepted}
+    if (str(getattr(product, 'brand', '') or '').strip().casefold() == 'soft99'
+            and re.search(r'\bfusso\s+12\s+months\b', str(getattr(product, 'name', '') or ''), re.I)):
+        scopes.add('category:SOFT99 Fusso 12 Months')
+    return scopes
 
 
 def rule_applies_to(kind, for_questions=False):
@@ -91,5 +121,6 @@ def apply_owner_preferences(reply, review, rules, style_only=False):
     # Import lazily: the policy also uses matching_owner_rules for previews.
     from .owner_reply_policy import apply_local_preferences
     return apply_local_preferences(reply, review, rules, style_only=style_only)
+
 
 

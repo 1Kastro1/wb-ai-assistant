@@ -40,7 +40,7 @@ async def step(job_id, session_factory=Session, limit=500):
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     from .rule_execution import positive_template, legacy_positive_template
-    from .services import assess_reply
+    from .services import assess_reply, review_verified_facts
     from .generation_control import FastPathUnavailable
     started = time.monotonic()
     with session_factory() as db:
@@ -69,6 +69,7 @@ async def step(job_id, session_factory=Session, limit=500):
                 and not review.safety_critical and not db.scalar(select(Publication.id).where(Publication.review_id == rid))):
                 product = db.get(Product, review.product_id)
                 rules = matching_owner_rules(db, product)
+                facts = review_verified_facts(db, review, product, rules)
                 template = positive_template(review, rules, product=product)
                 # Preserve current valid answers and all employee edits. Only
                 # exact audited templates may pass locally; arbitrary prose defers.
@@ -77,13 +78,13 @@ async def step(job_id, session_factory=Session, limit=500):
                 candidate = template if refresh else draft.text if protected or (draft.quality or {}).get('passed') else template
                 if candidate:
                     try:
-                        answer, verdict = await enforce_owner_rules(candidate, review, product, rules, [],
-                            lambda text: assess_reply(review, product, text, []), allow_fast_positive=True,
+                        answer, verdict = await enforce_owner_rules(candidate, review, product, rules, facts,
+                            lambda text: assess_reply(review, product, text, facts), allow_fast_positive=True,
                             check_only=True, local_only=True)
                     except FastPathUnavailable:
                         verdict = None
                     if verdict and verdict.get('passed'):
-                        base = assess_reply(review, product, answer, [])
+                        base = assess_reply(review, product, answer, facts)
                         if base['passed']:
                             old = draft.text
                             changed = old != answer
@@ -93,6 +94,8 @@ async def step(job_id, session_factory=Session, limit=500):
                             quality = {k: v for k, v in (draft.quality or {}).items() if k not in ('text_issues', 'owner_rules')}
                             draft.quality = attach_rule_quality({**quality, **base}, verdict)
                             review.status = 'draft_ready'
+                            from .learned_reply_templates import remember_template
+                            remember_template(db, review, product, rules, facts, draft)
                             verified = True
             state.update(cursor_id=did, checked=state.get('checked', 0) + 1,
                 verified=state.get('verified', 0) + int(verified), changed=state.get('changed', 0) + int(changed),
@@ -121,3 +124,4 @@ if __name__ == '__main__':
     with Session() as db:
         job = enqueue(db, args.actor, args.store, args.since, refresh_templates=args.refresh_templates)
         print(json.dumps({'id': job.id, 'status': job.status, 'total': job.result['total']}), flush=True)
+

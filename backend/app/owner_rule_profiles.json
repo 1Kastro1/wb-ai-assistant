@@ -51,7 +51,23 @@
     "local_positive": false
   },
   "15e8656f51f272ceca4846bd8db914207f1cf079b07ee2f287ff656d4c3c2689": {
-    "label": "Смысл отзыва и полезный ответ. Прочитай отзыв целиком: различай похвалу, конкретные жалобы, вопрос, предположе",
+    "label": "Смысл отзыва и полезный ответ",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "17d190c396fbbd74b589e6e0b234a801a44347ae5fead50a23cab18179eb457d": {
+    "empty_inapplicable": true,
+    "family": "body_care",
+    "label": "SOFT99 Fusso 12 Months — только защитный воск",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "1861aca6180e4e7a340968bc928b66b50e8a6ffcbd41d3612186e305ada12b10": {
+    "label": "Оба допустимых приветствия без выдуманного имени",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -60,7 +76,7 @@
   "1880bf76030fbc82369e3a30a9cd0c6793c4b4f8bb908a1517913057bfee864c": {
     "empty_inapplicable": true,
     "family": "filters",
-    "label": "NITTO: подтверждённая оригинальность и сравнение",
+    "label": "NITTO: оригинальность",
     "local_positive": true
   },
   "1a66b9ca617c835bc691d4f7e95e56b5e59ba42bac483b7a7db78a86185e66a3": {
@@ -106,7 +122,7 @@
   "329e0dd6ff04dba7f720f7ac0432b4149fae6db1a945bccaf73628072ee3dd44": {
     "empty_inapplicable": true,
     "family": "fragrance",
-    "label": "Ароматизаторы: отвечай на конкретное замечание, различая слабый аромат, быстрое исчезновение, неприятную компо",
+    "label": "Ароматизаторы: отвечай на конкретное замечание, различая слабый аромат, быстрое исчезновение, неприя",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -125,7 +141,7 @@
   "3afb9b74429468f2ae87ac28f18077850e71357eee3c16da50297f82ec492a30": {
     "empty_inapplicable": true,
     "family": "fragrance",
-    "label": "EIKOSHA: формат, интенсивность и срок службы",
+    "label": "EIKOSHA",
     "local_cases": [
       "eikosha_scent"
     ],
@@ -181,7 +197,7 @@
   "4bc6f444f7d680c915c393b35cea9fae4cda4698fe1a89444061bd48eebc24a7": {
     "audit": "Уточнены обращения без фото и без направления через полученный заказ; остальные ограничения сохранены.",
     "empty_inapplicable": true,
-    "label": "Kangaroo: чтение даты на упаковке. Если отзыв касается даты изготовления ил",
+    "label": "Kangaroo: чтение даты на упаковке",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -222,6 +238,13 @@
     "label": "Рекомендации для вопросов — Средства для кузова, стёкол и защитные покрытия",
     "local_positive": false
   },
+  "56d4159726c42dcd8656199bd86a9574d804add076503aabc99197b9d8064c1e": {
+    "label": "Стиль и формат ответа на отзыв",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "57ad172815f2ce2985476c23fefb5a0d09390494a790850ae22c24db720fef0b": {
     "empty_inapplicable": true,
     "family": "oils",
@@ -248,7 +271,7 @@
     "local_positive": true
   },
   "61d8698fb39ca921dc8b6dc0638f114d8e74bd6255976bf79d31d3227193d101": {
-    "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.». Подпи",
+    "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.»",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -335,9 +358,31 @@
     "label": "Стиль и полнота ответа на вопрос",
     "local_positive": false
   },
+  "9ac0a219410a680f0872add7153555e28e9275e1d530d5558365566fcdcbb573": {
+    "empty_inapplicable": true,
+    "families": [
+      "chemicals",
+      "cosmetics",
+      "household"
+    ],
+    "label": "Автохимия и очистители салона, пластика и ткани: применяй только к соответствующей жалобе",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "9ddae636ece3b30f64db32f88a6c7db7c18eab4287fa2834f914b86fbcc5dda9": {
     "empty_inapplicable": true,
     "label": "Рекомендации для отзывов — Масляные, воздушные, салонные и топливные фильтры. Пр",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "9f4023fa762c88a45261547085339ca93fa43099c97e3dc7920c62f70d0b4362": {
+    "empty_inapplicable": true,
+    "family": "fragrance",
+    "label": "Ароматизаторы: отвечай на конкретное замечание, различая слабый аромат, быстрое исчезновение, неприя",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -354,6 +399,13 @@
   },
   "ab5b7aef5355a1702713d742d27e056fa2f0f430ad32605e9643c1a12cfc9890": {
     "label": "Стиль ответа на отзыв. Пиши по-русски, уважительно на «Вы», спокойно, профессион",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "b1420b81f98cfb0e9a6c0abe496c12c35567697e7837de8076e3102324b4f23a": {
+    "label": "Стиль и формат ответа на отзыв",
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -516,6 +568,15 @@
     ],
     "local_positive": true
   },
+  "de20114002f0e46f380f6522cf3dd4c5d033a538a9420d4a5682d88349882a60": {
+    "empty_inapplicable": true,
+    "family": "body_care",
+    "label": "Рекомендации для отзывов — Средства для кузова, стёкол и защитные покрытия",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "dec42ecea2244a08214ecfeaa977c8ae67b0ead76b73c4227df41441759a31d8": {
     "empty_inapplicable": true,
     "family": "parts",
@@ -625,12 +686,5 @@
       "replaced_sprayer"
     ],
     "local_positive": true
-  },
-  "1861aca6180e4e7a340968bc928b66b50e8a6ffcbd41d3612186e305ada12b10": {
-    "label": "Оба допустимых приветствия без выдуманного имени",
-    "local_positive": true,
-    "local_cases": [
-      "replaced_sprayer"
-    ]
   }
 }
