@@ -618,5 +618,12 @@
     ],
     "local_positive": true,
     "workflow": true
+  },
+  "fe6d3a34d0e6fe8611fa33ec5beb559ffc5a2652e20ad39d3fb54e9d488491d9": {
+    "label": "Стиль ответа на отзыв: тёплый, конкретный, без выдуманных подробностей",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
   }
 }
