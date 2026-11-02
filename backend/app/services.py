@@ -1125,7 +1125,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if technical_check(quality):
         db.flush()
         enqueue(db, draft, review)
-    remember_template(db, review, product, memories, verified_facts, draft)
+    if not requested_instruction.strip():
+        remember_template(db, review, product, memories, verified_facts, draft)
     record_outcome(db, review, draft)
     db.commit()
     return public(draft)

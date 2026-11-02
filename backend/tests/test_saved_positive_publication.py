@@ -146,3 +146,24 @@ def test_template_library_requires_current_identical_context_and_success(client,
         d.quality=timed_out()
         assert not remember_template(db,r,p,RULES,[],d)
 
+
+def test_generation_uses_successful_library_without_model_on_next_equivalent_review(client,ready,monkeypatch):
+    from app import services
+    from app.integrations import ollama
+    def no_model(*args,**kwargs):
+        raise AssertionError('typical praise and learned reply must not invoke model')
+    monkeypatch.setattr(ollama,'structured',no_model)
+    monkeypatch.setattr(ollama,'reply_variants',no_model)
+    with Session() as db:
+        install_rules(db)
+        for rid in ('learn-first','learn-second'):
+            db.add(Review(id=rid,wb_review_id=rid,wb_account_id='owner',product_id='owner',marketplace='wb',
+                          text=BUYER,rating=5,risk='NORMAL',manual=False))
+        db.commit()
+        first=asyncio.run(services.generate_draft(db,'learn-first'))
+        second=asyncio.run(services.generate_draft(db,'learn-second'))
+        assert first['quality']['passed'] and second['quality']['passed']
+        assert second['text']==first['text']
+        assert second['model']=='verified-template-1.0'
+        assert second['quality']['owner_rules']['verification_method']=='learned_exact_context'
+
