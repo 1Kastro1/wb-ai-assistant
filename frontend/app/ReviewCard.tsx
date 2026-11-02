@@ -28,19 +28,21 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   function register(id:string,flush:(()=>Promise<any>)|null){flusher.current=flush;return onRegister?.(id,flush)}
   async function preparePublication(){try{await flusher.current?.();await publish?.()}catch{/* DraftEditor or the parent shows the saving/publication error. */}}
   const q=r.draft?.quality||{},hasText=Boolean((r.text||'').trim());
+  const remotePending=r.marketplace==='ozon'&&r.status==='answer_pending';
+  const remoteUnknown=r.marketplace==='ozon'&&(r.status==='answer_unknown'||(r.is_answered&&!String(r.existing_answer||'').trim()));
   const needsCheck=r.rating<=3||r.manual||r.risk!=='NORMAL'||!q.passed||(String(r.draft?.model||'').startsWith('safety-fallback')&&!q.repair_audit?.rules_rechecked_at);
   const technical=Boolean(q.owner_rules?.technical_error||q.owner_rules?.status==='error')&&!q.owner_rules?.passed;
   const personal=r.rating<=3||r.manual||r.risk!=='NORMAL';
-  const status=r.is_answered?'Отправлено':generating?'Готовится':generationError?'Нужно повторить':!r.draft?'Нужен ответ':technical&&!personal?'Сбой проверки правил':needsCheck?'Нужна проверка':'Готов к отправке';
-  const reason=r.is_answered?'Ответ уже опубликован':generating?'Текущий текст сохраняется до завершения':generationError||(!r.draft?'Подготовьте черновик':r.rating<=3?'Низкая оценка: проверьте ответ перед отправкой':r.manual?'Опасный симптом: нужна личная проверка':q.issues?.join('; ')||'Перед отправкой проверьте текст');
+  const status=r.is_answered?(remotePending?'На модерации Ozon':remoteUnknown?'Статус ответа уточняется':'Отправлено'):generating?'Готовится':generationError?'Нужно повторить':r.status==='answer_rejected'?'Ответ отклонён Ozon':!r.draft?'Нужен ответ':technical&&!personal?'Сбой проверки правил':needsCheck?'Нужна проверка':'Готов к отправке';
+  const reason=r.is_answered?(remotePending?'Ozon ещё не подтвердил публикацию ответа':remoteUnknown?'Нужно получить комментарий продавца из Ozon; повторная отправка не запускается':'Ответ уже опубликован'):generating?'Текущий текст сохраняется до завершения':generationError||(!r.draft?'Подготовьте черновик':r.rating<=3?'Низкая оценка: проверьте ответ перед отправкой':r.manual?'Опасный симптом: нужна личная проверка':q.issues?.join('; ')||'Перед отправкой проверьте текст');
   const blocked=busy||generating||!canManage||!assistantEnabled||dirty;
   const retryLabel=/ещё готовится|ожидание|задание сохранено/.test(generationError)?'Продолжить ожидание':'Повторить попытку';
   return <article className={'card review compact-review '+(r.rating<=3?'negative':'positive')}>
     <div className="review-head"><label className="check"><input type="checkbox" checked={checked} disabled={!canManage||r.is_answered} onChange={toggle}/><span className="review-product"><ProductThumbnail product={r.product}/><span className="review-product-copy"><b>{r.product.name}</b><span className="review-meta"><span>{r.product.brand} · {r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркет':'Wildberries'} {r.product_id}</span><span>{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>{!hasText&&<span>Оценка без текста</span>}</span></span></span></label><div className="review-head-state"><span className="stars" aria-label={r.rating+' из 5'}>{'★'.repeat(r.rating)}<span>{'★'.repeat(5-r.rating)}</span></span><span role="status" title={reason} className={'pill '+(generating?'working':generationError||needsCheck?'amber':'green')}>{status}</span></div></div>
-    <details className="review-expand" open={expanded||generating} onToggle={e=>{if(e.currentTarget.open)setOpened(true);if(!generating)setExpanded(e.currentTarget.open)}}><summary><span className="review-preview">{hasText?r.text:r.is_answered?'Ответ отправлен':'Покупатель поставил оценку без текста'}</span><span className="review-open-label">{expanded||generating?'Свернуть':'Открыть ответ'}</span></summary>
+    <details className="review-expand" open={expanded||generating} onToggle={e=>{if(e.currentTarget.open)setOpened(true);if(!generating)setExpanded(e.currentTarget.open)}}><summary><span className="review-preview">{hasText?r.text:r.is_answered?status:'Покупатель поставил оценку без текста'}</span><span className="review-open-label">{expanded||generating?'Свернуть':'Открыть ответ'}</span></summary>
     {(opened||expanded||generating||Boolean(generationError))&&<div className={'review-content '+(hasText?'has-text':'rating-only')}>
       {hasText&&<div className="customer-review"><small>ОТЗЫВ ПОКУПАТЕЛЯ</small><p className="review-text">{r.text}</p></div>}
-      {r.is_answered?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<div className="draft">
+      {r.is_answered?<div>{(remotePending||remoteUnknown)&&<p className="muted" role="status">{reason}</p>}{String(r.existing_answer||'').trim()?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<p className="generation-notice" role="status">Текст ответа ещё не получен из Ozon. Сверка загрузит комментарий продавца и уточнит статус отзыва. Сохранённый черновик остаётся в приложении.</p>}</div>:<div className="draft">
         {r.draft?<DraftEditor draft={r.draft} disabled={generating||!canManage} storageKey={storageKey||'draft-edit:'+r.draft.id} onSave={save} onDirty={value=>{setDirty(value);onPending?.(value)}} onRegister={register}/>:<p className="muted">Подготовьте ответ на этот отзыв.</p>}
         <OwnerRuleStatus quality={q}/>{r.draft&&<RuleDetails draftId={r.draft.id} revision={r.draft.revision}/>}
         {operationError&&<div className="save-error" role="alert">{operationError}</div>}
@@ -55,4 +57,5 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
     </div>}</details>
   </article>;
 }
+
 
