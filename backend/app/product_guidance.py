@@ -62,13 +62,17 @@ def positive_detail(text):
 def positive_review_reply(review, product, revision=0):
     from .reply_policy import analyze_customer_message
     analysis = analyze_customer_message(review.text, review.rating)
-    if not review.text.strip() or review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed'):
+    if not review.text.strip() or review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed') or analysis['is_question']:
         return None
     thanks = ['Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.'][int(revision) % 3]
     detail = positive_detail(review.text)
     if re.search(r'запаха нет|нет запаха|нейтральн', review.text.lower()):
         detail = 'Вы отметили нейтральный запах товара.'
-    return 'Здравствуйте! ' + thanks + ' ' + detail
+    # A short wish adds warmth without inventing an effect or promising a result.
+    closing = ('Желаем приятного использования!', 'Пусть покупка и дальше радует Вас!')[int(revision) % 2]
+    if 'аромат Вам понравился' in detail:
+        closing = 'Пусть аромат и дальше радует Вас!'
+    return 'Здравствуйте! ' + thanks + ' ' + detail + ' ' + closing
 
 
 def battery_voltage_answer(question, product):
@@ -315,4 +319,5 @@ def product_usage_reply(review, product, facts, revision=0):
         if instruction:
             return intro + ' ' + ('Сожалеем, что Вы не получили ожидаемого результата. ' if complaints else '') + 'По инструкции к этому товару: ' + instruction
     return None
+
 

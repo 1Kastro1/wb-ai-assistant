@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2026-11-02-templates'
+VERSION = 'context-rules-2026-11-02-warm'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -37,7 +37,8 @@ def empty_positive(review):
 SIMPLE_PRAISE_TEXTS = frozenset({'', 'все супер', 'все отлично', 'все хорошо', 'отлично', 'супер',
     'спасибо', 'рекомендую', 'все понравилось', 'товар хороший', 'хороший товар', 'понравилось',
     'отличные лампочки', 'хорошая штука', 'отличный товар', 'отличное качество', 'хорошее качество',
-    'оригинал спасибо', 'оригинал. спасибо', 'отригинал. спасибо'})
+    'оригинал спасибо', 'оригинал. спасибо', 'отригинал. спасибо',
+    'приятный запах', 'приятный аромат', 'аромат приятный', 'запах приятный'})
 
 
 def simple_positive(review):
@@ -119,9 +120,15 @@ POSITIVE_BODIES = (
 )
 
 SHORT_PRAISE_BODIES = (
-    'Спасибо за высокую оценку и добрые слова!',
-    'Благодарим Вас за положительный отзыв!',
-    'Спасибо за Вашу оценку! Рады, что покупка оставила хорошее впечатление.',
+    'Спасибо за высокую оценку и добрые слова! Желаем приятного использования покупки.',
+    'Благодарим Вас за положительный отзыв! Пусть покупка и дальше радует Вас.',
+    'Спасибо за Вашу оценку! Рады, что покупка оставила хорошее впечатление. Желаем Вам хорошего дня!',
+)
+
+SCENT_PRAISE_BODIES = (
+    'Спасибо за отзыв! Рады, что аромат Вам понравился. Пусть он и дальше радует Вас!',
+    'Благодарим за отзыв! Приятно, что Вы отметили аромат. Желаем приятного использования!',
+    'Спасибо, что поделились впечатлением! Рады, что запах Вам понравился. Желаем Вам хорошего дня!',
 )
 
 # Exact old built-in wording only. Used by the explicit, bounded refresh job;
@@ -151,6 +158,9 @@ def positive_body(review, revision=0):
     identity = str(getattr(review, 'id', '') or getattr(review, 'wb_review_id', ''))
     seed = int(hashlib.sha256(identity.encode()).hexdigest()[:8], 16)
     bodies = SHORT_PRAISE_BODIES if (getattr(review, 'text', '') or '').strip() else POSITIVE_BODIES
+    text = re.sub(r'\s+', ' ', (getattr(review, 'text', '') or '').casefold().replace('ё', 'е')).strip(' .!…\n\r\t')
+    if text in {'приятный запах', 'приятный аромат', 'аромат приятный', 'запах приятный'}:
+        bodies = SCENT_PRAISE_BODIES
     return bodies[(seed + max(0, int(revision))) % len(bodies)]
 
 
@@ -258,3 +268,4 @@ def remember_verdict(key, answer, result):
         _verdicts.move_to_end(key)
         while len(_verdicts) > CACHE_LIMIT:
             _verdicts.popitem(last=False)
+
