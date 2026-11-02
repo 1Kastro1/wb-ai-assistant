@@ -479,31 +479,8 @@ class OzonProvider:
         return True
 
     async def sync_reviews(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
-        store, token = store_credentials(db, store_id)
-        total, last_id = int((resume or {}).get('processed', 0)), str((resume or {}).get('last_id', ''))
-        seen = {last_id} if last_id else set()
-        for _ in range(10000):
-            if cancelled and cancelled(): raise asyncio.CancelledError()
-            body = {'limit': 100, 'sort_dir': 'DESC'}
-            if last_id: body['last_id'] = last_id
-            result = await guard.request('ozon', 'reviews', headers=self.headers(store, token), body=body)
-            items = result.get('reviews') or result.get('result', {}).get('reviews') or []
-            for item in items:
-                content = '\n'.join(str(item.get(k) or '') for k in ('text','positive','negative')).strip()
-                comments = item.get('comments_amount', 0)
-                upsert_market_review(db, store, item.get('id'), item.get('sku') or item.get('product_id') or 'unknown', item.get('product_name') or item.get('sku_name'), '', item.get('rating'), content, item.get('published_at') or item.get('created_at'), bool(comments))
-                total += 1
-            db.commit()
-            if between_pages: await between_pages()
-            if progress: progress(min(95, 5 + total // 100))
-            payload = result.get('result') or result
-            if not items or payload.get('has_next') is False or (len(items) < 100 and not payload.get('has_next')): return total
-            last_id = str(payload.get('last_id') or items[-1].get('id') or '')
-            if not last_id or last_id in seen:
-                raise ValueError('Ozon повторил страницу отзывов; прогресс сохранён')
-            seen.add(last_id)
-            if checkpoint: checkpoint({'last_id': last_id, 'processed': total})
-        raise ValueError('Достигнут лимит страниц отзывов Ozon; продолжите с сохранённого прогресса')
+        from .ozon_reviews import sync_reviews
+        return await sync_reviews(self, db, store_id, progress, cancelled, resume, checkpoint, between_pages)
 
     async def publish(self, db, review, text):
         store, token = store_credentials(db, review.wb_account_id)

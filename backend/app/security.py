@@ -86,6 +86,7 @@ class EgressGuard:
         ('ozon', 'product_attributes'): ('POST', 'https://api-seller.ozon.ru/v4/product/info/attributes'),
         ('ozon', 'category_attributes'): ('POST', 'https://api-seller.ozon.ru/v1/description-category/attribute'),
         ('ozon', 'review'): ('POST', 'https://api-seller.ozon.ru/v1/review/info'),
+        ('ozon', 'review_comments'): ('POST', 'https://api-seller.ozon.ru/v1/review/comment/list'),
         ('ozon', 'publish'): ('POST', 'https://api-seller.ozon.ru/v1/review/comment/create'),
         ('ozon', 'questions'): ('POST', 'https://api-seller.ozon.ru/v1/question/list'),
         ('ozon', 'question_info'): ('POST', 'https://api-seller.ozon.ru/v1/question/info'),
