@@ -90,3 +90,59 @@ def test_schedule_keeps_unverified_or_unauthorized_drafts_unpublished(client,rea
     for jid in jobs(): asyncio.run(automatic.run_step(jid))
     assert 'ownerreview' not in {row[1] for row in ready}
 
+
+FLEXIBLE = 'Приветствие покупателя. Допустимые приветствия: «Здравствуйте.» или «Добрый день!». Оба варианта равнозначны: не считай один из них ошибкой. Если имя покупателя скрыто или отсутствует, не выдумывай имя и не добавляй обращение по имени. Имя используй только из подтверждённых данных.'
+
+@pytest.mark.parametrize('opening',['Здравствуйте.','Добрый день!'])
+def test_both_greetings_are_valid_without_rewriting(opening):
+    from app.owner_reply_policy import apply_local_preferences, apply_signature, local_issues
+    r=NS(id='greet',text=BUYER,rating=5,risk='NORMAL',manual=False,safety_critical=False,marketplace='wb')
+    rules=[WARM_RULE,FLEXIBLE,SIGNATURE]
+    answer=ANSWER.replace('Здравствуйте.',opening,1)
+    assert not local_issues(answer,rules,r)
+    assert apply_signature(apply_local_preferences(answer,r,rules)[0],rules)==answer
+    assert verified_positive_reply(answer,r,rules)
+
+
+@pytest.mark.parametrize('store',['owner','oz','ya'])
+def test_all_low_rating_scope_sends_only_after_current_successful_check(client,ready,store):
+    from app.owner_reply_rules import matching_owner_rules
+    from app.owner_reply_policy import fingerprint
+    with Session() as db:
+        install_rules(db)
+        r,d=db.get(Review,store+'review'),db.get(Draft,store+'review')
+        r.rating,r.text,r.status=2,'Доставка задержалась на неделю.','manual_review'
+        d.text=d.original='Здравствуйте. Спасибо за отзыв. Сожалеем, что доставка задержалась на неделю. Если вопрос по доставке ещё актуален, пожалуйста, обратитесь в официальную поддержку маркетплейса.\nС уважением ГК Юником.'
+        from app.db import Product
+        rules=matching_owner_rules(db,db.get(Product,r.product_id))
+        d.quality={'passed':True,'text_issues':[],'owner_rules':{'fingerprint':fingerprint(rules),'checked':True,'passed':True,'issues':[]}}
+        db.commit()
+    enable(client,publication_questions=False,publication_low_ratings=True,publication_all_low_ratings=True)
+    for _ in range(3):
+        for jid in jobs(): asyncio.run(automatic.run_step(jid))
+    assert store+'review' in {row[1] for row in ready}
+
+
+def test_template_library_requires_current_identical_context_and_success(client,ready):
+    from app.learned_reply_templates import remember_template,load_template
+    from app.db import Product
+    from app.owner_reply_policy import fingerprint
+    with Session() as db:
+        r,d=db.get(Review,'ownerreview'),db.get(Draft,'ownerreview')
+        p=db.get(Product,r.product_id)
+        r.text=BUYER; d.text=ANSWER
+        d.quality={'passed':True,'owner_rules':{'checked':True,'passed':True,'fingerprint':fingerprint(RULES),'issues':[]}}
+        assert remember_template(db,r,p,RULES,[],d)
+        db.commit()
+        result=load_template(db,r,p,RULES,[],lambda v:{'passed':True})
+        assert result and result[0]==ANSWER and result[1]['verification_method']=='learned_exact_context'
+        r.text=' '.join(BUYER.split())
+        assert load_template(db,r,p,RULES,[],lambda v:{'passed':True})
+        assert load_template(db,r,p,RULES,[{'text':'new fact'}],lambda v:{'passed':True}) is None
+        assert load_template(db,r,p,[*RULES,'Новое правило'],[],lambda v:{'passed':True}) is None
+        assert load_template(db,r,p,RULES,[],lambda v:{'passed':False}) is None
+        r.text+=' Но не пахнет.'
+        assert load_template(db,r,p,RULES,[],lambda v:{'passed':True}) is None
+        d.quality=timed_out()
+        assert not remember_template(db,r,p,RULES,[],d)
+

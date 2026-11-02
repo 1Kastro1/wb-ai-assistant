@@ -625,5 +625,12 @@
       "replaced_sprayer"
     ],
     "local_positive": true
+  },
+  "1861aca6180e4e7a340968bc928b66b50e8a6ffcbd41d3612186e305ada12b10": {
+    "label": "Оба допустимых приветствия без выдуманного имени",
+    "local_positive": true,
+    "local_cases": [
+      "replaced_sprayer"
+    ]
   }
 }

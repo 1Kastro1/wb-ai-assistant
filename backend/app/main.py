@@ -772,6 +772,7 @@ class StoreConnection(Payload):
 
 class ScheduleInput(Payload):
     publication_low_ratings: bool | None = None
+    publication_all_low_ratings: bool | None = None
     publication_markets: dict[str, bool] | None = None
     publication_enabled: bool | None = None
     publication_hours: int | None = Field(default=None, ge=1, le=168)

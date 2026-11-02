@@ -8,7 +8,7 @@ from .db import Session, Setting, Job, User, StoreProfile, Account, Review, Draf
 KIND = 'scheduled_publication'
 PROVIDERS = ('wb', 'ozon', 'yandex')
 BATCH_SIZE = 200
-FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions', 'publication_low_ratings')
+FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions', 'publication_low_ratings', 'publication_all_low_ratings')
 
 
 def market_enabled(schedule, provider):
@@ -126,7 +126,7 @@ def eligibility_reason(db, review, draft, schedule):
         not question and (not schedule.get('publication_low_ratings', False) if low else not schedule.get('publication_reviews', True)) or
         question and not schedule.get('publication_questions', True)):
         return 'Нужна личная проверка или этот тип ответов выключен.'
-    if low:
+    if low and not schedule.get('publication_all_low_ratings', False):
         from .low_rating_templates import approved_template
         if not approved_template(db, review, draft):
             return 'Для низкой оценки нет подходящего проверенного шаблона. Нужна личная проверка.'

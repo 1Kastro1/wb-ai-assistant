@@ -446,7 +446,7 @@ def assess_reply(review, product, reply, verified_facts=None):
     analysis = analyze_customer_message(review.text, review.rating)
     acknowledged = bool(analysis['complaints']) and not missing_complaints(analysis, reply)
     simple_praise = len(review.text.split()) <= 5 and analysis['sentiment'] == 'positive' and not analysis['complaints']
-    if overlap or len(review_words) <= 1 or acknowledged or simple_praise or _addresses_review_topic(review.text, reply) or (specific_review_case(review, product) or {}).get('answer') == reply:
+    if overlap or len(review_words) <= 1 or acknowledged or simple_praise or simple_positive(review) or _addresses_review_topic(review.text, reply) or (specific_review_case(review, product) or {}).get('answer') == reply:
         score += 12
         breakdown['relevance']['score'] = 12
     else:
@@ -918,8 +918,11 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     context_memories, _ = select_rules(memories, review, product)
     verified_facts += owner_business_facts(product, memories)
     generation_revision = initial_draft.revision if initial_draft else 0
+    from .learned_reply_templates import load_template, remember_template
+    learned = load_template(db, review, product, memories, verified_facts,
+        lambda value: assess_reply(review, product, value, verified_facts)) if not requested_instruction.strip() and not initial_draft else None
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
-    if fast_only and not local_positive:
+    if fast_only and not local_positive and not learned:
         raise FastPathUnavailable('Нужна дополнительная проверка правил')
     rule_candidates = []
     for offset in range(3):
@@ -956,6 +959,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if local_positive:
         reply, forced_model = local_positive, 'positive-local-2.0'
         selection_note = 'Краткая благодарность без выдуманных свойств; правила проверены программно'
+    if learned:
+        reply, forced_model = learned[0], 'verified-template-1.0'
+        selection_note = 'Использован успешно проверенный ответ для совпавшего контекста и текущих правил'
     web_search_failed = False
     model_outage = False
     if reply and 'короче' in instruction.lower():
@@ -1074,12 +1080,15 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         model = 'safety-fallback-1.2'
     if web_search_failed:
         model += ' · без интернет-источников'
-    reply, rule_quality = await enforce_owner_rules(
-        reply, review, product, memories, verified_facts,
-        lambda value: assess_reply(review, product, value, verified_facts),
-        protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
-        local_only=fast_only, defer_semantic=model_outage,
-        check_seconds=8 if (isinstance(recovery, dict) and recovery.get('policy_regeneration')) or model.startswith('safety-rules') and review_intent(review.text) in structured_intents else None)
+    if learned and reply == learned[0]:
+        rule_quality = learned[1]
+    else:
+        reply, rule_quality = await enforce_owner_rules(
+            reply, review, product, memories, verified_facts,
+            lambda value: assess_reply(review, product, value, verified_facts),
+            protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
+            local_only=fast_only, defer_semantic=model_outage,
+            check_seconds=8 if (isinstance(recovery, dict) and recovery.get('policy_regeneration')) or model.startswith('safety-rules') and review_intent(review.text) in structured_intents else None)
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
@@ -1116,6 +1125,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if technical_check(quality):
         db.flush()
         enqueue(db, draft, review)
+    remember_template(db, review, product, memories, verified_facts, draft)
     record_outcome(db, review, draft)
     db.commit()
     return public(draft)

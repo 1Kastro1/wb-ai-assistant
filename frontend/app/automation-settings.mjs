@@ -10,6 +10,7 @@ export function scheduleValues(schedule={}){
   publication_reviews:schedule.publication_reviews??true,
   publication_questions:schedule.publication_questions??true,
   publication_low_ratings:schedule.publication_low_ratings??false,
+  publication_all_low_ratings:schedule.publication_all_low_ratings??false,
   publication_markets:Object.fromEntries(['wb','ozon','yandex'].map(provider=>[provider,schedule.publication_markets?.[provider]??true])),
   reviews_hours:schedule.reviews_hours??schedule.sync_hours??3,
   questions_hours:schedule.questions_hours??schedule.sync_hours??3,
@@ -24,7 +25,7 @@ export function schedulePayload(values){
   if(!Number.isInteger(value)||value<1||value>168)throw new Error('Укажите целое число часов от 1 до 168.');
   payload[key]=value;
  }
- for(const key of ['reviews_sync_enabled','questions_sync_enabled','drafts_enabled','question_drafts_enabled','publication_enabled','publication_reviews','publication_questions','publication_low_ratings'])payload[key]=Boolean(values[key]);
+ for(const key of ['reviews_sync_enabled','questions_sync_enabled','drafts_enabled','question_drafts_enabled','publication_enabled','publication_reviews','publication_questions','publication_low_ratings','publication_all_low_ratings'])payload[key]=Boolean(values[key]);
  payload.publication_markets=Object.fromEntries(['wb','ozon','yandex'].map(provider=>[provider,Boolean(values.publication_markets?.[provider]??true)]));
  if(payload.publication_enabled&&!payload.publication_reviews&&!payload.publication_questions&&!payload.publication_low_ratings)throw new Error('Выберите ответы на отзывы или вопросы для автоматической выгрузки.');
  return payload;

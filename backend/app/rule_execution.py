@@ -53,6 +53,8 @@ def praise_text(review):
 def simple_positive(review):
     """Exact whole-message praise only; never infer sentiment by substring."""
     text = praise_text(review)
+    if not text and (getattr(review, 'text', '') or '').strip():
+        return False
     if text not in SIMPLE_PRAISE_TEXTS:
         return False
     # Reuse all existing safety/audience gates without mutating the input row.
@@ -209,6 +211,12 @@ def verified_positive_reply(reply, review, rules, *, product=None):
         body = 'Спасибо за Ваш отзыв. Рады, что покупка Вам понравилась. Желаем приятного использования!'
         value, _ = apply_local_preferences('Добрый день! ' + body, review, rules)
         candidates.add(apply_signature(value, rules))
+    from .owner_reply_policy import context_constraints
+    greetings = context_constraints(rules, review)['greetings']
+    for candidate in list(candidates):
+        for original in greetings:
+            if candidate and candidate.startswith(original):
+                candidates.update(greeting + candidate[len(original):] for greeting in greetings)
     try:
         return reply in candidates and validate_reply(reply) == reply and not local_issues(reply, rules, review)
     except ValueError:
