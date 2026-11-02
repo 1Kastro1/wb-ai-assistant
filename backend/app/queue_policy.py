@@ -1,7 +1,7 @@
 """Cooperative, durable scheduling. Never discard a job to let another run."""
 import time
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, or_
 from .db import Job
 
 
@@ -27,7 +27,11 @@ def queue_ordering():
     # An already approved publication gets one ordinary slice after waiting.
     # Its next checkpoint refreshes last_served_at, so other work still runs.
     overdue_send = (Job.kind == 'wb_publish_send') & (served < cutoff)
-    interactive = case((overdue_send, -2), (urgent_positive, -1),
+    generation_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts')),
+        (Job.kind == 'draft_recheck') & (Job.result['policy_regeneration'].as_boolean() == True))
+    overdue_generation = batch_generation & (served < generation_cutoff)
+    interactive = case((or_(overdue_send, overdue_generation), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (Job.result['retry_draft_id'].as_string().is_not(None), 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)
