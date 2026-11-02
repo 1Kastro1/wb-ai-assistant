@@ -10,7 +10,7 @@ from time import monotonic
 from .plain_text import plain_text
 from .safety import mask_vin, validate_reply
 from .reply_policy import has_redundant_clarification, remove_redundant_clarification, analyze_customer_message, missing_complaints, COMPLAINT_LABELS
-from .rule_execution import select_rules, positive_template, audited_case_template, verification_key, cached_verdict, remember_verdict
+from .rule_execution import select_rules, positive_template, audited_case_template, verified_positive_reply, verification_key, cached_verdict, remember_verdict
 
 
 QUOTED = r'[«“"\u2018\u2019]([^»”"\u2018\u2019\n]{1,200})[»”"\u2018\u2019]'
@@ -245,6 +245,11 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             result.update(verification_method='local_review_case', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
             return adjusted, result
+    if check_only and not instruction.strip() and not protected and not result['issues']:
+        if verified_positive_reply(adjusted, review, rules, product=product) and assess(adjusted)['passed']:
+            result.update(verification_method='local_saved_positive', semantic_groups=0, verified_groups=0,
+                          verification_seconds=round(monotonic() - check_started, 4))
+            return adjusted, result
     # Only the exact no-claims templates and audited whole policies qualify.
     # Unknown/edited semantic rules must still reach the model, even on five stars.
     if allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
@@ -391,6 +396,10 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=Non
     issues = local_issues(reply, rules, review)
     violations = list(issues)
     current = fingerprint(rules)
+    if review is not None and not issues and verified_positive_reply(reply, review, rules):
+        return {'matched': len(rules), 'fingerprint': current, 'checked': True, 'passed': True,
+                'issues': [], 'violations': [], 'status': 'verified',
+                'verification_method': 'local_saved_positive', 'verification_seconds': 0}
     if rules and (changed or previous.get('fingerprint') != current) and constraints(rules)['semantic']:
         issues.append('Ответ ожидает проверки по текущим правилам магазина.')
         previous = {key: value for key, value in previous.items() if key not in ('technical_error', 'reason', 'verification_seconds', 'verification_method', 'status')}
@@ -399,4 +408,5 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=Non
     return {**previous, 'matched': len(rules), 'fingerprint': current,
             'checked': not issues, 'passed': not issues, 'issues': list(dict.fromkeys(issues)),
             'violations': list(dict.fromkeys(violations + ([] if changed else previous.get('violations', []))))}
+
 

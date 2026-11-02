@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2026-11-02-warm'
+VERSION = 'context-rules-2026-11-02-saved-positive'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -37,14 +37,22 @@ def empty_positive(review):
 SIMPLE_PRAISE_TEXTS = frozenset({'', 'все супер', 'все отлично', 'все хорошо', 'отлично', 'супер',
     'спасибо', 'рекомендую', 'все понравилось', 'товар хороший', 'хороший товар', 'понравилось',
     'отличные лампочки', 'хорошая штука', 'отличный товар', 'отличное качество', 'хорошее качество',
-    'оригинал спасибо', 'оригинал. спасибо', 'отригинал. спасибо',
-    'приятный запах', 'приятный аромат', 'аромат приятный', 'запах приятный'})
+    'оригинал спасибо', 'оригинал. спасибо', 'отригинал. спасибо', 'отригинал спасибо',
+    'приятный запах', 'приятный аромат', 'аромат приятный', 'запах приятный',
+    'запах пробивается как оригинал'})
+
+
+def praise_text(review):
+    text = (getattr(review, 'text', '') or '').casefold().replace('ё', 'е')
+    # Known praise emoji and punctuation are decoration, never evidence that an
+    # otherwise unknown or mixed message is positive. Match the WHOLE remainder.
+    text = re.sub(r'[🔥👍❤♥️!.,…]', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 def simple_positive(review):
     """Exact whole-message praise only; never infer sentiment by substring."""
-    text = (getattr(review, 'text', '') or '').casefold().replace('ё', 'е')
-    text = re.sub(r'\s+', ' ', text).strip(' .!…\n\r\t')
+    text = praise_text(review)
     if text not in SIMPLE_PRAISE_TEXTS:
         return False
     # Reuse all existing safety/audience gates without mutating the input row.
@@ -186,6 +194,27 @@ def positive_template(review, rules, revision=0, *, product=None):
     return value if not local_issues(value, rules) else None
 
 
+def verified_positive_reply(reply, review, rules, *, product=None):
+    """Recheck exact reviewed no-claims wording; do not trust a prior timeout.
+
+    This is a fresh verdict on current inputs/rules, not a timeout exemption.
+    Unknown rules, complaints, questions and edited factual prose opt out.
+    """
+    from .owner_reply_policy import apply_local_preferences, apply_signature, local_issues
+    from .safety import validate_reply
+    if not simple_positive(review) or not positive_template(review, rules, product=product):
+        return False
+    candidates = {positive_template(review, rules, i, product=product) for i in range(3)}
+    if (getattr(review, 'text', '') or '').strip():
+        body = 'Спасибо за Ваш отзыв. Рады, что покупка Вам понравилась. Желаем приятного использования!'
+        value, _ = apply_local_preferences('Добрый день! ' + body, review, rules)
+        candidates.add(apply_signature(value, rules))
+    try:
+        return reply in candidates and validate_reply(reply) == reply and not local_issues(reply, rules, review)
+    except ValueError:
+        return False
+
+
 def audited_case_template(review, product, rules):
     """Exact, no-new-facts response for a narrowly audited resolved complaint.
 
@@ -268,4 +297,5 @@ def remember_verdict(key, answer, result):
         _verdicts.move_to_end(key)
         while len(_verdicts) > CACHE_LIMIT:
             _verdicts.popitem(last=False)
+
 
