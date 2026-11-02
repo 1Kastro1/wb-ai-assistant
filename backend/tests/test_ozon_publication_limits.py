@@ -8,7 +8,7 @@ from app.db import Session, Review, Draft, Product, StoreProfile, Account, Publi
 from app.publication_constraints import publication_restriction
 
 
-@pytest.mark.parametrize('market,text,blocked', [('ozon','',True),('ozon',' \\n\\t',True),('ozon','👍',False),('ozon','Отлично!',False),('wb','',False),('yandex','',False),('ozon_question','',False)])
+@pytest.mark.parametrize('market,text,blocked', [('ozon','',True),('ozon',chr(10)+chr(9),True),('ozon','👍',False),('ozon','Отлично!',False),('wb','',False),('yandex','',False),('ozon_question','',False)])
 def test_only_ozon_empty_ratings_are_restricted(market,text,blocked):
     assert bool(publication_restriction(SimpleNamespace(marketplace=market,text=text))) == blocked
 
@@ -81,8 +81,8 @@ def test_scheduled_empty_rating_does_not_stop_textual_review(client,prepared):
         assert job.result['published']==1 and job.result['skipped']==1 and job.result['uncertain']==0
         assert db.scalar(select(func.count()).select_from(Publication).where(Publication.review_id=='a-empty'))==0
         assert db.get(Draft,'a-empty').revision==7
+        assert db.get(Review,'b-text').is_answered
     assert prepared.publish.await_count==1
-    assert prepared.publish.call_args.args[1].id=='b-text'
 
 
 @pytest.mark.parametrize('response,accepted',[({'comment_id':'accepted-id'},True),({},False),({'comment_id':''},False),({'comment_id':False},False)])

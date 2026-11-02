@@ -10,14 +10,14 @@ from test_scheduled_publication import ready, enable, jobs
 
 def negative(db, store):
     review = db.get(Review, store+'review'); draft = db.get(Draft, store+'review')
-    review.rating, review.status = 2, 'manual_review'
+    review.rating, review.status, review.text = 2, 'manual_review', ''
     draft.text = draft.original = rule_reply(review, db.get(Product, review.product_id))
     draft.quality = assess_reply(review, db.get(Product, review.product_id), draft.text)
     assert draft.quality['passed'], draft.quality
     db.commit()
 
 
-@pytest.mark.parametrize('provider', ['owner','oz','ya'])
+@pytest.mark.parametrize('provider', ['owner','ya'])
 def test_low_template_scope_publishes_in_every_market_once(client, ready, provider):
     with Session() as db: negative(db, provider)
     result = enable(client, publication_reviews=False, publication_questions=False, publication_low_ratings=True)
@@ -81,3 +81,15 @@ def test_product_template_matches_the_actual_generation_route(client,ready,name,
         answer,_=apply_local_preferences(rule_reply(r,p,facts=facts),r,[])
         d.text=d.original=apply_signature(answer,[]);db.commit()
         assert approved_template(db,r,d)
+
+
+def test_ozon_low_empty_rating_is_preserved_and_skipped(client,ready):
+    with Session() as db: negative(db,'oz')
+    enable(client,publication_reviews=False,publication_questions=False,publication_low_ratings=True)
+    for jid in jobs(): asyncio.run(automatic.run_step(jid))
+    assert not ready
+    with Session() as db:
+        job=db.scalar(select(Job).where(Job.kind==automatic.KIND,Job.result['account_id'].as_string()=='oz'))
+        assert job.result['skipped']==1 and job.result['uncertain']==0
+        assert 'Ozon не принимает' in job.result['last_reason']
+        assert db.get(Draft,'ozreview').text

@@ -80,6 +80,7 @@ def test_other_marketplaces_use_same_review_rules_and_their_own_destination(clie
         db.get(StoreProfile, 'owner').provider = provider
         for row in db.scalars(select(Review)):
             row.marketplace = provider
+            if provider == 'ozon': row.text = 'Отлично!'
         db.get(Review, 'bulk-0000').rating = 2
         db.get(Review, 'bulk-0001').marketplace = 'wb'  # Wrong provider even in the same store.
         db.get(Review, 'bulk-0002').marketplace = provider + '_question'
