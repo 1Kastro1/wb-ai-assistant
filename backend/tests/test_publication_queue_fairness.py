@@ -37,7 +37,7 @@ def test_background_policy_scan_cannot_starve_but_yields_to_direct_click(client)
     old=(current-timedelta(minutes=6)).isoformat()
     with Session() as db:
         db.add(Job(id='scan',kind='draft_recheck',status='queued',created_at=old,result={'policy_scan':True}))
-        db.add(Job(id='retry',kind='draft_recheck',status='queued',created_at=old,result={'retry_draft_id':'draft'}))
+        db.add(Job(id='background',kind='drafts',status='queued',created_at=current.isoformat(),result={}))
         db.commit()
         assert next_job(db).id=='scan'
         db.add(Job(id='click',kind='single_draft',status='queued',created_at=current.isoformat()))

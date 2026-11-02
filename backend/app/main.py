@@ -1343,7 +1343,8 @@ async def execute_job(job_id):
             job = db.get(Job, job_id)
             failure_attempts = int((job.result or {}).get('failure_attempts', 0)) + 1
             job.result = {**(job.result or {}), 'failure_attempts': failure_attempts}
-            if failure_attempts < job.max_attempts and not job.cancel_requested:
+            from .rule_retry import durable_retry
+            if (failure_attempts < job.max_attempts or durable_retry(job, error)) and not job.cancel_requested:
                 job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Ожидает повторной попытки', 'account_id': account_id, 'detail': (str(error) or type(error).__name__)[:500], 'retry_at': time.time() + min(300, 30 * 2 ** min(job.attempts - 1, 3))}
             else:
                 default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'

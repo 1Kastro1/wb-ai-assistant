@@ -9,6 +9,17 @@ def technical_check(quality):
     return not rules.get('passed') and bool(rules.get('technical_error') or rules.get('status') == 'error')
 
 
+def durable_retry(job, error):
+    # No overall expiration for a saved-text verification outage. Programming,
+    # validation and authorization failures still follow the ordinary error path.
+    from .batch_processing import transient
+    return job.kind == 'draft_recheck' and bool((job.result or {}).get('check_only')) and transient(error)
+
+
+def retry_delay(attempt):
+    return (60, 120, 300)[min(2, max(0, int(attempt)-1))]
+
+
 def enqueue(db, draft, review, actor_id=''):
     # Caller holds the draft row lock (or its generation lease).
     existing = db.scalar(select(Job).where(Job.kind == 'draft_recheck',
@@ -22,3 +33,4 @@ def enqueue(db, draft, review, actor_id=''):
                 'message': 'Повторная проверка правил: сохранённый текст не изменяется'})
     db.add(job)
     return job
+

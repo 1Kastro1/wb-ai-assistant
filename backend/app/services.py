@@ -77,6 +77,24 @@ def trusted_product_facts(db, product):
     return prefer_manufacturer_instructions(facts)
 
 
+def review_verified_facts(db, review, product, rules=None):
+    """Use the same evidence for generation, rechecks and learned templates."""
+    rules = matching_owner_rules(db, product) if rules is None else rules
+    verified_facts = trusted_product_facts(db, product)
+    specific_case = specific_review_case(review, product)
+    from .product_guidance import fusso_instruction
+    if review_intent(review.text) == 'SURFACE_MARKS' and fusso_instruction(product):
+        verified_facts += [fusso_instruction(product)]
+    if specific_case:verified_facts = verified_facts + specific_case['sources']
+    if review_intent(review.text)=='DIM_LIGHT' and 'галоген' in product.name.lower():
+        verified_facts = verified_facts + [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]
+    if review_intent(review.text) in ('WEAK_SCENT','SCENT_IMPRESSION','AUTHENTICITY'):
+        holder=review_vent_holder(db,review,product)
+        if holder:verified_facts=verified_facts+[holder]
+    verified_facts += owner_business_facts(product, rules)
+    return verified_facts
+
+
 def draft_public(db, draft, actors=None, rules=None):
     if not draft:
         return None
@@ -903,20 +921,10 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     initial_draft = db.scalar(select(Draft).where(Draft.review_id == review_id))
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
-    verified_facts = trusted_product_facts(db, product)
     specific_case = specific_review_case(review, product)
-    from .product_guidance import fusso_instruction
-    if review_intent(review.text) == 'SURFACE_MARKS' and fusso_instruction(product):
-        verified_facts += [fusso_instruction(product)]
-    if specific_case:verified_facts = verified_facts + specific_case['sources']
-    if review_intent(review.text)=='DIM_LIGHT' and 'галоген' in product.name.lower():
-        verified_facts = verified_facts + [{'text':'KOITO: цветовая температура в кельвинах характеризует цвет света; большее значение соответствует более холодному оттенку. Это общий принцип, не проверка экземпляра покупателя.','source':'https://www.sp.koito.co.jp/faq/detail.html?category01=ct01','verification_status':'VERIFIED','source_type':'technical_reference'}]
-    if review_intent(review.text) in ('WEAK_SCENT','SCENT_IMPRESSION','AUTHENTICITY'):
-        holder=review_vent_holder(db,review,product)
-        if holder:verified_facts=verified_facts+[holder]
     memories = matching_owner_rules(db, product)
+    verified_facts = review_verified_facts(db, review, product, memories)
     context_memories, _ = select_rules(memories, review, product)
-    verified_facts += owner_business_facts(product, memories)
     generation_revision = initial_draft.revision if initial_draft else 0
     from .learned_reply_templates import load_template, remember_template
     learned = load_template(db, review, product, memories, verified_facts,

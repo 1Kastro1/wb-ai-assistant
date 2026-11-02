@@ -1,4 +1,5 @@
 import asyncio
+import time
 import pytest
 from app.db import Session, Product, Review, Draft, Job, Publication
 from app.draft_audit import recheck_step
@@ -100,7 +101,7 @@ def test_uncertain_publication_stays_in_personal_review_even_with_verified_posit
 
 
 @pytest.mark.parametrize('passed', [True, False])
-def test_check_only_preserves_text_revision_and_limits_retries(client, monkeypatch, passed):
+def test_check_only_preserves_text_and_keeps_retrying_outages_until_cancelled(client, monkeypatch, passed):
     seed_error()
     from app import services, owner_reply_policy
     with Session() as db:
@@ -112,14 +113,52 @@ def test_check_only_preserves_text_revision_and_limits_retries(client, monkeypat
         return answer, {'passed': passed, 'checked': passed, 'technical_error': not passed,
                         'matched': 1, 'violations': [], 'issues': [] if passed else ['таймаут']}
     monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
-    for _ in range(1 if passed else 3): asyncio.run(recheck_step(jid))
+    for _ in range(1 if passed else 12): asyncio.run(recheck_step(jid))
     with Session() as db:
         draft, job = db.get(Draft, 'd'), db.get(Job, jid)
         assert draft.revision == 7 and draft.text == 'Добрый день! Спасибо за отзыв.'
         assert draft.edits == []
         assert draft.quality['passed'] is passed
-        assert job.status == 'completed'
-        if not passed: assert job.result['check_retries'] == 2
+        assert job.status == ('completed' if passed else 'queued')
+        if not passed:
+            assert job.result['check_retries'] == 12
+            assert 0 < job.result['retry_at']-time.time() <= 300
+            job.cancel_requested=True;db.commit()
+    if not passed:
+        asyncio.run(recheck_step(jid))
+        with Session() as db: assert db.get(Job,jid).status=='cancelled'
+
+
+def test_outage_in_scan_gets_independent_retry_and_does_not_block_next_review(client,monkeypatch):
+    seed_error()
+    from app import services,owner_reply_policy
+    monkeypatch.setattr(services,'assess_reply',lambda *a,**k:{'passed':True,'issues':[],'score':96})
+    async def check(answer,*args,**kwargs):
+        return answer,{'passed':False,'checked':False,'technical_error':True,'issues':['timeout']}
+    monkeypatch.setattr(owner_reply_policy,'enforce_owner_rules',check)
+    with Session() as db:
+        db.add(Job(id='scan',kind='draft_recheck',result={'account_id':'owner','policy_scan':True,'reviews_only':True,'check_only':True}));db.commit()
+    asyncio.run(recheck_step('scan'))
+    from sqlalchemy import select
+    with Session() as db:
+        assert db.get(Job,'scan').result['cursor_id']=='d'
+        retry=db.scalar(select(Job).where(Job.result['retry_draft_id'].as_string()=='d'))
+        assert retry and retry.id!='scan' and retry.status=='queued'
+        assert db.get(Draft,'d').text=='Добрый день! Спасибо за отзыв.'
+
+
+def test_transient_verification_exceptions_have_no_overall_attempt_limit(client,monkeypatch):
+    seed_error()
+    from app import main,draft_audit
+    async def unavailable(*a,**k): raise TimeoutError('model unavailable')
+    monkeypatch.setattr(draft_audit,'recheck_step',unavailable)
+    with Session() as db:
+        job=enqueue(db,db.get(Draft,'d'),db.get(Review,'r'))
+        job.max_attempts=1;job.result={**job.result,'failure_attempts':100};jid=job.id;db.commit()
+    asyncio.run(main.execute_job(jid))
+    with Session() as db:
+        assert db.get(Job,jid).status=='queued'
+        assert db.get(Job,jid).result['failure_attempts']==101
 
 
 def test_endpoint_rejects_other_store_and_published_draft(client, monkeypatch):
@@ -136,3 +175,4 @@ def test_endpoint_rejects_other_store_and_published_draft(client, monkeypatch):
     with Session() as db:
         db.get(Review, 'r').wb_account_id = 'other'; db.commit()
     assert client.post('/drafts/d/recheck-rules').status_code == 404
+

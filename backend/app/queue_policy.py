@@ -33,7 +33,8 @@ def queue_ordering():
             Job.result['policy_regeneration'].as_boolean() == True,
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))
     direct_waiting = select(Job.id).where(Job.status == 'queued', Job.cancel_requested == False,
-        Job.kind.in_(('single_draft', 'single_question_draft')),
+        or_(Job.kind.in_(('single_draft', 'single_question_draft')),
+            Job.result['retry_draft_id'].as_string().is_not(None)),
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
     overdue_generation = batch_generation & (served < generation_cutoff) & ~direct_waiting
     interactive = case((or_(overdue_send, overdue_generation), -2), (urgent_positive, -1),
