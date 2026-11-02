@@ -37,6 +37,8 @@ def weak_cleaning_result(text):
 
 def authenticity_concern(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
+    if ('оригинал' in value and re.search(r'меньше\s+чем\s+у\s+оригинал|разниц\w*[^.!?]{0,30}от\s+оригинал', value)):
+        return True
     if re.search(r'(?<!\w)не\s*оригинал|контрафакт|фальсификат|пален', value): return True
     if any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'(?:жалк\w*\s+)?п[ао]родия\s+на\b', value)):
         return True
@@ -46,6 +48,10 @@ def authenticity_concern(text):
 
 def faded_scent(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
+    if (re.search(r'аромат|запах|пахн', value)
+            and re.search(r'(?<!\w)быстро\s+выветрива\w*', value)
+            and not re.search(r'не\s+быстро\s+выветрива|неприятн|посторонн|запах (?:табака|сырости|пота)', value)):
+        return True
     if re.search(r'(?:пахнет|пах|запах держ\w*|аромат держ\w*)\s+(?:(?:всего|только|лишь)\s+)?(?:1|один|одну|два|две|2|3|три|пару)\s*(?:день|дня|сут\w*|час\w*)\b', value):
         return True
     pattern = r'перестал[аио]?\s+пахн\w*|(?:запах|аромат)\w*[^.!?;]{0,35}?(?:исчез|пропал|выветри[лв])\w*|(?:исчез|пропал|выветри[лв])\w*[^.!?;]{0,35}?(?:запах|аромат)\w*'
@@ -154,6 +160,7 @@ def analyze_customer_message(text, rating=None):
     if rating is not None and rating <= 3 and re.fullmatch(r'коротк\w*[.!\s]*', value):
         complaints.append('SIZE_ISSUE')
     extra = {
+        'DAMAGED_ITEM': r'(?:приехал|пришел|пришла|пришло|получил)\w*\s+(?:весь\s+|вся\s+|все\s+)?(?:помят|мят)\w*',
         'PACKAGING_ISSUE': r'(?:короб\w*|упаков\w*)\s+(?:\w+\s+){0,2}(?:помят|мят|поврежд)|(?:помят|мят)\w*\s+(?:короб|упаков)',
         'WRONG_ITEM': r'прислал\w*\s+(?:две\s+)?разн\w*\s+щетк',
         'NO_RESULT': r'слабоват|плохо чист|через день[^.!?]{0,20}мутн',
@@ -318,4 +325,10 @@ def contextual_complaint_reply(analysis, revision=0):
         ending = 'Для дополнительной проверки можно обратиться в официальную поддержку маркетплейса.'
     else:
         ending = 'Вопрос с возвратом уже решён. Сожалеем о доставленных неудобствах.' if re.search(r'одобрил\w*\s+возврат', analysis['buyer_text'], re.I) else 'Сожалеем о доставленных неудобствах.'
+    if (set(analysis['complaints']) & {'DAMAGED_ITEM', 'WRONG_ITEM'}
+            and not analysis['buyer_asks_about_money'] and not analysis.get('resolved')):
+        ending = ('Если при получении в ПВЗ пришёл не тот товар или он повреждён, '
+                  'Вы можете отказаться от его получения. Если заказ уже получен, '
+                  'обратитесь через заказ на маркетплейсе для оформления возврата и проверки ситуации.')
     return 'Здравствуйте! ' + thanks + ' Приносим извинения за то, что ' + '; '.join(details) + '. ' + ending
+
