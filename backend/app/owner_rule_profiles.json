@@ -57,6 +57,12 @@
     ],
     "local_positive": true
   },
+  "1880bf76030fbc82369e3a30a9cd0c6793c4b4f8bb908a1517913057bfee864c": {
+    "empty_inapplicable": true,
+    "family": "filters",
+    "label": "NITTO: подтверждённая оригинальность и сравнение",
+    "local_positive": true
+  },
   "1a66b9ca617c835bc691d4f7e95e56b5e59ba42bac483b7a7db78a86185e66a3": {
     "family": "oils",
     "label": "Рекомендации для вопросов — Масла и технические жидкости",
@@ -115,6 +121,15 @@
     "label": "Подготовка и публикация ответов на вопросы. Подготавливай и отправляй на подтвер",
     "local_positive": false,
     "workflow": true
+  },
+  "3afb9b74429468f2ae87ac28f18077850e71357eee3c16da50297f82ec492a30": {
+    "empty_inapplicable": true,
+    "family": "fragrance",
+    "label": "EIKOSHA: формат, интенсивность и срок службы",
+    "local_cases": [
+      "eikosha_scent"
+    ],
+    "local_positive": true
   },
   "3cb40f4a64b00a9cfceb34c375a4376f0d59a02d84d913b4773d95e5d4add8bd": {
     "empty_inapplicable": true,
