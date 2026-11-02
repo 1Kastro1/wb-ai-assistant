@@ -31,6 +31,13 @@ def test_seller_comment_can_be_on_later_page(monkeypatch):
     assert request.call_args.kwargs['body']['offset']==100
 
 
+@pytest.mark.parametrize('published,rejected,state',[(True,False,'published'),(False,True,'answer_rejected'),(False,False,'answer_pending')])
+def test_live_ozon_moderation_flags(monkeypatch,published,rejected,state):
+    monkeypatch.setattr(sync.guard,'request',AsyncMock(return_value={'comments':[{
+        'is_owner':True,'text':'Seller reply','is_published':published,'is_rejected':rejected}],'offset':1}))
+    assert asyncio.run(sync.seller_reply({},'r'))=={'state':state,'text':'Seller reply'}
+
+
 @pytest.mark.parametrize('payload',[{}, {'comments':[{'is_owner':True,'status':'NEW_UNDOCUMENTED','text':'Ответ'}]},
     {'comments':[{'is_owner':True,'text':'Ответ','review_id':'other'}]},
     {'comments':[{'is_owner':True,'text':''}]}])

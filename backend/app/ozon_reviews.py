@@ -29,6 +29,11 @@ async def seller_reply(headers, review_id, cancelled=None):
             status = str(comment.get('status') or '').upper()
             if comment.get('is_deleted') is True or status == 'DELETED':
                 continue
+            if 'is_published' in comment or 'is_rejected' in comment:
+                live, refused = comment.get('is_published'), comment.get('is_rejected')
+                if type(live) is not bool or type(refused) is not bool or (live and refused):
+                    unknown = True; continue
+                status = 'PUBLISHED' if live else 'REJECTED' if refused else 'ON_MODERATION'
             if not text:
                 unknown = True; continue
             if status in ('', 'PUBLISHED', 'APPROVED'):
