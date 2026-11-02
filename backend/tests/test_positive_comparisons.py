@@ -22,13 +22,14 @@ class PositiveComparisonTests(unittest.TestCase):
         for text in ('Не очищает, другие средства лучше', 'Другие средства не помогли, и этот не помог', 'Не очищает другие поверхности'):
             self.assertIn('NO_RESULT', analyze_customer_message(text, 1)['complaints'])
 
-    def test_blank_positive_reply_is_brief_without_product_name_or_invented_properties(self):
+    def test_blank_positive_reply_is_warm_without_product_name_or_invented_properties(self):
         self.product.name, self.product.category = 'Свеча NGK', 'Свечи'
         answers = {rule_reply(self.review, self.product, revision) for revision in range(3)}
         self.assertEqual(len(answers), 3)
         for answer in answers:
             self.assertNotIn('Свеча NGK', answer)
-            self.assertLessEqual(len(answer), 100)
+            self.assertLessEqual(len(answer), 220)
+            self.assertTrue("Желаем" in answer or "Пусть" in answer)
             self.assertEqual(len(re.findall(r'спасибо|благодарим', answer, re.I)), 1)
             self.assertNotIn('совместим', answer)
             validate_reply(answer)
@@ -56,3 +57,4 @@ class PositiveComparisonTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
