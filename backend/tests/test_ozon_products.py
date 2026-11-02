@@ -207,6 +207,7 @@ def test_ozon_review_cursor_error_preserves_committed_progress(client, monkeypat
     store = connected(client, monkeypatch)
     saved = []
     async def request(*args, **kwargs):
+        if args[1] == 'review_comments': return {'comments': []}
         return {'reviews': [{'id': 'r', 'sku': 11, 'rating': 5, 'text': 'Спасибо'}], 'last_id': 'same', 'has_next': True}
     monkeypatch.setattr(guard, 'request', request)
     with Session() as db:

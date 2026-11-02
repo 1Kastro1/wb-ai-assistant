@@ -117,7 +117,6 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
             evidence = {'state':'absent','text':''} if zero and not saved[0] and not saved[1] else await seller_reply(headers,item['id'],cancelled)
             apply_reply(db,rid,expected,evidence)
             total += 1
-        if checkpoint and items: checkpoint({'last_id':str(items[-1]['id']), 'processed':total})
         if between_pages: await between_pages()
         if progress: progress(min(95,5+total//100))
         if not items or payload.get('has_next') is False or (len(items)<100 and not payload.get('has_next')):
@@ -125,6 +124,7 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
         last_id = str(payload.get('last_id') or items[-1]['id'])
         if not last_id or last_id in seen: raise ValueError('Ozon повторил страницу отзывов; прогресс сохранён')
         seen.add(last_id)
+        if checkpoint: checkpoint({'last_id':last_id, 'processed':total})
     raise ValueError('Достигнут лимит страниц отзывов Ozon; прогресс сохранён')
 
 

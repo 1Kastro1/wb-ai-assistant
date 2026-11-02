@@ -73,6 +73,20 @@ def test_resync_corrects_old_flag_and_preserves_draft(client,monkeypatch,owned):
         assert draft.text=='Ручной черновик' and draft.revision==8 and draft.edits==[{'by':'employee'}]
 
 
+def test_opaque_cursor_checkpoint_preserves_progress(client,monkeypatch):
+    seed(); checkpoints=[]
+    async def request(provider,operation,**kwargs):
+        if operation=='review_comments': return {'comments':[]}
+        return {'reviews':[{'id':'remote','sku':123,'rating':5,'text':'Saved review'}], 'last_id':'opaque-cursor','has_next':True}
+    monkeypatch.setattr(sync.guard,'request',request)
+    monkeypatch.setattr(integrations,'store_credentials',lambda db,store:(db.get(StoreProfile,store),'token'))
+    with Session() as db:
+        with pytest.raises(ValueError,match='повторил'):
+            asyncio.run(sync.sync_reviews(integrations.OzonProvider(),db,'ozon-shop',checkpoint=checkpoints.append))
+        assert checkpoints==[{'last_id':'opaque-cursor','processed':1}]
+        assert db.get(Review,'r').text=='Saved review'
+
+
 def test_timeout_preserves_known_published_reply(client,monkeypatch):
     seed()
     with Session() as db:
