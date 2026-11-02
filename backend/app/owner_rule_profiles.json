@@ -379,6 +379,15 @@
     ],
     "local_positive": true
   },
+  "9f4023fa762c88a45261547085339ca93fa43099c97e3dc7920c62f70d0b4362": {
+    "empty_inapplicable": true,
+    "family": "fragrance",
+    "label": "Ароматизаторы: отвечай на конкретное замечание, различая слабый аромат, быстрое исчезновение, неприя",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
   "a8ec7c1cece48bef29e3421111fb57621012a45c913f43cb6f111b86bcabbdb0": {
     "empty_inapplicable": true,
     "family": "electrical",
