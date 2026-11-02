@@ -68,6 +68,12 @@ def proposed_rule_kind(text):
 
 
 def owner_business_facts(product, rules):
+    if product.brand.strip().casefold() == 'nitto':
+        declaration = next((rule for rule in rules if re.search(r'мы\s+прода[её]м\s+оригинальн\w*\s+продукци\w*\s+NITTO', rule, re.I)
+                            and not re.search(r'не\s+прода[её]м|не\s+оригинальн', rule, re.I)), '')
+        return ([{'kind': 'store_policy', 'text': 'Мы продаём оригинальную продукцию NITTO.',
+                 'source': 'Подтверждённое правило владельца магазина', 'source_type': 'owner_policy',
+                 'verification_status': 'VERIFIED', 'policy': 'nitto_original'}] if declaration else [])
     if product.brand.strip().casefold() != 'eikosha':
         return []
     declaration = next((rule for rule in rules if re.search(r'официальн\w*\s+дистрибьютор', rule, re.I)
@@ -85,4 +91,5 @@ def apply_owner_preferences(reply, review, rules, style_only=False):
     # Import lazily: the policy also uses matching_owner_rules for previews.
     from .owner_reply_policy import apply_local_preferences
     return apply_local_preferences(reply, review, rules, style_only=style_only)
+
 

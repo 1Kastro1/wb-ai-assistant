@@ -167,6 +167,15 @@ def product_usage_reply(review, product, facts, revision=0):
     if analysis.get('resolved') and re.search(r'одобрил\w*\s+возврат', text):
         from .reply_policy import contextual_complaint_reply
         return contextual_complaint_reply(analysis, revision)
+    if 'AUTHENTICITY' in complaints and getattr(product, 'brand', '').strip().casefold() == 'nitto':
+        declaration = any(f.get('policy') == 'nitto_original' and f.get('verification_status') == 'VERIFIED'
+                          and f.get('source_type') == 'owner_policy' for f in facts or [])
+        if declaration:
+            return ('Добрый день! Спасибо за отзыв. Сожалеем, что фильтр вызвал сомнения. '
+                'Мы продаём оригинальную продукцию NITTO. '
+                'Указанные Вами различия в весе и цвете клапана требуют сверки конкретного артикула; '
+                'без проверки нельзя объяснять их изменением партии или конструкции. '
+                'Для сверки маркировки и артикулов можно обратиться в официальную поддержку маркетплейса.')
     if 'AUTHENTICITY' in complaints and getattr(product, 'brand', '').strip().casefold() == 'eikosha':
         parts = ['Добрый день! Спасибо за отзыв. Сожалеем, что товар вызвал у Вас сомнения.']
         if any(f.get('policy') == 'eikosha_distributor' and f.get('verification_status') == 'VERIFIED' for f in facts or []):
@@ -258,7 +267,7 @@ def product_usage_reply(review, product, facts, revision=0):
                 else:
                     parts.append(eikosha_placement(product, facts).replace('Меловая основа отдаёт аромат постепенно, создавая тонкий, ненавязчивый запах. ', ''))
             elif re.search(r'giga|стерж|картридж', name):
-                parts.append('Попробуйте расположить ароматизатор ближе к потоку воздуха согласно его инструкции; сменные стержни GIGA устанавливаются в предназначенный для них корпус.')
+                parts.append('Стержни GIGA используются в совместимом корпусе на дефлекторе. Тёплый обдув может сделать аромат заметнее, но не продлевает срок службы: усиление испарения расходует ароматическую композицию быстрее. Для более экономного расхода не держите ароматизатор постоянно под сильным горячим обдувом. Точный срок зависит от условий использования; гарантировать его по отзыву нельзя.' if faded else 'Стержни GIGA используются в совместимом корпусе на дефлекторе. Для более заметного аромата можно ненадолго включить умеренный тёплый обдув. Нагрев может усилить испарение, но не продлевает срок службы; постоянно усиливать горячий обдув не нужно.')
             else:
                 parts.append('Если инструкция Вашей модели допускает размещение ближе к потоку воздуха, можно выбрать такое положение; требования к корпусу и креплению сверяйте с её инструкцией.')
         if 'SCENT_IMPRESSION' in complaints and not complaints & {'WEAK_SCENT', 'ODOR_COMPLAINT'}:
@@ -306,3 +315,4 @@ def product_usage_reply(review, product, facts, revision=0):
         if instruction:
             return intro + ' ' + ('Сожалеем, что Вы не получили ожидаемого результата. ' if complaints else '') + 'По инструкции к этому товару: ' + instruction
     return None
+
