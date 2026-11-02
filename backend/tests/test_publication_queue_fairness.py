@@ -1,13 +1,16 @@
 from datetime import datetime, timezone, timedelta
 from app.db import Session, Job
 from app.queue_policy import next_job
+import pytest
 
 
-def test_approved_publication_cannot_starve_behind_rechecks(client):
+@pytest.mark.parametrize('kind,store', [('wb_publish_send','owner'), ('scheduled_publication','owner'),
+    ('scheduled_publication','ozon-store'), ('scheduled_publication','yandex-store')])
+def test_approved_publication_cannot_starve_behind_rechecks(client, kind, store):
     current=datetime.now(timezone.utc)
     old=(current-timedelta(minutes=5)).isoformat()
     with Session() as db:
-        db.add(Job(id='send',kind='wb_publish_send',status='queued',created_at=old,result={'last_served_at':old}))
+        db.add(Job(id='send',kind=kind,status='queued',created_at=old,result={'last_served_at':old,'account_id':store}))
         db.add(Job(id='check',kind='draft_recheck',status='queued',created_at=old,result={'retry_draft_id':'draft'}))
         db.add(Job(id='positive',kind='draft_recheck',status='queued',created_at=old,result={'positive_recheck':True}))
         db.commit()
@@ -16,13 +19,15 @@ def test_approved_publication_cannot_starve_behind_rechecks(client):
         assert next_job(db).id=='positive'
 
 
-def test_cancelled_and_backoff_sends_are_never_promoted(client):
+@pytest.mark.parametrize('kind', ['wb_publish_send','scheduled_publication'])
+def test_cancelled_and_backoff_sends_are_never_promoted(client, kind):
     current=datetime.now(timezone.utc)
     old=(current-timedelta(minutes=5)).isoformat()
     with Session() as db:
-        db.add(Job(id='cancelled',kind='wb_publish_send',status='queued',created_at=old,cancel_requested=True))
-        db.add(Job(id='backoff',kind='wb_publish_send',status='queued',created_at=old,result={'retry_at':current.timestamp()+300}))
+        db.add(Job(id='cancelled',kind=kind,status='queued',created_at=old,cancel_requested=True))
+        db.add(Job(id='backoff',kind=kind,status='queued',created_at=old,result={'retry_at':current.timestamp()+300}))
         db.add(Job(id='click',kind='single_draft',status='queued',created_at=current.isoformat()))
         db.commit()
         assert next_job(db).id=='click'
         assert next_job(db,('products',)) is None
+

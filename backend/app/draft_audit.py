@@ -158,7 +158,8 @@ async def _recheck_one(job_id, session_factory=Session):
         if scan:
             did = db.scalar(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
                 Review.wb_account_id == state['account_id'], Review.is_answered == False,
-                Review.status != 'publishing', Draft.id > state.get('cursor_id', '')).order_by(Draft.id).limit(1))
+                Review.status != 'publishing', Draft.id > state.get('cursor_id', ''),
+                *([~Review.marketplace.like('%_question')] if state.get('reviews_only') else [])).order_by(Draft.id).limit(1))
             if not did:
                 job.status, job.progress = 'completed', 100
                 job.result = {**state, 'message': f"Проверено: {state.get('checked', 0)}; подтверждено: {state.get('passed', 0)}. Остальные ответы не одобрены автоматически.", 'updated_at': now()}
@@ -253,3 +254,4 @@ if __name__ == '__main__':
                            result={'account_id': args.store, 'version': VERSION, 'message': 'Перепроверка сохранённых ответов'})
             db.add(existing); db.commit()
         print(existing.id, existing.status)
+

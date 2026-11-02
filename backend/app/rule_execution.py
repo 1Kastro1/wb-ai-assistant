@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2026-11-02-saved-positive'
+VERSION = 'context-rules-2026-11-02-warm-rating'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -124,6 +124,14 @@ def select_rules(rules, review, product):
 
 
 POSITIVE_BODIES = (
+    'Спасибо за высокую оценку и внимание к нашему магазину! Желаем Вам приятного использования покупки и хорошего дня.',
+    'Благодарим Вас за оценку покупки! Пусть её использование приносит Вам только приятные впечатления.',
+    'Спасибо, что уделили время и оценили товар! Желаем Вам приятного использования и удачных покупок.',
+)
+
+# Previously generated, reviewed no-claims answers remain valid; published
+# replies and existing drafts must not be rewritten just to change their length.
+PREVIOUS_RATING_BODIES = (
     'Спасибо за высокую оценку!',
     'Благодарим Вас за оценку покупки!',
     'Спасибо за Вашу оценку!',
@@ -207,6 +215,10 @@ def verified_positive_reply(reply, review, rules, *, product=None):
     if not simple_positive(review) or not positive_template(review, rules, product=product):
         return False
     candidates = {positive_template(review, rules, i, product=product) for i in range(3)}
+    if not (getattr(review, 'text', '') or '').strip():
+        for body in PREVIOUS_RATING_BODIES:
+            value, _ = apply_local_preferences('Добрый день! ' + body, review, rules)
+            candidates.add(apply_signature(value, rules))
     if (getattr(review, 'text', '') or '').strip():
         body = 'Спасибо за Ваш отзыв. Рады, что покупка Вам понравилась. Желаем приятного использования!'
         value, _ = apply_local_preferences('Добрый день! ' + body, review, rules)
@@ -305,5 +317,6 @@ def remember_verdict(key, answer, result):
         _verdicts.move_to_end(key)
         while len(_verdicts) > CACHE_LIMIT:
             _verdicts.popitem(last=False)
+
 
 

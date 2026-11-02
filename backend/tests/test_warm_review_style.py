@@ -44,5 +44,9 @@ class WarmReviewStyleTests(unittest.TestCase):
             answer=positive_body(self.review(''),revision)
             self.assertNotIn('понрав',answer)
             self.assertNotIn('аромат',answer)
-            self.assertLess(len(answer.split()),12)
+            self.assertGreaterEqual(len(answer.split()),14)
+            self.assertLess(len(answer.split()),35)
+            self.assertTrue('Желаем' in answer or 'Пусть' in answer)
+            self.assertEqual(answer.lower().count('спасибо')+answer.lower().count('благодарим'),1)
+
 
