@@ -16,7 +16,7 @@ function component(file){
 }
 test('legacy schedules preserve both groups and payload contains no hidden service settings',()=>{
  const values=scheduleValues({enabled:true,reviews_hours:4,questions_hours:8,drafts_hours:12,drafts_enabled:true});
- assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false,publication_enabled:false,publication_hours:1,publication_reviews:true,publication_questions:true,publication_low_ratings:false,publication_markets:{wb:true,ozon:true,yandex:true}});
+ assert.deepEqual(schedulePayload(values),{reviews_hours:4,questions_hours:8,drafts_hours:12,question_drafts_hours:12,reviews_sync_enabled:true,questions_sync_enabled:true,drafts_enabled:true,question_drafts_enabled:false,publication_enabled:false,publication_hours:1,publication_reviews:true,publication_questions:true,publication_low_ratings:false,publication_all_low_ratings:false,publication_markets:{wb:true,ozon:true,yandex:true}});
  assert.equal(scheduleValues({enabled:false,drafts_enabled:true}).drafts_enabled,false);
  const separate=schedulePayload({...values,reviews_sync_enabled:false,question_drafts_enabled:true,question_drafts_hours:2});
  assert.equal(separate.questions_sync_enabled,true);assert.equal(separate.question_drafts_hours,2);assert.equal(separate.drafts_hours,12);
@@ -78,3 +78,14 @@ test('sidebar separates connection from publication and groups navigation',()=>{
  const member=renderToStaticMarkup(React.createElement(Header,{active:'answers',onChange:()=>{},owner:false}));
  assert.doesNotMatch(member,/Безопасность|Автоматизация|Команда/);
 });
+
+ test('all verified low-rating replies require a separate persisted choice',()=>{
+ const values=scheduleValues({enabled:true,publication_low_ratings:true});
+ assert.equal(values.publication_all_low_ratings,false);
+ assert.equal(schedulePayload({...values,publication_all_low_ratings:true}).publication_all_low_ratings,true);
+ const Panel=component(path.resolve('app/AutomationSettings.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Panel,{schedule:{enabled:true,publication_low_ratings:true,publication_all_low_ratings:true},onSave:async()=>{}}));
+ assert.match(html,/Режим отправки отзывов 1–3★/);
+ assert.match(html,/Все ответы, прошедшие проверку/);
+ assert.match(html,/Опасные ситуации остаются для личной проверки/);
+ });

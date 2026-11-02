@@ -8,7 +8,7 @@ DEFAULTS = {'enabled': False, 'reviews_hours': 3, 'questions_hours': 3,
             'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False,
             'question_drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False,
             'min_quality': 96, 'max_proposals': 100, 'drafts_days': 7,
-            'publication_low_ratings': False, 'publication_enabled': False, 'publication_hours': 1, 'publication_reviews': True, 'publication_questions': True}
+            'publication_low_ratings': False, 'publication_all_low_ratings': False, 'publication_enabled': False, 'publication_hours': 1, 'publication_reviews': True, 'publication_questions': True}
 
 
 def normalize_schedule(raw):

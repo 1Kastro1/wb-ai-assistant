@@ -8,7 +8,7 @@ from .db import Session, Setting, Job, User, StoreProfile, Account, Review, Draf
 KIND = 'scheduled_publication'
 PROVIDERS = ('wb', 'ozon', 'yandex')
 BATCH_SIZE = 200
-FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions', 'publication_low_ratings')
+FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions', 'publication_low_ratings', 'publication_all_low_ratings')
 
 
 def market_enabled(schedule, provider):
@@ -65,16 +65,51 @@ def candidate_query(store_id, schedule, cursor=None):
         kinds.append(question)
     query = select(Review).join(Draft, Draft.review_id == Review.id).where(
         Review.wb_account_id == store_id, Review.is_answered == False, or_(Review.status == 'draft_ready', and_(
+            Review.status == 'manual_review', Review.rating >= 4, ~question, Draft.quality_technical == True), and_(
             Review.status == 'manual_review', Review.rating.between(1, 3), ~question,
             bool(schedule.get('publication_low_ratings', False)))),
         Review.manual == False, Review.safety_critical == False, Review.risk == 'NORMAL',
-        Draft.quality_passed == True, Draft.quality_pending == False, Draft.quality_technical == False,
-        Draft.quality_attention == False, or_(*kinds) if kinds else False,
+        or_(and_(Draft.quality_passed == True, Draft.quality_pending == False, Draft.quality_technical == False,
+                 Draft.quality_attention == False),
+            and_(Review.rating >= 4, ~question, Draft.quality_technical == True)),
+        or_(*kinds) if kinds else False,
         ~select(Publication.id).where(Publication.review_id == Review.id).correlate(Review).exists())
     if cursor:
         query = query.where(or_(Review.created_at < cursor[0],
             and_(Review.created_at == cursor[0], Review.id < cursor[1])))
     return query.order_by(Review.created_at.desc(), Review.id.desc())
+
+
+def recover_positive_verdict(db, review, draft):
+    """Fresh local verification of unchanged saved praise, without generation.
+
+    Runs before eligibility, never grants publication authorization. All normal
+    schedule, revision, provider and duplicate-publication guards still run.
+    """
+    from .rule_retry import technical_check
+    from .rule_execution import verified_positive_reply
+    from .services import assess_reply, trusted_product_facts, matching_owner_rules
+    from .owner_reply_policy import saved_rule_quality, attach_rule_quality
+    if not review or not draft or not technical_check(draft.quality):
+        return False
+    review = db.scalar(select(Review).where(Review.id == review.id).with_for_update().execution_options(populate_existing=True))
+    draft = db.scalar(select(Draft).where(Draft.id == draft.id).with_for_update().execution_options(populate_existing=True))
+    if (review.is_answered or review.status not in ('draft_ready', 'manual_review') or
+        db.scalar(select(Publication.id).where(Publication.review_id == review.id))):
+        return False
+    product = db.get(Product, review.product_id)
+    rules = matching_owner_rules(db, product)
+    if not verified_positive_reply(draft.text, review, rules, product=product):
+        return False
+    quality = assess_reply(review, product, draft.text, trusted_product_facts(db, product))
+    verdict = saved_rule_quality(draft.text, rules, review=review)
+    if not quality['passed'] or not verdict['passed']:
+        return False
+    draft.quality = attach_rule_quality({**(draft.quality or {}), **quality,
+                                      'text_issues': list(quality.get('issues', []))}, verdict)
+    review.status = 'draft_ready'
+    db.flush()
+    return True
 
 
 def eligibility_reason(db, review, draft, schedule):
@@ -91,7 +126,7 @@ def eligibility_reason(db, review, draft, schedule):
         not question and (not schedule.get('publication_low_ratings', False) if low else not schedule.get('publication_reviews', True)) or
         question and not schedule.get('publication_questions', True)):
         return 'Нужна личная проверка или этот тип ответов выключен.'
-    if low:
+    if low and not schedule.get('publication_all_low_ratings', False):
         from .low_rating_templates import approved_template
         if not approved_template(db, review, draft):
             return 'Для низкой оценки нет подходящего проверенного шаблона. Нужна личная проверка.'
@@ -199,6 +234,7 @@ async def run_step(job_id, session_factory=Session):
             cursor = [review.created_at, review.id]
             review_id = review.id
             draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
+            recover_positive_verdict(db, review, draft)
             reason = eligibility_reason(db, review, draft, schedule)
             aid = None
             if not reason:
@@ -256,3 +292,4 @@ def runtime(db, schedule):
             'updated_at': state.get('updated_at'), 'next_at': datetime.fromtimestamp(due, timezone.utc).isoformat()
             if connected and selected and schedule.get('publication_enabled') and not reason and not pending else None})
     return {'available': not availability_reason(db), 'availability_reason': availability_reason(db), 'blocked_reason': reason, 'stores': stores}
+

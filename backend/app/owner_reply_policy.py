@@ -10,7 +10,7 @@ from time import monotonic
 from .plain_text import plain_text
 from .safety import mask_vin, validate_reply
 from .reply_policy import has_redundant_clarification, remove_redundant_clarification, analyze_customer_message, missing_complaints, COMPLAINT_LABELS
-from .rule_execution import select_rules, positive_template, audited_case_template, verification_key, cached_verdict, remember_verdict
+from .rule_execution import select_rules, positive_template, audited_case_template, verified_positive_reply, verification_key, cached_verdict, remember_verdict
 
 
 QUOTED = r'[«“"\u2018\u2019]([^»”"\u2018\u2019\n]{1,200})[»”"\u2018\u2019]'
@@ -46,11 +46,15 @@ def constraints(rules):
 
 @lru_cache(maxsize=256)
 def _parsed_constraints(rules):
-    result = {'greeting': '', 'anonymous_greeting': '', 'signature': '', 'banned': [], 'no_reask': False,
+    result = {'greeting': '', 'anonymous_greeting': '', 'greetings': [], 'signature': '', 'banned': [], 'no_reask': False,
               'no_emoji': False, 'no_photos': False, 'no_order_support': False, 'semantic': []}
     for rule in rules:
         for clause in _clauses(rule):
             lower = clause.lower().replace('ё', 'е')
+            alternatives = re.fullmatch(r'Допустимые приветствия:\s*«([^»]+)»\s+или\s+«([^»]+)»', clause, re.I)
+            if alternatives:
+                result['greetings'] = list(dict.fromkeys(alternatives.groups()))
+                continue
             if re.search(r'не\s+(?:прос\w*|треб\w*)[^.!?]{0,30}(?:фото|видео)', lower):
                 result['no_photos'] = True
             if re.search(r'не\s+направля\w*[^.!?]{0,80}через\s+(?:полученный\s+)?заказ', lower):
@@ -127,7 +131,9 @@ def context_constraints(rules, review=None):
     name = str(getattr(review, 'buyer_name', '') or getattr(review, 'customer_name', '') or '').strip()
     hidden = (not name or bool(getattr(review, 'buyer_name_hidden', False)) or
               bool(re.search(r'скрыт|аноним|пользователь|покупатель|hidden|anonymous|\*{2,}', name, re.I)))
-    if config['anonymous_greeting'] and hidden:
+    if config['greetings']:
+        config['greeting'] = config['greetings'][0]
+    elif config['anonymous_greeting'] and hidden:
         config['greeting'] = config['anonymous_greeting']
     return config
 
@@ -162,7 +168,7 @@ def apply_local_preferences(reply, review, rules, style_only=False):
             config['no_photos'] and re.search(r'фотограф|пришлите фото|снимок|видео', sentence, re.I)
             or config['no_order_support'] and re.search(r'через\s+(?:полученный\s+)?заказ', sentence, re.I)))
     greeting = config['greeting']
-    if greeting:
+    if greeting and not any(reply.startswith(value) for value in config['greetings']):
         if config['anonymous_greeting'] and greeting == config['anonymous_greeting']:
             reply = anonymous_opening(reply)
         reply = reply.lstrip(' \t\r\n!.,:;')
@@ -184,7 +190,7 @@ def apply_signature(reply, rules):
 def local_issues(reply, rules, review=None):
     config = context_constraints(rules, review)
     issues = []
-    if config['greeting'] and not reply.startswith(config['greeting']):
+    if config['greeting'] and not any(reply.startswith(value) for value in (config['greetings'] or [config['greeting']])):
         issues.append('Не выполнено начало ответа: ' + config['greeting'])
     if config['signature'] and not reply.endswith(config['signature']):
         issues.append('Не выполнена подпись ответа')
@@ -245,6 +251,12 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             result.update(verification_method='local_review_case', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
             return adjusted, result
+    if check_only and not instruction.strip() and not protected and not result['issues']:
+        if verified_positive_reply(adjusted, review, rules, product=product) and assess(adjusted)['passed']:
+            method = 'local_positive' if any(adjusted == positive_template(review, rules, i, product=product) for i in range(3)) else 'local_saved_positive'
+            result.update(verification_method=method, semantic_groups=0, verified_groups=0,
+                          verification_seconds=round(monotonic() - check_started, 4))
+            return adjusted, result
     # Only the exact no-claims templates and audited whole policies qualify.
     # Unknown/edited semantic rules must still reach the model, even on five stars.
     if allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
@@ -289,6 +301,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 'problem-solving tips, VIN checks or refusal/return advice: no problem was reported. '
                 'Required greeting/signature override a generic request for varied style. '
                 'The required greeting is resolved for buyer-name visibility and overrides a general greeting default. '
+                'When required_style.greetings is nonempty, any one of those greetings is valid; do not require the default instead. '
                 'Never invent facts, product properties, availability, compatibility or promises. '
                 'If all applicable rules pass: compliant=true, violations=[], revised_answer="". '
                 'Otherwise: compliant=false, name specific violations in Russian and optionally return a corrected '
@@ -308,7 +321,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                         'buyer_message': review.text, 'rating': review.rating,
                         'reply_kind': 'question' if (getattr(review, 'marketplace', '') or '').endswith('_question') else 'review',
                         'product': product.name, 'verified_facts': facts, 'answer': adjusted,
-                        'required_style': {key: context_constraints(rules, review)[key] for key in ('greeting', 'signature')},
+                        'required_style': {key: context_constraints(rules, review)[key] for key in ('greeting', 'greetings', 'signature')},
                         'protected_answer': protected}, ensure_ascii=False)
                     check = await budget.run(lambda: ollama.structured(messages, CHECK_SCHEMA, task='OWNER_RULES',
                         **({'timeout_seconds': check_seconds} if check_seconds is not None else {})))
@@ -391,6 +404,10 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=Non
     issues = local_issues(reply, rules, review)
     violations = list(issues)
     current = fingerprint(rules)
+    if review is not None and not issues and verified_positive_reply(reply, review, rules):
+        return {'matched': len(rules), 'fingerprint': current, 'checked': True, 'passed': True,
+                'issues': [], 'violations': [], 'status': 'verified',
+                'verification_method': 'local_saved_positive', 'verification_seconds': 0}
     if rules and (changed or previous.get('fingerprint') != current) and constraints(rules)['semantic']:
         issues.append('Ответ ожидает проверки по текущим правилам магазина.')
         previous = {key: value for key, value in previous.items() if key not in ('technical_error', 'reason', 'verification_seconds', 'verification_method', 'status')}
@@ -399,4 +416,5 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=Non
     return {**previous, 'matched': len(rules), 'fingerprint': current,
             'checked': not issues, 'passed': not issues, 'issues': list(dict.fromkeys(issues)),
             'violations': list(dict.fromkeys(violations + ([] if changed else previous.get('violations', []))))}
+
 
