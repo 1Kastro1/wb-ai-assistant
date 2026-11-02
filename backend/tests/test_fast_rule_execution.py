@@ -64,8 +64,13 @@ def test_positive_generation_and_rotation_use_no_model_or_publication(client, mo
         assert len(set(replies))==3
         assert not db.get(Review,'r').is_answered
         assert list(db.query(Action))==[]
-        pending = propose_publish(db,['r'])
-        assert pending['status']=='pending'
+        if marketplace == 'ozon':
+            with pytest.raises(ValueError,match='Ozon не принимает'):
+                propose_publish(db,['r'])
+            assert list(db.query(Action))==[]
+        else:
+            pending = propose_publish(db,['r'])
+            assert pending['status']=='pending'
     checker.assert_not_awaited()
 
 
