@@ -932,10 +932,18 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     def formatted(value):
         value, _ = apply_local_preferences(value, review, memories)
         return validate_reply(mask_vin(apply_signature(value, memories)))
-    previous_text = formatted(initial_draft.text) if initial_draft else ''
+    try:
+        previous_text = formatted(initial_draft.text) if initial_draft else ''
+    except ValueError:
+        # An invalid old draft is a reason to repair it, not to block a new one.
+        previous_text = initial_draft.text
     learned = load_template(db, review, product, memories, verified_facts,
         lambda value: assess_reply(review, product, value, verified_facts), previous=previous_text) if not requested_instruction.strip() else None
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
+    if local_positive and initial_draft:
+        # Built-in praise already rotates instantly and receives a fresh local
+        # verdict. Keep that route rather than alternating older library items.
+        learned = None
     if fast_only and not local_positive and not learned:
         raise FastPathUnavailable('Нужна дополнительная проверка правил')
     rule_candidates = []

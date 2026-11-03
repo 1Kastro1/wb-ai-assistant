@@ -256,7 +256,7 @@ def semantic_reply_issues(review, product, reply):
             issues.append('не извиняться за неописанную протечку' if kind == 'LEAKAGE' else 'не придумывать повреждение упаковки')
     if buyer.strip() and not analysis['complaints'] and analysis['sentiment'] == 'positive' and re.search(r'жаль|сожале|извин|не оправдал|не подош[её]л|не понравил|разочар', text):
         issues.append('не трактовать положительный отзыв как жалобу')
-    if analysis['complaints'] and re.search(r'рады, что (?:покупка|товар|аромат).*понравил', text):
+    if analysis['complaints'] and analysis['sentiment'] == 'negative' and re.search(r'рады, что (?:покупка|товар|аромат).*понравил', text):
         issues.append('не благодарить за довольство при жалобе')
     if 'аромат вам понравился' in text and 'аромат Вам понравился' not in positive_detail(buyer):
         issues.append('не приписывать покупателю положительное впечатление об аромате')
