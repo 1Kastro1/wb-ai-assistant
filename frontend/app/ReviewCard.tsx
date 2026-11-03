@@ -29,6 +29,7 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   async function preparePublication(){try{await flusher.current?.();await publish?.()}catch{/* DraftEditor or the parent shows the saving/publication error. */}}
   const q=r.draft?.quality||{},hasText=Boolean((r.text||'').trim());
   const remotePending=r.marketplace==='ozon'&&r.status==='answer_pending';
+  const answerSource=r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркета':'Wildberries';
   const remoteUnknown=r.marketplace==='ozon'&&(r.status==='answer_unknown'||(r.is_answered&&!String(r.existing_answer||'').trim()));
   const needsCheck=r.rating<=3||r.manual||r.risk!=='NORMAL'||!q.passed||(String(r.draft?.model||'').startsWith('safety-fallback')&&!q.repair_audit?.rules_rechecked_at);
   const technical=Boolean(q.owner_rules?.technical_error||q.owner_rules?.status==='error')&&!q.owner_rules?.passed;
@@ -42,7 +43,7 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
     <details className="review-expand" open={expanded||generating} onToggle={e=>{if(e.currentTarget.open)setOpened(true);if(!generating)setExpanded(e.currentTarget.open)}}><summary><span className="review-preview">{hasText?r.text:r.is_answered?status:'Покупатель поставил оценку без текста'}</span><span className="review-open-label">{expanded||generating?'Свернуть':'Открыть ответ'}</span></summary>
     {(opened||expanded||generating||Boolean(generationError))&&<div className={'review-content '+(hasText?'has-text':'rating-only')}>
       {hasText&&<div className="customer-review"><small>ОТЗЫВ ПОКУПАТЕЛЯ</small><p className="review-text">{r.text}</p></div>}
-      {r.is_answered?<div>{(remotePending||remoteUnknown)&&<p className="muted" role="status">{reason}</p>}{String(r.existing_answer||'').trim()?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<p className="generation-notice" role="status">Текст ответа ещё не получен из Ozon. Сверка загрузит комментарий продавца и уточнит статус отзыва. Сохранённый черновик остаётся в приложении.</p>}</div>:<div className="draft">
+      {r.is_answered?<div>{(remotePending||remoteUnknown)&&<p className="muted" role="status">{reason}</p>}{String(r.existing_answer||'').trim()?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<p className="generation-notice" role="status">Текст ответа пока не загружен из {answerSource}. Сохранённый черновик остаётся в приложении. Повторная отправка не запускается.</p>}</div>:<div className="draft">
         {r.draft?<DraftEditor draft={r.draft} disabled={generating||!canManage} storageKey={storageKey||'draft-edit:'+r.draft.id} onSave={save} onDirty={value=>{setDirty(value);onPending?.(value)}} onRegister={register}/>:<p className="muted">Подготовьте ответ на этот отзыв.</p>}
         <OwnerRuleStatus quality={q}/>{r.draft&&<RuleDetails draftId={r.draft.id} revision={r.draft.revision}/>}
         {operationError&&<div className="save-error" role="alert">{operationError}</div>}

@@ -24,7 +24,7 @@ function render(extra={}){
  return renderToStaticMarkup(React.createElement(Card,{review,checked:false,toggle(){},busy:false,assistantEnabled:true,canManage:true,generating:false,generationError:'open',generate(){},save(){},feedback(){}}));
 }
 test('empty remote text never shows an empty blockquote or a sent claim',()=>{
- const html=render();assert(html.includes('Статус ответа уточняется'));assert(html.includes('Текст ответа ещё не получен из Ozon'));
+ const html=render();assert(html.includes('Статус ответа уточняется'));assert(html.includes('Текст ответа пока не загружен из Ozon'));
  assert(!html.includes('published-reply'));assert(!html.includes('Отправлено'));
 });
 test('verified seller reply is visible',()=>{
