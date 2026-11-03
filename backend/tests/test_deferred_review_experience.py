@@ -1,7 +1,9 @@
 """Regression cases from real marketplace drafts, shared by all three shops."""
 from types import SimpleNamespace
 import json
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -80,3 +82,29 @@ def test_current_whole_style_rule_is_reviewed_only_for_simple_praise():
 @pytest.mark.parametrize('rule', ['Одна благодарность.', 'Не повторяй благодарность и извинения.'])
 def test_no_repeated_thanks_in_current_rule_wording(rule):
     assert local_issues('Здравствуйте. Спасибо за отзыв. Благодарим за покупку.', [rule])
+
+
+def test_saved_generation_and_regeneration_respect_deferred_experience(client, monkeypatch):
+    from app.db import Session, Memory, Product, Review, Action
+    from app.integrations import ollama
+    from app.services import generate_draft
+    rule = json.loads((Path(__file__).parent / 'fixtures/deduplicated_style_rules.json').read_text(encoding='utf-8'))['review']
+    checker = AsyncMock(return_value={'compliant': True, 'violations': [], 'revised_answer': ''})
+    monkeypatch.setattr(ollama, 'structured', checker)
+    with Session() as db:
+        db.add(Memory(id='style', kind='REVIEW_RULE', text=rule))
+        db.add(Product(id='eco', name=PRODUCT.name, category=PRODUCT.category))
+        db.flush()
+        db.add(Review(id='deferred', wb_review_id='deferred', product_id='eco', rating=5,
+                      text='позже дам информацию по качеству', marketplace='yandex', risk='NORMAL'))
+        db.commit()
+        for _ in range(3):
+            result = asyncio.run(generate_draft(db, 'deferred'))
+            assert result['quality']['passed'], result['quality']
+            assert result['quality']['owner_rules']['passed']
+            assert 'впечатлениям после использования' in result['text']
+            assert 'оценили качество' not in result['text']
+            assert 'поделились опытом' not in result['text']
+        assert not db.get(Review, 'deferred').is_answered
+        assert not db.query(Action).all()
+    assert checker.await_count

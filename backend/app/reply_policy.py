@@ -253,7 +253,7 @@ def semantic_reply_issues(review, product, reply):
     issues = []
     if untested_review(buyer) and re.search(
             r'(?:рады|приятно)[^.!?]{0,90}(?:оценили качество|покупка.*понрав|товар.*(?:понрав|подош)|установка.*успеш|довольны работой|оправдал.*ожидан|результат.*порадовал)'
-            r'|(?:покупка|товар|аромат)\s+и дальше\s+радует', text):
+            r'|(?:покупка|товар|аромат)\s+и дальше\s+радует|поделились опытом', text):
         issues.append('не приписывать опыт использования и довольство до проверки товара')
     for kind, defect in (('LEAKAGE', r'протеч\w*'), ('PACKAGING_ISSUE', r'повреждени\w*\s+упаковк\w*')):
         if kind not in analysis['complaints'] and re.search(r'извин\w*\s+за\s+[^.!?]{0,100}' + defect, text):
