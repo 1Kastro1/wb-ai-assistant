@@ -22,11 +22,15 @@ def retry_delay(attempt):
 
 def enqueue(db, draft, review, actor_id=''):
     # Caller holds the draft row lock (or its generation lease).
-    existing = db.scalar(select(Job).where(Job.kind == 'draft_recheck',
-        Job.status.in_(('queued', 'running')),
-        Job.result['retry_draft_id'].as_string() == draft.id))
-    if existing:
-        return existing
+    active = db.scalars(select(Job).where(Job.kind == 'draft_recheck',
+        Job.status.in_(('queued', 'running')), Job.cancel_requested == False,
+        Job.result['account_id'].as_string() == review.wb_account_id).order_by(Job.created_at, Job.id))
+    for existing in active:
+        state = existing.result or {}
+        remaining = (state.get('draft_ids') or [])[int(state.get('cursor', 0)):]
+        if state.get('check_only') and not state.get('policy_scan') and (
+                state.get('retry_draft_id') == draft.id or remaining == [draft.id]):
+            return existing
     job = Job(id=str(uuid4()), kind='draft_recheck', priority=60, max_attempts=10,
         result={'account_id': review.wb_account_id, 'draft_ids': [draft.id],
                 'retry_draft_id': draft.id, 'check_only': True, 'requested_by': actor_id,

@@ -49,7 +49,16 @@ def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None):
             and not (for_questions and review_signature(row.text))]
     # General defaults precede narrower policies. Avoid database-dependent order.
     priority = {'global': 0, 'brand': 1, 'category': 1, 'product': 2}
-    return [row.text for row in sorted(rows, key=lambda row: priority.get(_scope_key(row.scope).split(':')[0], 0))]
+    ordered = sorted(rows, key=lambda row: priority.get(_scope_key(row.scope).split(':')[0], 0))
+    # Keep the narrower/latest occurrence in its original precedence position.
+    # Only identical whole policies are duplicates; do not merge similar clauses.
+    seen, unique = set(), []
+    for row in reversed(ordered):
+        key = row.text.replace('\r\n', '\n').strip()
+        if key not in seen:
+            unique.append(row.text)
+            seen.add(key)
+    return list(reversed(unique))
 
 
 def _scope_key(value):

@@ -349,6 +349,11 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                     break
                 candidate, _ = apply_local_preferences(candidate, review, rules)
                 candidate = validate_reply(mask_vin(apply_signature(candidate, rules)))
+                if re.sub(r'\s+', ' ', candidate).strip() == re.sub(r'\s+', ' ', adjusted).strip():
+                    # The verifier has not repaired anything. A second identical
+                    # request cannot prove compliance with its own violation.
+                    result['issues'].extend(check['violations'])
+                    break
                 # Rewriting must not silently discard verified instructions or
                 # introduce new model claims accepted only by the rule checker.
                 quality = assess(candidate)
