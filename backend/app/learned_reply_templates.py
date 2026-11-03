@@ -50,7 +50,7 @@ def context_key(review, product, rules, facts, *, praise_group=False, candidate_
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def load_template(db, review, product, rules, facts, assess, *, previous=''):
+def load_template(db, review, product, rules, facts, assess, *, previous='', exact_answer=None):
     from .owner_reply_policy import saved_rule_quality, local_issues
     from .safety import validate_reply
     from .rule_execution import verified_positive_reply
@@ -64,6 +64,8 @@ def load_template(db, review, product, rules, facts, assess, *, previous=''):
             if time.time()-float(item.get('at',0)) > MAX_AGE:
                 continue
             answer, verdict = item.get('answer',''), item.get('verdict') or {}
+            if exact_answer is not None and answer != exact_answer:
+                continue
             if (same_answer(answer, previous) or not verdict.get('checked') or not verdict.get('passed')
                     or verdict.get('technical_error')):
                 continue

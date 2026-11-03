@@ -954,8 +954,10 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             # Rotate courtesy wording without changing that verified content.
             thanks = ('Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.')[(generation_revision + offset) % 3]
             candidate = re.sub(r'(?:Спасибо|Благодарим)[^.!?]*[.!?]', lambda match: thanks, candidate, count=1, flags=re.I)
-        if candidate and candidate not in rule_candidates:
-            rule_candidates.append(formatted(candidate))
+        if candidate:
+            candidate = formatted(candidate)
+            if candidate not in rule_candidates:
+                rule_candidates.append(candidate)
     rule_candidates = fresh_reply_variants(rule_candidates, previous_text)
     reply = max(rule_candidates, key=lambda value: assess_reply(review, product, value, verified_facts)['score']) if rule_candidates else None
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None

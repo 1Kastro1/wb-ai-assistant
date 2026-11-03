@@ -180,10 +180,17 @@ async def _recheck_one(job_id, session_factory=Session):
             facts = trusted_product_facts(db, product) if question else review_verified_facts(db, review, product, rules)
             assess = (lambda value: assess_question_answer(review, product, value, facts, owner_rules=rules)) if question else (lambda value: assess_reply(review, product, value, facts))
             protected = manually_edited(draft)
-            answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
-                assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
-                check_seconds=45, check_only=check_only,
-                allow_fast_positive=check_only)
+            learned = None
+            if check_only and not question and not protected:
+                from .learned_reply_templates import load_template
+                learned = load_template(db, review, product, rules, facts, assess, exact_answer=draft.text)
+            if learned:
+                answer, verdict = learned
+            else:
+                answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
+                    assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
+                    check_seconds=45, check_only=check_only,
+                    allow_fast_positive=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
