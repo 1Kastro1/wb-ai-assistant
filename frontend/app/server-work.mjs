@@ -31,7 +31,7 @@ export function stageStatus(group,key,now=Date.now()/1000){
  return {label:key==='verification'?'Нет ответов на проверке':'Новых задач нет',tone:'idle'};
 }
 export function lastMovement(group){
- const values=[group.refresh?.last_progress_at,...group.tasks.map(t=>t.last_progress_at),
+ const values=[group.last_progress_at,group.refresh?.last_progress_at,...group.tasks.map(t=>t.last_progress_at),
   ...Object.values(group.completed_stages||{}).map(s=>s.finished_at)].filter(Boolean);
  return values.sort().at(-1)||null;
 }

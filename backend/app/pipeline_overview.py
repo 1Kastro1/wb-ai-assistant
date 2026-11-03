@@ -1,6 +1,6 @@
 """Store aggregates and durable campaign progress; no buyer bodies or prompts."""
 from sqlalchemy import select, func, case, and_
-from .db import Review, Draft, Publication, Job, setting
+from .db import Review, Draft, Publication, Job, GenerationOutcome, setting
 from .attention_queue import personal_condition, automatic_publication
 from .automation_schedule import normalize_schedule
 from .read_cache import cached_read
@@ -35,6 +35,9 @@ def _overview(db,stores):
             ~and_(Review.marketplace=='ozon',func.trim(Review.text)==''))
         .group_by(Review.wb_account_id)).mappings().all()
     counts={r['wb_account_id']:{k:int(r[k] or 0) for k in flags} for r in rows}
+    movements=dict(db.execute(select(Review.wb_account_id,func.max(GenerationOutcome.created_at))
+        .join(Review,Review.id==GenerationOutcome.review_id).where(Review.wb_account_id.in_(stores),
+            GenerationOutcome.created_at!='').group_by(Review.wb_account_id)).all())
     latest={};stages={}
     from sqlalchemy import or_
     groups={'sync':Job.kind.in_(('products','reviews','questions')),
@@ -69,6 +72,7 @@ def _overview(db,stores):
     for sid,store in stores.items():
         result.append({'id':sid,'provider':store.provider,'name':store.name,
             'counts':counts.get(sid,{k:0 for k in flags}),'refresh':latest.get(sid),
+            'last_progress_at':movements.get(sid),
             'completed_stages':stages.get(sid,{}),
             'enabled':{'sync':bool(schedule['enabled'] and schedule.get('reviews_sync_enabled')),
                 'generation':bool(schedule['enabled'] and schedule.get('drafts_enabled')),
