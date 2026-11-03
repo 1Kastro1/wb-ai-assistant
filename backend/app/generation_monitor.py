@@ -12,7 +12,8 @@ def recent_generation(db, store_id, minutes=30):
     saved, verified = db.execute(select(func.count(), func.sum(case((Draft.quality_passed == True, 1), else_=0)))
         .select_from(GenerationOutcome).join(Review, Review.id == GenerationOutcome.review_id)
         .outerjoin(Draft, Draft.review_id == Review.id)
-        .where(GenerationOutcome.created_at >= cutoff, Review.wb_account_id == store_id)).one()
+        .where(GenerationOutcome.created_at >= cutoff, Review.wb_account_id == store_id,
+               GenerationOutcome.category == 'generated')).one()
     return {'window_minutes': minutes, 'saved': saved or 0, 'verified': verified or 0,
             'saved_per_minute': round((saved or 0) / minutes, 2)}
 

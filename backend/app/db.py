@@ -358,6 +358,7 @@ class GenerationOutcome(Base):
     job_id: Mapped[str] = mapped_column(String, primary_key=True)
     review_id: Mapped[str] = mapped_column(String, primary_key=True)
     attention: Mapped[bool] = mapped_column(Boolean, default=False)
+    category: Mapped[str] = mapped_column(String, default='generated', server_default='generated')
     created_at: Mapped[str] = mapped_column(String, default=now, server_default='', index=True)
 
 

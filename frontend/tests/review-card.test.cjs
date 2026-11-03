@@ -51,7 +51,7 @@ test('low-rated draft needs review despite a passed text score',()=>{const html=
 test('positive technical failure is not labelled a negative review and offers text-preserving check',()=>{
  const quality={passed:false,owner_rules:{matched:28,status:'error',technical_error:true,passed:false}};
  const html=render({recheck:async()=>{},generationError:'Открыть',review:{text:'Все супер!',draft:{text:'Добрый день! Спасибо!',quality}}});
- assert(html.includes('Сбой проверки правил'));assert(html.includes('Перепроверить правила'));
+ assert(html.includes('Проверка продолжится в фоне'));assert(html.includes('Перепроверить правила'));
  const checked=render({review:{draft:{text:'Добрый день! Спасибо!',model:'safety-fallback-1.2',quality:{passed:true,repair_audit:{rules_rechecked_at:'now'}}}}});
  assert(checked.includes('Готов к отправке'));
 });
@@ -82,7 +82,7 @@ test('timeout and pending checks are distinct from text violations',()=>{
  const {OwnerRuleStatus}=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx'));
  function status(rules){return renderToStaticMarkup(React.createElement(OwnerRuleStatus,{quality:{owner_rules:{matched:3,passed:false,...rules}}}))}
  const timeout=status({checked:false,technical_error:true,reason:'истекло время проверки',issues:['таймаут'],violations:['Не выполнена подпись ответа']});
- assert(timeout.includes('Сбой проверки правил'));assert(timeout.includes('Замечания к тексту'));assert(timeout.includes('Не выполнена подпись ответа'));
+ assert(timeout.includes('Проверка продолжится в фоне'));assert(timeout.includes('Замечания к тексту'));assert(timeout.includes('Не выполнена подпись ответа'));
  const pending=status({checked:false,issues:['ожидает проверки']});
  assert(pending.includes('Ожидает проверки правил'));assert(!pending.includes('Найдены замечания по правилам'));
  assert(status({checked:true,issues:['не учтена упаковка']}).includes('не учтена упаковка'));

@@ -376,7 +376,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             elif isinstance(error, ValueError) and str(error).startswith('Не удалось установить соединение'):
                 reason = 'сервис модели недоступен или не ответил вовремя'
             result['reason'] = reason
-            result['issues'].append('Не удалось проверить правила: ' + reason + '. Ответ сохранён; повторите подготовку.')
+            result['issues'].append('Ответ сохранён. Проверка правил продолжится автоматически после восстановления сервиса.' if result['technical_error'] else 'Не удалось проверить правила: ' + reason)
     result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules, review)))
     result['violations'] = local_issues(adjusted, rules, review) if result.get('checked') is False else list(result['issues'])
     result['passed'] = not result['issues']

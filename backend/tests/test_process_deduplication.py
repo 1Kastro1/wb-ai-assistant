@@ -43,11 +43,11 @@ def test_recheck_reuses_pending_singleton_but_not_cancelled_or_other_store(clien
         db.add(Job(id='batch',kind='draft_recheck',result={'account_id':'owner','check_only':True,
             'draft_ids':['previous','d'],'cursor':1}));db.commit()
         d,r=db.get(Draft,'d'),db.get(Review,'r')
-        assert enqueue(db,d,r).id=='batch'
+        assert enqueue(db,d,r,manual=True).id=='batch'
         db.get(Job,'batch').cancel_requested=True;db.commit()
-        new=enqueue(db,d,r);db.flush()
+        new=enqueue(db,d,r,manual=True);db.flush()
         assert new.id!='batch'
-        assert enqueue(db,d,r).id==new.id
+        assert enqueue(db,d,r,manual=True).id==new.id
         assert len(list(db.scalars(select(Job))))==2
 
 
@@ -76,7 +76,8 @@ def test_duplicate_checks_reuse_only_current_exact_persisted_success(client,monk
             assert d.quality['owner_rules']['verification_method']=='learned_exact_context'
             for row in db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))):
                 for entry in row.value.values():
-                    texts=[v['answer'] for v in entry.get('variants',[entry])]
+                    from app.learned_reply_templates import _variants
+                    texts=[v['answer'] for v in _variants(entry,db)]
                     assert len(texts)==len(set(texts))
 
 

@@ -110,7 +110,7 @@ def test_check_only_preserves_text_and_keeps_retrying_outages_until_cancelled(cl
     calls = [0]
     async def check(answer, *args, **kwargs):
         assert kwargs['check_only'] is True
-        assert kwargs['check_seconds'] == (45 if calls[0] == 0 else 180)
+        assert kwargs['check_seconds'] == 120
         calls[0] += 1
         return answer, {'passed': passed, 'checked': passed, 'technical_error': not passed,
                         'matched': 1, 'violations': [], 'issues': [] if passed else ['таймаут']}
@@ -123,7 +123,7 @@ def test_check_only_preserves_text_and_keeps_retrying_outages_until_cancelled(cl
         assert draft.quality['passed'] is passed
         assert job.status == ('completed' if passed else 'queued')
         if not passed:
-            assert job.result['check_retries'] == 12
+            assert job.result['cycles'] == 12
             assert 0 < job.result['retry_at']-time.time() <= 300
             job.cancel_requested=True;db.commit()
     if not passed:
@@ -144,7 +144,7 @@ def test_outage_in_scan_gets_independent_retry_and_does_not_block_next_review(cl
     from sqlalchemy import select
     with Session() as db:
         assert db.get(Job,'scan').result['cursor_id']=='d'
-        retry=db.scalar(select(Job).where(Job.result['retry_draft_id'].as_string()=='d'))
+        retry=db.scalar(select(Job).where(Job.result['technical_scan'].as_boolean()==True))
         assert retry and retry.id!='scan' and retry.status=='queued'
         assert db.get(Draft,'d').text=='Добрый день! Спасибо за отзыв.'
 
@@ -187,7 +187,7 @@ def test_manual_click_resumes_backoff_without_duplicate_or_approval(client, monk
     async def no_work(): pass
     monkeypatch.setattr(main, 'run_job_queue', no_work)
     with Session() as db:
-        job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r'))
+        job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r'), 'owner', manual=True)
         job.result = {**job.result, 'retry_at': time.time() + 300, 'check_retries': 9}
         jid = job.id
         db.commit()
@@ -215,7 +215,7 @@ def test_manual_click_does_not_restart_running_check(client, monkeypatch):
     with Session() as db:
         job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r'))
         job.status = 'running'
-        job.result = {**job.result, 'started_at': 'original-start'}
+        job.result = {**job.result, 'started_at': 'original-start', 'current_draft_id': 'd'}
         jid = job.id
         db.commit()
     assert client.post('/drafts/d/recheck-rules').json()['id'] == jid

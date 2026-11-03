@@ -10,9 +10,9 @@ export function OwnerRuleStatus({quality}:{quality:Row}){
  if(!rules?.matched)return null;
  const technical=rules.technical_error||rules.status==='error';
  const pending=!rules.passed&&!technical&&(rules.status==='pending'||rules.checked===false);
- const label=rules.passed?'Правила магазина выполнены':technical?'Сбой проверки правил':pending?'Ожидает проверки правил':'Найдены замечания по правилам';
+ const label=rules.passed?'Правила магазина выполнены':technical?'Проверка продолжится в фоне':pending?'Ожидает проверки правил':'Найдены замечания по правилам';
  const defects=rules.violations||(technical||pending?[]:rules.issues||[]);
- return <div className={rules.passed?'muted':'orange'} role="status"><p>{label} · Правил: {rules.matched}</p>{technical?<p>Текст сохранён. {rules.reason||'Сервис проверки не ответил.'} Ошибка проверки не означает, что ответ нарушает правила; публикация требует успешной проверки.</p>:pending?<p>Подтверждение всех правил ещё не получено. Сохранённый ответ не потерян.</p>:null}{!rules.passed&&defects.length>0&&<div><b>Замечания к тексту</b><ul>{defects.map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul></div>}</div>;
+ return <div className={rules.passed?'muted':'orange'} role="status"><p>{label} · Правил: {rules.matched}</p>{technical?<p>Текст сохранён. Проверка правил продолжится автоматически; публикация начнётся после успешной проверки.</p>:pending?<p>Подтверждение всех правил ещё не получено. Сохранённый ответ не потерян.</p>:null}{!rules.passed&&defects.length>0&&<div><b>Замечания к тексту</b><ul>{defects.map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul></div>}</div>;
 }
 
 export function GenerationProgress({phase='running'}:{phase?:string}={}){
@@ -37,7 +37,7 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   const checkWaiting=checking&&Number(ruleCheckJob?.result?.retry_at||0)*1000>Date.now();
   const checkLabel=ruleCheckJob?.status==='running'?'Проверяем правила…':checkWaiting?'Повторить сейчас':'Проверка в очереди';
   const personal=r.rating<=3||r.manual||r.risk!=='NORMAL';
-  const status=r.is_answered?(remotePending?'На модерации Ozon':remoteUnknown?'Статус ответа уточняется':'Отправлено'):generating?'Готовится':checking&&!checkWaiting?checkLabel:generationError?'Нужно повторить':r.status==='answer_rejected'?'Ответ отклонён Ozon':!r.draft?'Нужен ответ':technical&&!personal?'Сбой проверки правил':needsCheck?'Нужна проверка':'Готов к отправке';
+  const status=r.is_answered?(remotePending?'На модерации Ozon':remoteUnknown?'Статус ответа уточняется':'Отправлено'):generating?'Готовится':checking&&!checkWaiting?checkLabel:generationError?'Нужно повторить':r.status==='answer_rejected'?'Ответ отклонён Ozon':!r.draft?'Нужен ответ':technical&&!personal?'Проверка продолжится в фоне':needsCheck?'Нужна проверка':'Готов к отправке';
   const reason=r.is_answered?(remotePending?'Ozon ещё не подтвердил публикацию ответа':remoteUnknown?'Нужно получить комментарий продавца из Ozon; повторная отправка не запускается':'Ответ уже опубликован'):generating?'Текущий текст сохраняется до завершения':generationError||(!r.draft?'Подготовьте черновик':r.rating<=3?'Низкая оценка: проверьте ответ перед отправкой':r.manual?'Опасный симптом: нужна личная проверка':q.issues?.join('; ')||'Перед отправкой проверьте текст');
   const blocked=busy||generating||!canManage||!assistantEnabled||dirty;
   const retryLabel=/ещё готовится|ожидание|задание сохранено/.test(generationError)?'Продолжить ожидание':'Повторить попытку';

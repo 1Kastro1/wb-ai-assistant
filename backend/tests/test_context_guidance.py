@@ -75,7 +75,7 @@ def test_failed_rule_check_keeps_useful_guidance_and_durable_retry(client,monkey
         result=asyncio.run(services.generate_draft(db,'timeout-r'))
         assert 'дефлекторе' in result['text'] and not result['quality']['passed']
         assert result['quality']['owner_rules']['technical_error']
-        assert db.scalar(select(Job).where(Job.kind=='draft_recheck',Job.result['retry_draft_id'].as_string()==result['id']))
+        assert db.scalar(select(Job).where(Job.kind=='draft_recheck',Job.result['technical_scan'].as_boolean()==True,Job.result['account_id'].as_string()=='owner'))
 
 
 def test_background_repair_preserves_manual_edits_published_slots_and_originals(client):
@@ -96,6 +96,6 @@ def test_background_repair_preserves_manual_edits_published_slots_and_originals(
         for did in ('manual','sent'):
             assert db.get(Draft,did).text==GENERIC and db.get(Draft,did).revision==7
         assert db.get(Job,jid).result['changed']==1
-        assert db.scalar(select(Job).where(Job.result['retry_draft_id'].as_string()=='bad'))
+        assert db.scalar(select(Job).where(Job.result['technical_scan'].as_boolean()==True,Job.result['account_id'].as_string()=='owner'))
     asyncio.run(repair.step(jid))
     with Session() as db: assert db.get(Draft,'bad').revision==8

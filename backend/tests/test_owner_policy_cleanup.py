@@ -124,7 +124,7 @@ def test_policy_scan_preserves_edits_ignores_published_and_resumes(client, monke
         db.commit()
     monkeypatch.setattr(services, 'assess_reply', lambda *a, **kw: {'passed':True, 'issues':[], 'score':99})
     async def check(answer, *args, **kwargs):
-        assert kwargs['check_only'] and kwargs['check_seconds'] == 45
+        assert kwargs['check_only'] and kwargs['check_seconds'] == 120
         return answer, {'passed':True, 'checked':True, 'matched':0, 'issues':[], 'violations':[]}
     monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
     asyncio.run(recheck_step('scan'))

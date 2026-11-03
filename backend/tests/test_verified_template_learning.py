@@ -72,3 +72,29 @@ def test_failed_recheck_never_enters_library(client,monkeypatch):
     asyncio.run(recheck_step(jid))
     with Session() as db:
         assert not list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+
+
+def test_template_body_is_shared_across_contexts_and_legacy_duplicates_compact(client):
+    import time
+    from app.learned_reply_templates import remember_template,compact_library,_variants
+    with Session() as db:jid,answer=seed(db)
+    asyncio.run(recheck_step(jid))
+    with Session() as db:
+        r,p,d=db.get(Review,'first'),db.get(Product,'p'),db.get(Draft,'saved')
+        rules=matching_owner_rules(db,p);facts=services.review_verified_facts(db,r,p,rules)
+        for text in ('Все отлично!','Все супер!','Класс!'):
+            r.text=text
+            assert remember_template(db,r,p,rules,facts,d)
+        db.add(Setting(key='verified-replies:legacy',value={'old':{'answer':answer,'at':time.time(),
+            'verdict':d.quality['owner_rules'],'variants':[
+                {'answer':answer,'at':time.time(),'verdict':d.quality['owner_rules']},
+                {'answer':'  '+answer+'  ','at':time.time(),'verdict':d.quality['owner_rules']}]}}))
+        db.flush();result=compact_library(db);db.commit()
+        bodies=[entry['answer'] for row in db.scalars(select(Setting).where(Setting.key.startswith('verified-texts:'))) for entry in row.value.values()]
+        assert bodies==[answer] and result['unique_templates']==1
+        for row in db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))):
+            for entry in row.value.values():
+                assert 'answer' not in entry
+                assert len(_variants(entry,db))==1
+        assert load_template(db,r,p,rules,facts,lambda value:{'passed':True})[0]==answer
+        assert not load_template(db,r,p,rules+['Новое правило'],facts,lambda value:{'passed':True})
