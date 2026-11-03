@@ -60,6 +60,15 @@ test('generation retains text and disables editor',()=>{const html=render({gener
 test('recoverable waiting failure retains text and offers continuation',()=>{const html=render({generationError:'Ответ ещё готовится на сервере.'});assert(html.includes('Продолжить ожидание'));assert(html.includes('Спасибо за оценку!'));assert(html.includes('Предыдущий ответ сохранён'))});
 test('terminal failure has a retry action',()=>{assert(render({generationError:'Не удалось завершить подготовку.'}).includes('Повторить попытку'))});
 test('published review offers no regeneration or save',()=>{const html=render({review:{is_answered:true,existing_answer:'Опубликованный ответ'}});assert(html.includes('Отправлено'));assert(!html.includes('Новый вариант'));assert(!html.includes('Сохранить</button>'))});
+test('missing remote answer names its actual marketplace without a promised unsupported sync',()=>{
+ for(const [marketplace,name] of [['wb','Wildberries'],['yandex','Яндекс Маркета'],['ozon','Ozon']]){
+  const html=render({generationError:'Открыть',review:{marketplace,is_answered:true,existing_answer:''}});
+  assert(html.includes('Текст ответа пока не загружен из '+name));
+  assert(!html.includes('Сверка загрузит'));
+  if(marketplace!=='ozon')assert(!html.includes('Ozon'));
+  assert(html.includes('Повторная отправка не запускается'));
+ }
+});
 test('rule verification status distinguishes checked and unverified answers',()=>{
  for(const passed of [true,false]){
   const html=render({generationError:'Откройте ответ',review:{draft:{text:'Добрый день! Спасибо за отзыв.',revision:2,quality:{passed,owner_rules:{matched:3,passed}},edits:[]}}});
