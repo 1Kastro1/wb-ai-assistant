@@ -168,6 +168,15 @@ def product_usage_reply(review, product, facts, revision=0):
         return positive_review_reply(review, product, revision)
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     text = review.text.lower().replace('ё', 'е')
+    if ('SLIPPERY_SURFACE' in complaints and 'кож' in name
+            and not complaints - {'NO_RESULT', 'SLIPPERY_SURFACE'}):
+        thanks = ('Спасибо за отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.')[int(revision) % 3]
+        concern = 'лосьон не дал ожидаемого результата очистки и после обработки кожа стала скользкой' if 'NO_RESULT' in complaints else 'после обработки кожа стала скользкой'
+        instruction = usage_excerpt(facts)
+        advice = ('По инструкции производителя именно этого средства: ' + instruction if instruction else
+                  'Для проверки применения уточните, пожалуйста, тип кожи и способ нанесения средства. '
+                  'Без инструкции именно этого состава нельзя рекомендовать дозировку или способ удаления остатков.')
+        return 'Здравствуйте! ' + thanks + ' Сожалеем, что ' + concern + '. ' + advice
     if analysis.get('resolved') and re.search(r'одобрил\w*\s+возврат', text):
         from .reply_policy import contextual_complaint_reply
         return contextual_complaint_reply(analysis, revision)

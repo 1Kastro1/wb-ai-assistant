@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '4.2'
+QUALITY_EVALUATOR_VERSION = '4.3'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -524,9 +524,9 @@ def assess_reply(review, product, reply, verified_facts=None):
         elif any(x in lowered for x in ('ближе к потоку воздуха', 'аромат будет ощущаться лучше')):
             score = min(score, 80)
             issues.append('не предлагать решение проблемы, которой покупатель не описал')
-    if review.rating >= 4 and analysis['sentiment'] != 'mixed' and intent in ('WRONG_ITEM','MISSING_PARTS','DAMAGED_ITEM','FITMENT_PROBLEM','NO_RESULT','ODOR_COMPLAINT','WEAK_SCENT','DESCRIPTION_MISMATCH','PACKAGING_ISSUE','DELIVERY_ISSUE'):
-        score = min(score, 80)
-        issues.append('оценка и текст отзыва противоречат друг другу — проверьте тон вручную')
+    # Stars describe the rating, not the meaning of the buyer's words. Judge
+    # the answer against all reported complaints even on a five-star review.
+    rating_text_mismatch = review.rating >= 4 and bool(analysis['complaints'])
     if review.rating <= 2 and intent == 'POSITIVE_EXPERIENCE':
         score = min(score, 80)
         issues.append('оценка и текст отзыва противоречат друг другу — проверьте тон вручную')
@@ -543,6 +543,7 @@ def assess_reply(review, product, reply, verified_facts=None):
             breakdown['relevance']['score'] = 0
     return {
         'score': min(100, score), 'passed': score >= MIN_DRAFT_QUALITY and not issues,
+        'rating_text_mismatch': rating_text_mismatch,
         'issues': list(dict.fromkeys(issues)), 'text_issues': list(dict.fromkeys(issues)), 'breakdown': breakdown,
         'intent': intent, 'intent_label': 'недовольство результатом и неприятный запах' if combined_cleaner_complaint and any(x in review.text.lower() for x in ('воня', 'запах', 'аромат', 'пах')) else INTENT_LABELS.get(intent, INTENT_LABELS['GENERAL']),
         'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION,
@@ -926,18 +927,36 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     verified_facts = review_verified_facts(db, review, product, memories)
     context_memories, _ = select_rules(memories, review, product)
     generation_revision = initial_draft.revision if initial_draft else 0
-    from .learned_reply_templates import load_template, remember_template
+    from .learned_reply_templates import load_template, remember_template, similar_candidate, same_answer
+    from .owner_reply_policy import apply_local_preferences, apply_signature
+    def formatted(value):
+        value, _ = apply_local_preferences(value, review, memories)
+        return validate_reply(mask_vin(apply_signature(value, memories)))
+    try:
+        previous_text = formatted(initial_draft.text) if initial_draft else ''
+    except ValueError:
+        # An invalid old draft is a reason to repair it, not to block a new one.
+        previous_text = initial_draft.text
     learned = load_template(db, review, product, memories, verified_facts,
-        lambda value: assess_reply(review, product, value, verified_facts)) if not requested_instruction.strip() and not initial_draft else None
+        lambda value: assess_reply(review, product, value, verified_facts), previous=previous_text) if not requested_instruction.strip() else None
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
+    if local_positive and initial_draft:
+        # Built-in praise already rotates instantly and receives a fresh local
+        # verdict. Keep that route rather than alternating older library items.
+        learned = None
     if fast_only and not local_positive and not learned:
         raise FastPathUnavailable('Нужна дополнительная проверка правил')
     rule_candidates = []
     for offset in range(3):
         candidate = rule_reply(review, product, generation_revision + offset, verified_facts)
+        if candidate and initial_draft and not specific_case and review.risk == 'NORMAL':
+            # Some fact-bound scenarios have one immutable instruction body.
+            # Rotate courtesy wording without changing that verified content.
+            thanks = ('Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.')[(generation_revision + offset) % 3]
+            candidate = re.sub(r'(?:Спасибо|Благодарим)[^.!?]*[.!?]', lambda match: thanks, candidate, count=1, flags=re.I)
         if candidate and candidate not in rule_candidates:
-            rule_candidates.append(validate_reply(mask_vin(candidate)))
-    rule_candidates = fresh_reply_variants(rule_candidates, initial_draft.text if initial_draft else '')
+            rule_candidates.append(formatted(candidate))
+    rule_candidates = fresh_reply_variants(rule_candidates, previous_text)
     reply = max(rule_candidates, key=lambda value: assess_reply(review, product, value, verified_facts)['score']) if rule_candidates else None
     previous_quality = (initial_draft.quality or assess_reply(review, product, initial_draft.text, verified_facts)) if initial_draft else None
     # "Generate again" must not re-run the same non-critical deterministic template.
@@ -970,6 +989,12 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if learned:
         reply, forced_model = learned[0], 'verified-template-1.0'
         selection_note = 'Использован успешно проверенный ответ для совпавшего контекста и текущих правил'
+    elif not requested_instruction.strip():
+        candidate = similar_candidate(db, review, product, memories, verified_facts,
+            lambda value: assess_reply(review, product, value, verified_facts), previous=previous_text)
+        if candidate:
+            reply, forced_model = candidate, 'learned-candidate-1.0'
+            selection_note = 'Подобран проверенный пример похожей жалобы; для нового отзыва правила проверяются заново'
     web_search_failed = False
     model_outage = False
     if reply and 'короче' in instruction.lower():
@@ -1068,7 +1093,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
                     {'role': 'user', 'content': f'Напиши новый безопасный ответ с качеством не ниже {MIN_DRAFT_QUALITY}/100. Исправь замечания: ' + '; '.join(issues or ['сделать ответ конкретнее']) + '. Не используй запрещённые обещания; давай советы по применению только из verified_usage_instruction и verified_facts. Верни только ответ.'},
                 ]
         model_seconds = time.monotonic() - model_started
-        fallback = validate_reply(safe_fallback_reply(review, product, generation_revision, verified_facts))
+        fallbacks = [formatted(safe_fallback_reply(review, product, generation_revision + offset, verified_facts)) for offset in range(3)]
+        fallback = max(fresh_reply_variants(fallbacks, previous_text),
+            key=lambda value: assess_reply(review, product, value, verified_facts)['score'])
         fallback_quality = assess_reply(review, product, fallback, verified_facts)
         candidates_evaluated = len(valid_candidates)
         if best_reply is None or fallback_quality['score'] > best_quality['score']:
@@ -1096,12 +1123,16 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             lambda value: assess_reply(review, product, value, verified_facts),
             protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
             local_only=fast_only, defer_semantic=model_outage,
-            check_seconds=8 if (isinstance(recovery, dict) and recovery.get('policy_regeneration')) or model.startswith('safety-rules') and review_intent(review.text) in structured_intents else None)
+            check_seconds=8 if isinstance(recovery, dict) and recovery.get('policy_regeneration') else None)
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
     # requires a current, successful owner-rule verdict.
     quality = attach_rule_quality(assess_reply(review, product, reply, verified_facts), rule_quality)
+    if initial_draft and review.risk == 'NORMAL' and not specific_case and same_answer(formatted(reply), previous_text):
+        # An unchanged fallback or verifier rewrite is not a new variant. Keep
+        # the existing draft/revision/verdict instead of reporting fake success.
+        raise ValueError('Новый вариант не получен: предыдущий текст сохранён. Попробуйте задать, что изменить в ответе.')
     quality['candidates_evaluated'] = candidates_evaluated
     quality['selection_note'] = selection_note
     quality['analysis_summary'] = f'Определена ситуация: {quality["intent_label"]}. Ответ проверен на безопасность, соответствие отзыву, полезность и повторы. Правил магазина в контексте: {len(memories)}.'
