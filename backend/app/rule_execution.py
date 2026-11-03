@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2026-11-02-warm-rating'
+VERSION = 'context-rules-2026-11-03-text-before-rating'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 

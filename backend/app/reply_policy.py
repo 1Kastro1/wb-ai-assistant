@@ -30,7 +30,7 @@ def strip_other_product_comparisons(text):
 
 def weak_cleaning_result(text):
     value = ' '.join((text or '').lower().replace('ё', 'е').split())
-    for match in re.finditer(r'(?<!\w)(?:слабо|плохо|неважно|почти не|не)\s+(?:смыва\w*|отмыва\w*|очища\w*|удаля\w*|справля\w*)', value):
+    for match in re.finditer(r'(?<!\w)(?:слабо|плохо|неважно|почти не|не)\s+(?:смыва\w*|отмыва\w*|очища\w*|чистит|чистят|чистил\w*|удаля\w*|справля\w*)', value):
         if not re.search(r'(?<!\w)не\s*$', value[:match.start()]): return True
     return False
 
@@ -105,6 +105,7 @@ COMPLAINT_PATTERNS = {
     'PACKAGING_ISSUE': ('упаковка поврежд', 'упаковка помят', 'коробка помят', 'плохо упакован', 'упаковали плохо', 'упаковка вскрыт', 'крышка без заводской защиты', 'одета криво'),
     'LEAKAGE': ('протек', 'потек', 'протеч', 'вытек', 'утек'),
     'RESIDUE': ('белые разводы', 'жирный слой', 'вазелиновое состояние'),
+    'SLIPPERY_SURFACE': ('ужасно скользит', 'очень скользит', 'стала скользкой', 'стал скользким', 'скользкая кожа'),
     'DESCRIPTION_MISMATCH': ('не соответствует описанию', 'не как на фото', 'отличается от описания', 'характеристики не совпадают'),
     'FITMENT_PROBLEM': ('не подошел', 'не подходит', 'несовместим'),
     'NO_RESULT': ('нет результата', 'не увидела результата', 'не увидел результата', 'не помог', 'не очищает', 'не очистил', 'не отмыл', 'бесполезн', 'деньги на ветер', 'толку нет'),
@@ -125,6 +126,7 @@ TOPIC_WORDS = {
     'PACKAGING_ISSUE': ('упаков', 'коробк'),
     'LEAKAGE': ('протеч', 'протек', 'потек'),
     'RESIDUE': ('развод', 'жирный слой'),
+    'SLIPPERY_SURFACE': ('скольз',),
     'DESCRIPTION_MISMATCH': ('описан', 'характеристик', 'производител', 'маркиров'),
     'FITMENT_PROBLEM': ('совместим', 'подбор', 'подош', 'подход'),
     'NO_RESULT': ('результат', 'эффект', 'очищ', 'очист', 'применен', 'инструкц'),
@@ -142,6 +144,7 @@ COMPLAINT_LABELS = {
     'MISSING_PARTS':'недостача или комплектация', 'DAMAGED_ITEM':'повреждение товара',
     'QUALITY_ISSUE':'неисправность или качество', 'PACKAGING_ISSUE':'состояние упаковки',
     'LEAKAGE':'протечка', 'RESIDUE':'следы и разводы', 'DESCRIPTION_MISMATCH':'несоответствие описанию',
+    'SLIPPERY_SURFACE':'скользкая поверхность после применения',
     'FITMENT_PROBLEM':'деталь не подошла', 'NO_RESULT':'нет результата',
     'ODOR_COMPLAINT':'неприятный запах', 'WEAK_SCENT':'слабый аромат',
     'DIM_LIGHT':'тусклый свет', 'DELIVERY_ISSUE':'проблема с доставкой',
@@ -253,7 +256,7 @@ def semantic_reply_issues(review, product, reply):
             issues.append('не извиняться за неописанную протечку' if kind == 'LEAKAGE' else 'не придумывать повреждение упаковки')
     if buyer.strip() and not analysis['complaints'] and analysis['sentiment'] == 'positive' and re.search(r'жаль|сожале|извин|не оправдал|не подош[её]л|не понравил|разочар', text):
         issues.append('не трактовать положительный отзыв как жалобу')
-    if analysis['complaints'] and analysis['sentiment'] == 'negative' and re.search(r'рады, что (?:покупка|товар|аромат).*понравил', text):
+    if analysis['complaints'] and re.search(r'рады, что (?:покупка|товар|аромат).*понравил', text):
         issues.append('не благодарить за довольство при жалобе')
     if 'аромат вам понравился' in text and 'аромат Вам понравился' not in positive_detail(buyer):
         issues.append('не приписывать покупателю положительное впечатление об аромате')
@@ -310,6 +313,7 @@ def contextual_complaint_reply(analysis, revision=0):
         'PACKAGING_ISSUE': 'упаковка пришла в ненадлежащем состоянии',
         'LEAKAGE': 'средство протекло',
         'RESIDUE': 'после применения остались разводы',
+        'SLIPPERY_SURFACE': 'после применения поверхность стала скользкой',
         'DESCRIPTION_MISMATCH': 'полученный товар отличается от описания',
         'FITMENT_PROBLEM': 'товар не подошёл',
         'NO_RESULT': 'применение не дало ожидаемого результата',
