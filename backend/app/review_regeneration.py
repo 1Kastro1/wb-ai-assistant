@@ -125,6 +125,8 @@ async def lane(job_id,name,session_factory,limit):
                     from .db import Product
                     product=db.get(Product,review.product_id);rules=matching_owner_rules(db,product)
                     remember_template(db,review,product,rules,review_verified_facts(db,review,product,rules),draft)
+                    from .generation_control import record_usage
+                    record_usage(db,job_id,rid,'reused',updated=False)
                     category='generated'
                 else:
                     token=batch_context.set({'job_id':job_id,'policy_regeneration':True})
@@ -154,7 +156,7 @@ async def lane(job_id,name,session_factory,limit):
                 db.commit();return  # No cursor advance and no lost failed review.
             if category:
                 db.merge(GenerationOutcome(job_id=job_id,review_id=rid,attention=category=='attention',category=category))
-            job.result={**job.result,name+'_cursor':position,name+'_retry_at':0,'last_served_at':now()}
+            job.result={**job.result,name+'_cursor':position,name+'_retry_at':0,'last_served_at':now(),'last_progress_at':now()}
             db.commit()
         await asyncio.sleep(0)
         if time.monotonic()-started>=30:return

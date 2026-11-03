@@ -2114,10 +2114,12 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
     ids = [s.id for s in db.scalars(select(StoreProfile)) if not store_id or s.id == store_id]
     if not ids:
         return {'items': [], 'total': 0, 'limit': limit, 'offset': offset}
+    from .attention_queue import personal_condition
+    queue_schedule=normalize_schedule(setting(db,'automation_schedule',{}))
     conditions = [Review.wb_account_id.in_(ids), Review.is_answered == False]
     if kind:
         conditions.append(Review.marketplace.like('%_question') if kind == 'questions' else ~Review.marketplace.like('%_question'))
-    if view not in ('all', 'recent', 'backlog', 'manual', 'technical', 'pending', 'ready', 'missing'):
+    if view not in ('all', 'recent', 'backlog', 'manual', 'attention', 'technical', 'pending', 'ready', 'missing'):
         raise HTTPException(422, 'Неизвестный вид очереди')
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     draft_exists = select(Draft.id).where(Draft.review_id == Review.id).correlate(Review).exists()
@@ -2130,6 +2132,12 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
         conditions.append((Review.manual == True) | (Review.risk != 'NORMAL') |
                           ((Review.status == 'manual_review') & ~draft_exists) |
                           ((~Review.marketplace.like('%_question')) & (Review.rating <= 3)) | draft_attention)
+    if view == 'attention':
+        from .attention_queue import personal_condition
+        schedule=normalize_schedule(setting(db,'automation_schedule',{}))
+        conditions.append(select(Draft.id).where(Draft.review_id==Review.id,personal_condition(schedule)).correlate(Review).exists() |
+            (Review.manual==True) | (Review.risk!='NORMAL') | (Review.safety_critical==True) |
+            ((Review.status=='manual_review') & ~draft_exists))
     if view in ('technical', 'pending'):
         flag = Draft.quality_technical if view == 'technical' else Draft.quality_pending
         conditions.append(select(Draft.id).where(Draft.review_id == Review.id, flag == True).correlate(Review).exists())
@@ -2137,15 +2145,18 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
     if view == 'ready': conditions.extend([Review.manual == False, Review.status == 'draft_ready', select(Draft.id).where(Draft.review_id == Review.id, Draft.quality_passed == True).correlate(Review).exists()])
     limit, offset = min(100, max(1, limit)), max(0, offset)
     total = db.scalar(select(func.count()).select_from(Review).where(*conditions)) or 0
-    rows = db.execute(select(Review, Product.name, StoreProfile.name, StoreProfile.provider, Draft.id, Draft.quality, manual_review_condition()).join(Product, Product.id == Review.product_id).join(StoreProfile, StoreProfile.id == Review.wb_account_id).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions).order_by(Review.manual.desc(), Review.created_at.desc(), Review.id).offset(offset).limit(limit)).all()
-    return {'items': [{'id': review.id, 'store_id': review.wb_account_id, 'store_name': name, 'provider': provider,
+    rows = db.execute(select(Review, Product.name, StoreProfile.name, StoreProfile.provider, Draft.id, Draft.quality, personal_condition(queue_schedule)).join(Product, Product.id == Review.product_id).join(StoreProfile, StoreProfile.id == Review.wb_account_id).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions).order_by(Review.manual.desc(), Review.created_at.desc(), Review.id).offset(offset).limit(limit)).all()
+    from .attention_queue import automatic_publication
+    queue_schedule=normalize_schedule(setting(db,'automation_schedule',{}))
+    return {'items': [{'auto_publication':automatic_publication(queue_schedule,provider,review.marketplace.endswith('_question'),review.rating),
+                       'id': review.id, 'store_id': review.wb_account_id, 'store_name': name, 'provider': provider,
                        'kind': 'questions' if review.marketplace.endswith('_question') else 'reviews',
                        'product': product, 'text': review.text, 'rating': review.rating, 'created_at': review.created_at,
                        'manual': bool(requires_manual), 'status': review.status, 'has_draft': draft_id is not None,
                        'draft_id': draft_id,
                        'verification_state': ('technical' if (quality or {}).get('owner_rules', {}).get('technical_error') or (quality or {}).get('owner_rules', {}).get('status') == 'error' else 'pending' if (quality or {}).get('owner_rules', {}).get('status') == 'pending' or (quality or {}).get('owner_rules', {}).get('checked') is False else 'passed' if (quality or {}).get('passed') else 'attention'),
                        'verification_passed': bool((quality or {}).get('passed')),
-                       'reasons': list(dict.fromkeys(([{'HIGH': 'Описан опасный симптом', 'CAUTION': 'Шум или скрип требуют внимания'}.get(review.risk, 'Отмечено для ручной проверки')] if review.manual else []) + list((quality or {}).get('issues') or [])))[:5]}
+                       'reasons': list(dict.fromkeys(([{'HIGH': 'Описан опасный симптом', 'CAUTION': 'Шум или скрип требуют внимания'}.get(review.risk, 'Отмечено для ручной проверки')] if review.manual else []) + list((quality or {}).get('issues') or ([] if not requires_manual else ['Нужно личное решение: проверьте содержание отзыва и сохранённый ответ.']))))[:5]}
                       for review, product, name, provider, draft_id, quality, requires_manual in rows],
             'total': total, 'limit': limit, 'offset': offset}
 

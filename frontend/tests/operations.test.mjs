@@ -5,6 +5,7 @@ test('a saved draft is never presented as verified without a passed verdict',()=
  assert.equal(draftState({has_draft:true,manual:true,status:'manual_review',verification_passed:true}),'Нужна личная проверка');
  assert.equal(draftState({has_draft:true,status:'draft_ready',verification_passed:false}),'Черновик сохранён · нужна проверка');
  assert.equal(draftState({has_draft:true,status:'draft_ready',verification_passed:true}),'Проверен · ожидает подтверждения');
+ assert.equal(draftState({has_draft:true,status:'manual_review',verification_passed:true,auto_publication:true}),'Проверен · автоматическая выгрузка включена');
 });
 test('notification repetitions group only within one store and retain all events',()=>{
  const groups=notificationGroups([{id:1,store_id:'a',kind:'job_failed',severity:'error',created_at:'2026-01-01',read:true},{id:2,store_id:'b',kind:'job_failed',severity:'error',created_at:'2026-01-02',read:false},{id:3,store_id:'a',kind:'job_failed',severity:'error',created_at:'2026-01-03',read:false}]);

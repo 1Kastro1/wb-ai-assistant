@@ -9,7 +9,7 @@ from .db import Draft, Review, Job, GenerationOutcome
 def recent_generation(db, store_id, minutes=30):
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
     # Old outcomes deliberately have no timestamp: no invented historical rate.
-    saved, verified = db.execute(select(func.count(), func.sum(case((Draft.quality_passed == True, 1), else_=0)))
+    saved, verified = db.execute(select(func.count(func.distinct(GenerationOutcome.review_id)), func.count(func.distinct(case((Draft.quality_passed == True, GenerationOutcome.review_id), else_=None))))
         .select_from(GenerationOutcome).join(Review, Review.id == GenerationOutcome.review_id)
         .outerjoin(Draft, Draft.review_id == Review.id)
         .where(GenerationOutcome.created_at >= cutoff, Review.wb_account_id == store_id,

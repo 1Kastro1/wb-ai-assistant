@@ -186,7 +186,7 @@ async def _recheck_one(job_id, session_factory=Session):
                             'message': 'Ответы сохранены. Следующий проход проверки после восстановления сервиса.'}
                         db.commit(); return
                 job.status, job.progress = 'completed', 100
-                job.result = {**state, 'message': f"Проверено: {state.get('checked', 0)}; подтверждено: {state.get('passed', 0)}. Остальные ответы не одобрены автоматически.", 'updated_at': now()}
+                job.result = {**state, 'message': f"Проверено: {state.get('checked', 0)}; подтверждено: {state.get('passed', 0)}. Остальные ответы не одобрены автоматически.", 'updated_at': now(), 'last_progress_at': now()}
                 db.commit(); return
         else:
             did = ids[cursor] if cursor < len(ids) else None
