@@ -187,9 +187,11 @@ async def _recheck_one(job_id, session_factory=Session):
             if learned:
                 answer, verdict = learned
             else:
+                from .generation_budget import OWNER_RULE_CHECK_SECONDS, MANUAL_RULE_CHECK_SECONDS
                 answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
                     assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
-                    check_seconds=45, check_only=check_only,
+                    check_seconds=MANUAL_RULE_CHECK_SECONDS if state.get('manual_check') else OWNER_RULE_CHECK_SECONDS,
+                    check_only=check_only,
                     allow_fast_positive=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())

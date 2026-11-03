@@ -176,3 +176,75 @@ def test_endpoint_rejects_other_store_and_published_draft(client, monkeypatch):
         db.get(Review, 'r').wb_account_id = 'other'; db.commit()
     assert client.post('/drafts/d/recheck-rules').status_code == 404
 
+
+
+def test_manual_click_resumes_backoff_without_duplicate_or_approval(client, monkeypatch):
+    from app import main
+    from app.queue_policy import next_job
+    seed_error(rating=1)
+    async def no_work(): pass
+    monkeypatch.setattr(main, 'run_job_queue', no_work)
+    with Session() as db:
+        job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r'))
+        job.result = {**job.result, 'retry_at': time.time() + 300, 'check_retries': 9}
+        jid = job.id
+        db.commit()
+    response = client.post('/drafts/d/recheck-rules')
+    assert response.status_code == 200 and response.json()['id'] == jid
+    with Session() as db:
+        job = db.get(Job, jid)
+        assert job.result['retry_at'] == 0 and job.result['manual_check'] is True
+        assert job.result['check_retries'] == 9
+        assert next_job(db).id == jid
+        assert db.get(Draft, 'd').quality['owner_rules']['passed'] is False
+        assert db.get(Draft, 'd').revision == 7
+    compact = client.get('/jobs?compact=true').json()
+    item = next(row for row in compact if row['id'] == jid)
+    assert item['result']['retry_draft_id'] == 'd'
+    assert bool(item['result']['manual_check']) is True
+    assert client.post('/drafts/d/recheck-rules').json()['id'] == jid
+
+
+def test_manual_click_does_not_restart_running_check(client, monkeypatch):
+    from app import main
+    seed_error()
+    async def no_work(): pass
+    monkeypatch.setattr(main, 'run_job_queue', no_work)
+    with Session() as db:
+        job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r'))
+        job.status = 'running'
+        job.result = {**job.result, 'started_at': 'original-start'}
+        jid = job.id
+        db.commit()
+    assert client.post('/drafts/d/recheck-rules').json()['id'] == jid
+    with Session() as db:
+        assert db.get(Job, jid).status == 'running'
+        assert db.get(Job, jid).result['started_at'] == 'original-start'
+
+
+@pytest.mark.parametrize('rating', [1, 2, 3, 4, 5])
+def test_manual_recheck_has_cpu_budget_for_every_rating_without_rewriting(client, monkeypatch, rating):
+    from app import services, owner_reply_policy
+    from app.generation_budget import MANUAL_RULE_CHECK_SECONDS
+    seed_error(rating=rating)
+    with Session() as db:
+        review = db.get(Review, 'r')
+        review.text = 'Делал всё по инструкции. Не работает'
+        review.manual = rating <= 3
+        job = enqueue(db, db.get(Draft, 'd'), review, 'owner', manual=True)
+        jid = job.id
+        db.commit()
+    monkeypatch.setattr(services, 'assess_reply', lambda *a, **k: {'passed': True, 'issues': [], 'score': 96})
+    async def check(answer, review, *args, **kwargs):
+        assert review.rating == rating and review.text == 'Делал всё по инструкции. Не работает'
+        assert kwargs['check_seconds'] == MANUAL_RULE_CHECK_SECONDS == 180
+        assert kwargs['check_only'] is True
+        return answer, {'passed': True, 'checked': True, 'matched': 1, 'issues': [], 'violations': []}
+    monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
+    asyncio.run(recheck_step(jid))
+    with Session() as db:
+        draft, review = db.get(Draft, 'd'), db.get(Review, 'r')
+        assert draft.text == 'Добрый день! Спасибо за отзыв.' and draft.revision == 7 and draft.edits == []
+        assert review.manual == (rating <= 3)
+        assert not review.is_answered
+        assert db.get(Job, jid).status == 'completed'

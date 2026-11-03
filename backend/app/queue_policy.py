@@ -41,7 +41,8 @@ def queue_ordering():
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (Job.result['retry_draft_id'].as_string().is_not(None), 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)
-    requested_check = case((Job.result['retry_draft_id'].as_string().is_not(None), Job.created_at), else_='')
+    requested_check = case((Job.result['retry_draft_id'].as_string().is_not(None),
+        func.coalesce(Job.result['requested_check_at'].as_string(), Job.created_at)), else_='')
     return (interactive, requested_check.desc(), served, Job.priority, Job.created_at, Job.id)
 
 
