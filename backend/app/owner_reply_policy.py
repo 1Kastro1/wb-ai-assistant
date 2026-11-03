@@ -51,9 +51,13 @@ def _parsed_constraints(rules):
     for rule in rules:
         for clause in _clauses(rule):
             lower = clause.lower().replace('ё', 'е')
-            alternatives = re.fullmatch(r'Допустимые приветствия:\s*«([^»]+)»\s+или\s+«([^»]+)»', clause, re.I)
+            alternatives = re.match(r'(?:Допустимые приветствия:\s*|Приветствие:\s*|Начинай с\s*)«([^»]+)»\s+или\s+«([^»]+)»', clause, re.I)
             if alternatives:
                 result['greetings'] = list(dict.fromkeys(alternatives.groups()))
+                # Keep any remaining instruction for the semantic checker.
+                remainder = clause[alternatives.end():].strip(' ,:')
+                if remainder and remainder.lower() not in ('оба допустимы', 'оба варианта допустимы'):
+                    result['semantic'].append(remainder)
                 continue
             if re.search(r'не\s+(?:прос\w*|треб\w*)[^.!?]{0,30}(?:фото|видео)', lower):
                 result['no_photos'] = True
@@ -203,7 +207,7 @@ def local_issues(reply, rules, review=None):
         issues.append('Не направлять через полученный заказ')
     if config['no_reask'] and review is not None and has_redundant_clarification(reply, review.text):
         issues.append('Не переспрашивать уже описанную проблему')
-    if any('одну благодарность' in rule.lower() for rule in rules):
+    if any(re.search(r'одн[ау]\s+благодарность|не\s+повторяй\s+благодарность', rule, re.I) for rule in rules):
         if len(re.findall(r'\b(?:спасибо|благодарим|благодарю|благодарны)\b', reply, re.I)) > 1:
             issues.append('Использовать одну благодарность без повторов')
     if rules and review is not None and not (getattr(review, 'marketplace', '') or '').endswith('_question'):

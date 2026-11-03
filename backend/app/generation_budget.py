@@ -2,7 +2,9 @@ import asyncio
 
 
 MODEL_GENERATION_SECONDS = 30
-OWNER_RULE_CHECK_SECONDS = 45
+# The CPU deployment needs more than 45 seconds to prefill the complete owner
+# policy. Keep a bounded deadline shared by checking, repair and recheck.
+OWNER_RULE_CHECK_SECONDS = 120
 
 
 class GenerationBudget:

@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '4.3'
+QUALITY_EVALUATOR_VERSION = '4.4'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -134,6 +134,7 @@ def _addresses_review_topic(review_text, reply_text):
     review_value = review_text.lower().replace('ё', 'е')
     reply_value = reply_text.lower().replace('ё', 'е')
     topic_groups = (
+        (('позже дам', 'позже дополню', 'позже напишу', 'не пробовал', 'не использовал', 'не проверял', 'на вид'), ('впечатлениям после использования',)),
         (('очистител', 'чистит', 'чистят', 'отмыл', 'пятн', 'гудрон', 'смол'), ('очист', 'загряз', 'пятн', 'гудрон', 'смол')),
         (('установ', 'встал', 'подходит'), ('установ', 'подош', 'подбор')),
         (('упаков', 'короб'), ('упаков', 'короб')),
