@@ -65,6 +65,8 @@ def enqueue_generation(db, schedule, store, kind, current):
         return False
     result = {'account_id': store.id, 'scheduled': True,
               'message': 'Плановая подготовка ответов на вопросы' if kind == 'question_drafts' else 'Плановая подготовка ответов на отзывы'}
+    if refreshing:
+        result.update(fresh_reviews=True,last_served_at='')
     if kind == 'drafts':
         result['since'] = (datetime.fromtimestamp(current, timezone.utc)-timedelta(days=1)).isoformat() if refreshing else '' if schedule.get('drafts_all_history') else (datetime.fromtimestamp(current, timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     db.add(Job(id=str(uuid4()), kind=kind, priority=250, result=result))

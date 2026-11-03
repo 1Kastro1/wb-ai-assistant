@@ -3,9 +3,9 @@ import asyncio
 import time
 from uuid import uuid4
 from contextvars import ContextVar
-from sqlalchemy import delete, update
+from sqlalchemy import delete, update, select
 from sqlalchemy.exc import IntegrityError
-from .db import Session, GenerationClaim, GenerationOutcome
+from .db import Session, GenerationClaim, GenerationOutcome, Job, now
 
 batch_context = ContextVar('batch_generation_context', default=None)
 
@@ -13,11 +13,27 @@ batch_context = ContextVar('batch_generation_context', default=None)
 def record_outcome(db, review, draft):
     context = batch_context.get()
     if context:
+        record_usage(db,context['job_id'],review.id,
+            'template' if (draft.model or '').startswith(('verified-template','learned-candidate')) else
+            'model' if (draft.quality or {}).get('timing',{}).get('route')=='model' else 'local',
+            updated=(draft.revision or 1)>1)
         db.merge(GenerationOutcome(job_id=context['job_id'], review_id=review.id,
                                    attention=review.status == 'manual_review'))
         if context.get('requested_by'):
             draft.created_by = draft.created_by or context['requested_by']
             draft.updated_by = context['requested_by']
+
+
+def record_usage(db,job_id,review_id,route,*,updated=False):
+    # Same transaction as the saved draft/outcome. A replay never increments it.
+    job=db.scalar(select(Job).where(Job.id==job_id).with_for_update().execution_options(populate_existing=True))
+    if not job or db.get(GenerationOutcome,(job_id,review_id)):return
+    state=dict(job.result or {});usage=dict(state.get('usage') or {})
+    usage[route]=int(usage.get(route,0))+1
+    if route!='reused':
+        usage['updated' if updated else 'created']=int(usage.get('updated' if updated else 'created',0))+1
+    usage['measured_since']=usage.get('measured_since') or now()
+    job.result={**state,'usage':usage,'last_progress_at':now()}
 
 
 class GenerationBusy(ValueError):

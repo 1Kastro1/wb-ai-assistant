@@ -12,6 +12,30 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_pipeline_counts_use_real_postgres_flags_and_scoped_jobs(self):
+        from app.pipeline_overview import _overview
+        url=make_url(os.environ['DATABASE_URL']);self.assertEqual(url.database,'wb_workbench_tests')
+        engine=create_engine(url);Base.metadata.create_all(engine);factory=sessionmaker(engine)
+        prefix='pipeline-'+uuid4().hex
+        try:
+            with factory() as db:
+                store=StoreProfile(id=prefix,provider='wb',name='Test store')
+                db.add_all([store,Product(id=prefix,name='Test product')]);db.flush()
+                for suffix,quality in [('ready',{'passed':True,'owner_rules':{'checked':True,'passed':True}}),
+                        ('retry',{'passed':False,'owner_rules':{'technical_error':True,'passed':False,'checked':False}})]:
+                    rid=prefix+suffix
+                    db.add(Review(id=rid,wb_review_id=rid,wb_account_id=prefix,product_id=prefix,text='Test',rating=5));db.flush()
+                    db.add(Draft(id=rid,review_id=rid,text='Reply',original='Reply',quality=quality))
+                db.add(Job(id=prefix,kind='draft_recheck',result={'account_id':prefix,'policy_regeneration':True,'total':10,'processed':2}))
+                db.flush()
+                result=_overview(db,{prefix:store})[0]
+                self.assertEqual(result['counts']['ready'],1)
+                self.assertEqual(result['counts']['technical'],1)
+                self.assertEqual(result['counts']['personal'],0)
+                self.assertEqual(result['refresh']['remaining'],8)
+                db.rollback()
+        finally:engine.dispose()
+
     def test_streaming_checker_is_single_under_concurrent_enqueue(self):
         from concurrent.futures import ThreadPoolExecutor
         from app.rule_retry import automatic_queue

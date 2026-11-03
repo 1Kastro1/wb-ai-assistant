@@ -5,7 +5,7 @@ export function draftState(item){
  if(item.manual)return 'Нужна личная проверка';
  if(item.verification_state==='technical')return 'Текст сохранён · сервис проверки недоступен';
  if(item.verification_state==='pending')return 'Текст сохранён · ожидает проверки правил';
- if(item.verification_passed&&item.status==='draft_ready')return 'Проверен · ожидает подтверждения';
+ if(item.verification_passed&&['draft_ready','manual_review'].includes(item.status))return item.auto_publication?'Проверен · автоматическая выгрузка включена':'Проверен · ожидает подтверждения';
  return 'Черновик сохранён · нужна проверка';
 }
 export function notificationGroups(items){
