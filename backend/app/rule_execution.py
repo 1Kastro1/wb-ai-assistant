@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2026-11-03-text-before-rating'
+VERSION = 'context-rules-2026-11-03-verified-lotion'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -272,6 +272,50 @@ def audited_case_template(review, product, rules):
     except ValueError:
         return None
     return answer if not local_issues(answer, rules, review) else None
+
+
+def audited_usage_replies(review, product, rules, facts):
+    """Fresh proof of one exact recipe against reviewed whole policy texts.
+
+    No approval of arbitrary prose or unknown rules. Instructions must still be
+    present in the current product evidence; other complaints/steps opt out.
+    """
+    from .reply_policy import analyze_customer_message
+    from .product_guidance import product_usage_reply, usage_excerpt
+    from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
+    from .vehicle_identifiers import vehicle_identifiers
+    from .safety import validate_reply
+    text = getattr(review, 'text', '') or ''
+    name = (getattr(product,'name','') or '').casefold()
+    if (not rules or getattr(product,'brand','').upper() != 'KANGAROO' or 'лосьон' not in name or 'кож' not in name
+        or getattr(review,'risk','NORMAL') != 'NORMAL' or getattr(review,'manual',False)
+        or getattr(review,'safety_critical',False) or getattr(review,'marketplace','').endswith('_question')
+        or vehicle_identifiers(text)
+        or re.search(r'ожог|аллерг|отрав|раздраж|травм|здоров|реб[её]н|питом|просроч|годност|дат[аыу]|наносил|прот[её]р|выдерж|по инструкц|смеш|уже|повред',text,re.I)):
+        return set()
+    analysis = analyze_customer_message(text, review.rating)
+    if (set(analysis['complaints']) != {'NO_RESULT','SLIPPERY_SURFACE'} or analysis['is_question']
+        or analysis['buyer_asks_about_money'] or analysis['resolved']):
+        return set()
+    instruction = usage_excerpt(facts)
+    if not instruction or not re.search(r'нанес',instruction,re.I) or not re.search(r'протр|удал',instruction,re.I):
+        return set()
+    for rule in rules:
+        if 'lotion_cleaning' not in profile(rule).get('local_cases', ()) and constraints([rule])['semantic']:
+            return set()
+    answers = set()
+    thanks = ('Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.')
+    for revision in range(3):
+        original = product_usage_reply(review, product, facts, revision)
+        for raw in (original, re.sub(r'(?:Спасибо|Благодарим)[^.!?]*[.!?]',lambda m:thanks[revision],original,count=1,flags=re.I)):
+            answer, _ = apply_local_preferences(raw, review, rules)
+            try:
+                answer = validate_reply(apply_signature(answer, rules))
+            except ValueError:
+                continue
+            if not local_issues(answer, rules, review):
+                answers.add(answer)
+    return answers
 
 
 _verdicts = OrderedDict()

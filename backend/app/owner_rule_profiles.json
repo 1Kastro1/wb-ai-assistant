@@ -53,7 +53,8 @@
   "15e8656f51f272ceca4846bd8db914207f1cf079b07ee2f287ff656d4c3c2689": {
     "label": "Смысл отзыва и полезный ответ",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "lotion_cleaning"
     ],
     "local_positive": true
   },
@@ -199,7 +200,8 @@
     "empty_inapplicable": true,
     "label": "Kangaroo: чтение даты на упаковке",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "lotion_cleaning"
     ],
     "local_positive": true
   },
@@ -273,7 +275,8 @@
   "61d8698fb39ca921dc8b6dc0638f114d8e74bd6255976bf79d31d3227193d101": {
     "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.»",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "lotion_cleaning"
     ],
     "local_positive": true
   },
@@ -367,7 +370,8 @@
     ],
     "label": "Автохимия и очистители салона, пластика и ткани: применяй только к соответствующей жалобе",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "lotion_cleaning"
     ],
     "local_positive": true
   },
@@ -407,7 +411,8 @@
   "b1420b81f98cfb0e9a6c0abe496c12c35567697e7837de8076e3102324b4f23a": {
     "label": "Стиль и формат ответа на отзыв",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "lotion_cleaning"
     ],
     "local_positive": true
   },
@@ -619,7 +624,8 @@
   "e8a7a05b6485449fae2accfc050be9a855c90d0a5fce3f8e978dcde7ced5792c": {
     "label": "Получение, упаковка, несоответствие и обращения",
     "local_cases": [
-      "replaced_sprayer"
+      "replaced_sprayer",
+      "lotion_cleaning"
     ],
     "local_positive": true
   },
