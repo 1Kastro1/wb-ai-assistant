@@ -108,6 +108,20 @@ def test_one_automatic_checker_per_store_and_separate_explicit_click(client):
         db.commit()
 
 
+def test_personal_review_is_not_an_endless_technical_retry(client):
+    from app.draft_audit import recheck_step
+    seed()
+    with Session() as db:
+        review=db.get(Review,'slow');review.manual=True;review.risk='HIGH'
+        draft=Draft(id='d',review_id=review.id,text='Нужна личная проверка',original='Нужна личная проверка',
+            quality={'passed':False,'owner_rules':{'passed':False,'checked':False,'status':'pending'}})
+        db.add(draft);db.flush();job=rule_retry.enqueue(db,draft,review);jid=job.id;db.commit()
+    asyncio.run(recheck_step(jid))
+    with Session() as db:
+        assert db.get(Job,jid).status=='completed'
+        assert not db.get(Draft,'d').quality['passed']
+
+
 def test_duplicate_legacy_checks_are_superseded_without_changing_answers(client):
     seed()
     with Session() as db:

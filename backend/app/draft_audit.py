@@ -144,6 +144,14 @@ async def recheck_step(job_id, session_factory=Session):
             break
 
 
+def automatic_check_condition():
+    from sqlalchemy import and_, or_
+    # Human/catalog decisions are not outages: do not loop forever over them.
+    return or_(Draft.quality_technical == True, and_(Draft.quality_pending == True,
+        Review.manual == False, Review.safety_critical == False, Review.risk == 'NORMAL',
+        ~Review.marketplace.like('%_question')))
+
+
 async def _recheck_one(job_id, session_factory=Session):
     from .services import assess_reply, assess_question_answer, trusted_product_facts, review_verified_facts
     from .owner_reply_rules import matching_owner_rules
@@ -161,14 +169,14 @@ async def _recheck_one(job_id, session_factory=Session):
                 Review.status != 'publishing', Draft.id > state.get('cursor_id', ''),
                 *([~Review.marketplace.like('%_question')] if state.get('reviews_only') else []))
             if state.get('technical_scan'):
-                query = query.where((Draft.quality_technical == True) | (Draft.quality_pending == True))
+                query = query.where(automatic_check_condition())
             did = db.scalar(query.order_by(Draft.id).limit(1))
             if not did:
                 if state.get('technical_scan'):
                     remaining = db.scalar(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
                         Review.wb_account_id == state['account_id'], Review.is_answered == False,
                         Review.status != 'publishing',
-                        (Draft.quality_technical == True) | (Draft.quality_pending == True)).limit(1))
+                        automatic_check_condition()).limit(1))
                     if remaining:
                         from .rule_retry import retry_delay
                         cycle = state.get('cycles', 0) + 1

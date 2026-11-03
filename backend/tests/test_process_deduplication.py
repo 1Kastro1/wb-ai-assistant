@@ -43,11 +43,11 @@ def test_recheck_reuses_pending_singleton_but_not_cancelled_or_other_store(clien
         db.add(Job(id='batch',kind='draft_recheck',result={'account_id':'owner','check_only':True,
             'draft_ids':['previous','d'],'cursor':1}));db.commit()
         d,r=db.get(Draft,'d'),db.get(Review,'r')
-        assert enqueue(db,d,r).id=='batch'
+        assert enqueue(db,d,r,manual=True).id=='batch'
         db.get(Job,'batch').cancel_requested=True;db.commit()
-        new=enqueue(db,d,r);db.flush()
+        new=enqueue(db,d,r,manual=True);db.flush()
         assert new.id!='batch'
-        assert enqueue(db,d,r).id==new.id
+        assert enqueue(db,d,r,manual=True).id==new.id
         assert len(list(db.scalars(select(Job))))==2
 
 
