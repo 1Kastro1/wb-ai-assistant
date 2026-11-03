@@ -300,6 +300,11 @@ def audited_usage_replies(review, product, rules, facts):
     instruction = usage_excerpt(facts)
     if not instruction or not re.search(r'нанес',instruction,re.I) or not re.search(r'протр|удал',instruction,re.I):
         return set()
+    # Multiple incompatible dwell times need a full evidence review. Do not
+    # certify an instruction simply because all source rows say VERIFIED.
+    times = set(re.findall(r'\b\d+(?:[–-]\d+)?\s*(?:минут\w*|секунд\w*)', instruction, re.I))
+    if len(times) > 1:
+        return set()
     for rule in rules:
         if 'lotion_cleaning' not in profile(rule).get('local_cases', ()) and constraints([rule])['semantic']:
             return set()

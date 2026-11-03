@@ -37,6 +37,7 @@ def test_current_evidence_recipe_is_freshly_checked_and_learned_without_model(cl
         assert not audited_usage_replies(r,p,rules,[])
         assert not audited_usage_replies(r,p,rules,[{**FACT,'verification_status':'UNVERIFIED'}])
         assert not audited_usage_replies(r,p,rules,[{**FACT,'text':'Состав неизвестен'}])
+        assert not audited_usage_replies(r,p,rules,[FACT,{**FACT,'text':'Оставьте на 10 минут.'}])
         assert first['text']+' Дополнительное обещание.' not in audited_usage_replies(r,p,rules,facts)
         for change in ('Кожа стала скользкой, не чистит. Появилось раздражение.',
                        'Не чистит кожу, она стала скользкой. Наносил по инструкции.',
