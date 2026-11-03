@@ -10,9 +10,24 @@ def is_cleaner(product):
     return any(x in text for x in ('антижир', 'жироудал', 'средство для кухни', 'средство для мытья', 'очистител', 'чистящ', 'моющ', 'пятновывод', 'химчист', 'бытовая хим', 'автохим', 'полироль', 'воск автомобильный'))
 
 
+def untested_review(text):
+    """The rating does not establish experience when the buyer defers evaluation."""
+    value = (text or '').lower().replace('ё', 'е')
+    return bool(re.search(
+        r'(?:еще|пока)\s+не\s+(?:использ|пробова|провер|тестир|устанав|ставил|примен|пользова)'
+        r'|не\s+(?:использовал|пробовал|проверял|тестировал|устанавливал|применял)'
+        r'|(?:позже|потом|после\s+\w+)[^.!?\n]{0,45}(?:дополн|напиш|отпиш|дам\s+информац|оценю|проверю)'
+        r'|(?:на\s+вид|внешне|визуально)[^.!?\n]{0,30}(?:качеств|хорош|отличн)'
+        r'|(?:качество|работу|результат)[^.!?\n]{0,25}(?:позже|пока\s+не)', value))
+
+
 def positive_detail(text):
     """Acknowledge the buyer's experience without asserting new product facts."""
     value = text.lower().replace('ё', 'е')
+    # Future plans, negation and appearance are not evidence of performance.
+    value = ' '.join(clause for clause in re.split(r'[.!?;\n]+|,\s*', value)
+                     if not untested_review(clause) and not re.search(
+                         r'\bне\s+(?:пенится|работает|подходит|соответствует|полирует|понрав)', clause))
     details = []
     if re.search(r'(?:приятн\w*|понравил\w*|отличн\w*)[^.!?\n]{0,20}(?:аромат|запах)|(?:аромат|запах)[^.!?\n]{0,20}(?:приятн|понравил|отличн)|долго пахнет', value) and not re.search(r'(?<!\w)не\s+понрав|неприятн|запаха нет|запах.*неприят', value):
         partial = re.search(r'\b(\d+)\s+из\s+(\d+)\b', value)
@@ -25,10 +40,10 @@ def positive_detail(text):
         details.append('Вы довольны работой товара')
     if any(x in value for x in ('подош', 'встали как родные', 'установился', 'установка', 'подходит', 'встал отлично')) and not re.search(r'(?<!\w)не\s+подош|не\s+установ', value):
         details.append('установка прошла успешно по Вашему опыту')
-    if any(x in value for x in ('качеств', 'на совесть', 'клапан', 'резьба')):
+    if re.search(r'(?:хорош\w*|отличн\w*|высок\w*|чудесн\w*|прекрасн\w*|превосходн\w*)\s+качеств|качеств\w*\s+(?:хорош|отличн|чудесн|прекрасн)|качественн\w*|на совесть', value) and not re.search(r'некачеств|не\s+качеств', value):
         details.append('Вы оценили качество товара')
     if 'соответствует описанию' in value or 'как в описании' in value:
-        details.append('товар соответствует Вашим ожиданиям и описанию')
+        details.append('товар соответствует описанию')
     if any(x in value for x in ('третий раз', 'второй раз', 'не первый раз', 'пользуюсь давно', 'только этого бренда')):
         details.append('Вы снова выбираете этот товар')
     if re.search(r'перевозк|багажник|прицеп', value):
@@ -55,7 +70,9 @@ def positive_detail(text):
     # Each clause retains its own subject. Joining after deleting «Вы» breaks
     # sentences such as «держатель фиксируется и оценили исполнение».
     if not details:
-        return 'Рады, что покупка Вам понравилась.'
+        return ('Рады, что покупка Вам понравилась.' if re.search(
+            r'понравил|довол\w*|отличн\w*|хорош\w*|супер|рекомендую', value)
+            else '')
     return 'Рады, что ' + details[0] + '.' + (' Приятно, что ' + details[1] + '.' if len(details) > 1 else '')
 
 
@@ -64,15 +81,17 @@ def positive_review_reply(review, product, revision=0):
     analysis = analyze_customer_message(review.text, review.rating)
     if not review.text.strip() or review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed') or analysis['is_question']:
         return None
-    thanks = ['Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.'][int(revision) % 3]
+    thanks = ['Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо за Вашу оценку.'][int(revision) % 3]
     detail = positive_detail(review.text)
+    if untested_review(review.text) and not detail:
+        detail = 'Будем рады Вашим впечатлениям после использования.'
     if re.search(r'запаха нет|нет запаха|нейтральн', review.text.lower()):
         detail = 'Вы отметили нейтральный запах товара.'
     # A short wish adds warmth without inventing an effect or promising a result.
-    closing = ('Желаем приятного использования!', 'Пусть покупка и дальше радует Вас!')[int(revision) % 2]
+    closing = ('Желаем приятного использования!', 'Надеемся, покупка будет Вам полезна!')[int(revision) % 2]
     if 'аромат Вам понравился' in detail:
         closing = 'Пусть аромат и дальше радует Вас!'
-    return 'Здравствуйте! ' + thanks + ' ' + detail + ' ' + closing
+    return 'Здравствуйте! ' + thanks + (' ' + detail if detail else '') + ' ' + closing
 
 
 def battery_voltage_answer(question, product):

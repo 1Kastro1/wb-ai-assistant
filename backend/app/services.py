@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '4.3'
+QUALITY_EVALUATOR_VERSION = '4.4'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -134,6 +134,7 @@ def _addresses_review_topic(review_text, reply_text):
     review_value = review_text.lower().replace('ё', 'е')
     reply_value = reply_text.lower().replace('ё', 'е')
     topic_groups = (
+        (('позже дам', 'позже дополню', 'позже напишу', 'не пробовал', 'не использовал', 'не проверял', 'на вид'), ('впечатлениям после использования',)),
         (('очистител', 'чистит', 'чистят', 'отмыл', 'пятн', 'гудрон', 'смол'), ('очист', 'загряз', 'пятн', 'гудрон', 'смол')),
         (('установ', 'встал', 'подходит'), ('установ', 'подош', 'подбор')),
         (('упаков', 'короб'), ('упаков', 'короб')),
@@ -952,7 +953,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         if candidate and initial_draft and not specific_case and review.risk == 'NORMAL':
             # Some fact-bound scenarios have one immutable instruction body.
             # Rotate courtesy wording without changing that verified content.
-            thanks = ('Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо, что поделились опытом.')[(generation_revision + offset) % 3]
+            from .product_guidance import untested_review
+            experience_thanks = 'Спасибо за Вашу оценку.' if untested_review(review.text) else 'Спасибо, что поделились опытом.'
+            thanks = ('Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', experience_thanks)[(generation_revision + offset) % 3]
             candidate = re.sub(r'(?:Спасибо|Благодарим)[^.!?]*[.!?]', lambda match: thanks, candidate, count=1, flags=re.I)
         if candidate:
             candidate = formatted(candidate)

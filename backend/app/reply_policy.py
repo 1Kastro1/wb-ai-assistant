@@ -245,12 +245,16 @@ def missing_complaints(analysis, reply):
 
 def semantic_reply_issues(review, product, reply):
     """Independent hard checks: a high courtesy score cannot hide a contradiction."""
-    from .product_guidance import is_cleaner, positive_detail
+    from .product_guidance import is_cleaner, positive_detail, untested_review
     analysis = analyze_customer_message(review.text, review.rating)
     text = reply.lower().replace('ё', 'е')
     buyer = (review.text or '').lower().replace('ё', 'е')
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower().replace('ё', 'е')
     issues = []
+    if untested_review(buyer) and re.search(
+            r'(?:рады|приятно)[^.!?]{0,90}(?:оценили качество|покупка.*понрав|товар.*(?:понрав|подош)|установка.*успеш|довольны работой|оправдал.*ожидан|результат.*порадовал)'
+            r'|(?:покупка|товар|аромат)\s+и дальше\s+радует|поделились опытом', text):
+        issues.append('не приписывать опыт использования и довольство до проверки товара')
     for kind, defect in (('LEAKAGE', r'протеч\w*'), ('PACKAGING_ISSUE', r'повреждени\w*\s+упаковк\w*')):
         if kind not in analysis['complaints'] and re.search(r'извин\w*\s+за\s+[^.!?]{0,100}' + defect, text):
             issues.append('не извиняться за неописанную протечку' if kind == 'LEAKAGE' else 'не придумывать повреждение упаковки')
