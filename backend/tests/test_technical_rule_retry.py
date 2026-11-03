@@ -60,7 +60,7 @@ def test_explicit_saved_reply_recheck_precedes_background_scans(client):
     seed_error()
     with Session() as db:
         db.add(Job(id='old-policy-scan', kind='draft_recheck', created_at='2026-01-01', result={'policy_scan':True}))
-        job = enqueue(db, db.get(Draft,'d'), db.get(Review,'r'), 'owner')
+        job = enqueue(db, db.get(Draft,'d'), db.get(Review,'r'), 'owner', manual=True)
         db.commit()
         assert next_job(db).id == job.id
 
@@ -68,8 +68,8 @@ def test_explicit_saved_reply_recheck_precedes_background_scans(client):
 def test_single_generation_and_newest_explicit_check_do_not_wait_for_old_retries(client):
     from app.queue_policy import next_job
     with Session() as db:
-        db.add_all([Job(id='old-check',kind='draft_recheck',created_at='2026-01-01',result={'retry_draft_id':'old'}),
-            Job(id='new-check',kind='draft_recheck',created_at='2026-11-01',result={'retry_draft_id':'new'}),
+        db.add_all([Job(id='old-check',kind='draft_recheck',created_at='2026-01-01',result={'retry_draft_id':'old','manual_check':True}),
+            Job(id='new-check',kind='draft_recheck',created_at='2026-11-01',result={'retry_draft_id':'new','manual_check':True}),
             Job(id='generate',kind='single_draft',created_at='2026-11-01',result={})]);db.commit()
         assert next_job(db).id=='generate'
         db.get(Job,'generate').status='completed';db.commit()
@@ -107,9 +107,11 @@ def test_check_only_preserves_text_and_keeps_retrying_outages_until_cancelled(cl
     with Session() as db:
         job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r')); jid = job.id; db.commit()
     monkeypatch.setattr(services, 'assess_reply', lambda *a, **k: {'passed': True, 'issues': [], 'score': 96})
+    calls = [0]
     async def check(answer, *args, **kwargs):
         assert kwargs['check_only'] is True
-        assert kwargs['check_seconds'] == 45
+        assert kwargs['check_seconds'] == (45 if calls[0] == 0 else 180)
+        calls[0] += 1
         return answer, {'passed': passed, 'checked': passed, 'technical_error': not passed,
                         'matched': 1, 'violations': [], 'issues': [] if passed else ['таймаут']}
     monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
@@ -248,3 +250,17 @@ def test_manual_recheck_has_cpu_budget_for_every_rating_without_rewriting(client
         assert review.manual == (rating <= 3)
         assert not review.is_answered
         assert db.get(Job, jid).status == 'completed'
+
+
+def test_automatic_retry_backlog_does_not_starve_generation(client):
+    from app.queue_policy import next_job
+    with Session() as db:
+        db.add_all([Job(id='auto-retry', kind='draft_recheck', created_at='2026-01-01',
+            result={'retry_draft_id':'d','check_only':True,'requested_by':'owner'}),
+            Job(id='batch',kind='drafts',created_at='2026-01-01',result={})])
+        db.commit()
+        assert next_job(db).id == 'batch'
+        # An actual direct click still takes precedence over ordinary work.
+        db.get(Job,'auto-retry').result={'retry_draft_id':'d','manual_check':True}
+        db.commit()
+        assert next_job(db).id == 'auto-retry'

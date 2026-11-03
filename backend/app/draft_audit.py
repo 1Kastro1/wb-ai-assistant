@@ -190,7 +190,8 @@ async def _recheck_one(job_id, session_factory=Session):
                 from .generation_budget import OWNER_RULE_CHECK_SECONDS, MANUAL_RULE_CHECK_SECONDS
                 answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
                     assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
-                    check_seconds=MANUAL_RULE_CHECK_SECONDS if state.get('manual_check') else OWNER_RULE_CHECK_SECONDS,
+                    check_seconds=MANUAL_RULE_CHECK_SECONDS if (state.get('manual_check')
+                        or check_only and state.get('check_retries', 0) > 0) else OWNER_RULE_CHECK_SECONDS,
                     check_only=check_only,
                     allow_fast_positive=check_only)
             db.rollback()

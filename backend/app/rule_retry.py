@@ -40,7 +40,7 @@ def enqueue(db, draft, review, actor_id='', *, manual=False):
             return existing
     job = Job(id=str(uuid4()), kind='draft_recheck', priority=60, max_attempts=10,
         result={'account_id': review.wb_account_id, 'draft_ids': [draft.id],
-                'retry_draft_id': draft.id, 'check_only': True, 'requested_by': actor_id,
+                'retry_draft_id': draft.id, 'check_only': True, 'requested_by': actor_id, 'manual_check': manual,
                 'message': 'Повторная проверка правил: сохранённый текст не изменяется'})
     if manual:
         job.result = {**job.result, 'manual_check': True, 'requested_check_at': now()}
