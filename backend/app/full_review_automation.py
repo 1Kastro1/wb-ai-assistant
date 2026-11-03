@@ -20,6 +20,7 @@ def activate(db,actor_id):
     from .scheduled_publication import availability_reason
     from .review_regeneration import enqueue_all
     from .rule_retry import consolidate
+    from .learned_reply_templates import compact_library
     actor=db.get(User,actor_id)
     if not actor or actor.role!='owner' or not actor.enabled:
         raise ValueError('Нужен действующий владелец')
@@ -30,6 +31,7 @@ def activate(db,actor_id):
     # but preserves text, checkpoints, questions and publication reservations.
     jobs=enqueue_all(db,actor.id)
     consolidated=consolidate(db)
+    templates=compact_library(db)
     stores=list(db.scalars(select(StoreProfile).join(Account,Account.id==StoreProfile.id)))
     row=db.scalar(select(Setting).where(Setting.key=='automation_schedule').with_for_update())
     if row:
@@ -54,7 +56,7 @@ def activate(db,actor_id):
                  'consolidated_checks':consolidated,'ratings':'1-5','at':now()}))
     db.commit()
     return {'refresh':[{'id':j.id,'store':j.result['account_id'],'total':j.result['total']} for j in jobs],
-        'consolidated_checks':consolidated,
+        'consolidated_checks':consolidated,'templates':templates,
         'schedule':{k:result.get(k) for k in ('enabled','drafts_all_history','publication_enabled',
             'publication_reviews','publication_low_ratings','publication_all_low_ratings','publication_markets')}}
 

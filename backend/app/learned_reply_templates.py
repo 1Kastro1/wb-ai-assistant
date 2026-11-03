@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import time
+import unicodedata
 from sqlalchemy import select
 from .db import Setting, IS_SQLITE
 
@@ -60,7 +61,7 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
             continue
         row = db.get(Setting, 'verified-replies:' + key[0])
         entry = deepcopy((row.value or {}).get(key)) if row else None
-        for item in _variants(entry):
+        for item in _variants(entry, db):
             if time.time()-float(item.get('at',0)) > MAX_AGE:
                 continue
             answer, verdict = item.get('answer',''), item.get('verdict') or {}
@@ -83,11 +84,37 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
 
 
 def same_answer(first, second):
-    return bool(second) and re.sub(r'\s+', ' ', first).strip().casefold() == re.sub(r'\s+', ' ', second).strip().casefold()
+    def normalized(value):
+        return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', value)).strip().casefold()
+    return bool(second) and normalized(first) == normalized(second)
 
 
-def _variants(entry):
-    return deepcopy(entry.get('variants') or [entry]) if entry else []
+def _variants(entry, db=None):
+    result=[]
+    for item in deepcopy(entry.get('variants') or [entry]) if entry else []:
+        if item.get('template_id') and not item.get('answer') and db is not None:
+            tid=item['template_id']
+            row=db.get(Setting,'verified-texts:'+tid[0])
+            item['answer']=((row.value or {}).get(tid) or {}).get('answer','') if row else ''
+        if item.get('answer') and not any(same_answer(item['answer'],v['answer']) for v in result):
+            result.append(item)
+    return result
+
+
+def _remember_text(db, answer):
+    # One content-addressed body shared by independently approved contexts.
+    # Bounded buckets avoid an ever-growing library of orphaned variants.
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    tid=hashlib.sha256(answer.encode()).hexdigest()
+    bucket='verified-texts:'+tid[0]
+    insert=sqlite_insert if IS_SQLITE else pg_insert
+    db.execute(insert(Setting).values(key=bucket,value={}).on_conflict_do_nothing(index_elements=['key']))
+    row=db.scalar(select(Setting).where(Setting.key==bucket).with_for_update().execution_options(populate_existing=True))
+    values=dict(row.value or {})
+    values[tid]={'answer':answer,'at':time.time()}
+    row.value=dict(sorted(values.items(),key=lambda value:value[1]['at'],reverse=True)[:BUCKET_LIMIT*6])
+    return tid
 
 
 def similar_candidate(db, review, product, rules, facts, assess, *, previous=''):
@@ -95,7 +122,7 @@ def similar_candidate(db, review, product, rules, facts, assess, *, previous='')
     if not key:
         return None
     row = db.get(Setting, 'verified-replies:' + key[0])
-    for item in _variants((row.value or {}).get(key) if row else None):
+    for item in _variants((row.value or {}).get(key) if row else None, db):
         verdict, answer = item.get('verdict') or {}, item.get('answer', '')
         if (time.time()-float(item.get('at',0)) <= MAX_AGE and not same_answer(answer, previous)
                 and verdict.get('checked') is True and verdict.get('passed') is True
@@ -125,16 +152,44 @@ def remember_template(db, review, product, rules, facts, draft):
     if verified_positive_reply(draft.text,review,rules,product=product):
         grouped = context_key(review,product,rules,facts,praise_group=True)
         if grouped: keys.append(grouped)
+    template_id = _remember_text(db, draft.text)
     for key in sorted(set(keys)):
         bucket = 'verified-replies:' + key[0]
         insert = sqlite_insert if IS_SQLITE else pg_insert
         db.execute(insert(Setting).values(key=bucket,value={}).on_conflict_do_nothing(index_elements=['key']))
         row = db.scalar(select(Setting).where(Setting.key==bucket).with_for_update().execution_options(populate_existing=True))
         values = dict(row.value or {})
-        item = {'answer':draft.text,'verdict':deepcopy(verdict),'source':draft.id,'at':time.time()}
-        variants = [item] + [v for v in _variants(values.get(key)) if not same_answer(v.get('answer',''),draft.text)]
+        item = {'template_id':template_id,'verdict':deepcopy(verdict),'source':draft.id,'at':time.time()}
+        variants = [item] + [v for v in _variants(values.get(key),db) if not same_answer(v.get('answer',''),draft.text)]
+        # Existing inline entries remain readable; new bodies are stored once.
+        variants = [{k:v for k,v in value.items() if k!='answer'} if value.get('template_id') else value for value in variants]
         values[key] = {**item, 'variants':variants[:6]}
         row.value = dict(sorted(values.items(),key=lambda item:item[1]['at'],reverse=True)[:BUCKET_LIMIT])
     return True
 
 
+
+
+def compact_library(db):
+    """Convert existing copies to shared bodies without inventing approvals."""
+    snapshots=[(row.key,deepcopy(row.value or {})) for row in db.scalars(
+        select(Setting).where(Setting.key.startswith('verified-replies:')).order_by(Setting.key))]
+    prepared={};answers={}
+    for bucket,values in snapshots:
+        prepared[bucket]={}
+        for key,entry in values.items():
+            variants=[]
+            for item in _variants(entry,db):
+                if time.time()-float(item.get('at',0))>MAX_AGE:continue
+                answer=item.pop('answer');tid=hashlib.sha256(answer.encode()).hexdigest()
+                answers[tid]=answer;variants.append({**item,'template_id':tid})
+            if variants:prepared[bucket][key]={**variants[0],'variants':variants[:6]}
+    # Same lock order as ordinary learning: bodies before context buckets.
+    for tid,answer in sorted(answers.items()):_remember_text(db,answer)
+    for bucket,values in sorted(prepared.items()):
+        row=db.scalar(select(Setting).where(Setting.key==bucket).with_for_update().execution_options(populate_existing=True))
+        # Activation runs with the worker stopped; skip concurrent API learning
+        # rather than replacing a newly saved approval with an old snapshot.
+        if row.value==dict(snapshots)[bucket]:row.value=values
+    db.flush()
+    return {'unique_templates':len(answers),'contexts':sum(len(v) for v in prepared.values())}

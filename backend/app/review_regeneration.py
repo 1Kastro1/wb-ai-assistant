@@ -119,7 +119,13 @@ async def lane(job_id,name,session_factory,limit):
             previous=db.get(GenerationOutcome,(job_id,rid))
             if not previous:
                 if protected_draft(db,review,draft,recovery):category='preserved'
-                elif current_reply(db,review,draft):category='generated'
+                elif current_reply(db,review,draft):
+                    from .learned_reply_templates import remember_template
+                    from .services import matching_owner_rules,review_verified_facts
+                    from .db import Product
+                    product=db.get(Product,review.product_id);rules=matching_owner_rules(db,product)
+                    remember_template(db,review,product,rules,review_verified_facts(db,review,product,rules),draft)
+                    category='generated'
                 else:
                     token=batch_context.set({'job_id':job_id,'policy_regeneration':True})
                     try:
