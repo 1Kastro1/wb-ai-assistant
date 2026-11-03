@@ -36,3 +36,7 @@ test('generation, checking and publication are separate stages without invented 
  assert.equal(group.stages.verification,undefined);
  assert.deepEqual(serverWorkGroups([]),[]);
 });
+
+test('committed reply progress wins over an older completed whole job',()=>{
+ assert.equal(lastMovement({last_progress_at:'2026-11-03T17:55:00Z',tasks:[],completed_stages:{sync:{finished_at:'2026-11-03T10:00:00Z'}}}),'2026-11-03T17:55:00Z');
+});

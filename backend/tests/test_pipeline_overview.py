@@ -68,3 +68,13 @@ def test_usage_is_atomic_and_idempotent_with_saved_outcome(client):
         assert usage['template']==1 and usage['updated']==1 and not usage.get('created')
         assert db.get(Job,'refresh').result['last_progress_at']
         assert db.get(GenerationOutcome,('refresh','negative'))
+
+
+def test_recent_saved_result_is_progress_even_while_large_job_is_not_finished(client):
+    with Session() as db:
+        seed(db)
+        stamp='2026-11-03T17:55:00+00:00'
+        db.add(GenerationOutcome(job_id='ongoing-job',review_id='negative',created_at=stamp));db.commit()
+        result=next(s for s in queue_overview(db,{'role':'owner'},'owner')['market_processes'] if s['id']=='owner')
+        assert result['last_progress_at']==stamp
+        assert result['refresh']['last_progress_at'] is None
