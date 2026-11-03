@@ -47,7 +47,7 @@ def test_fusso_manufacturer_procedure_overrides_legacy_card_and_is_scoped_to_the
     assert not fusso_instruction(Row(name='Fusso Speed and Barrier',brand='SOFT99'))
 
 
-def test_generation_uses_local_guidance_and_a_short_independent_rule_deadline(client,monkeypatch):
+def test_generation_uses_local_guidance_and_normal_independent_rule_deadline(client,monkeypatch):
     writer=AsyncMock(side_effect=AssertionError('No model generation for known advice'))
     checker=AsyncMock(return_value={'compliant':True,'violations':[],'revised_answer':''})
     monkeypatch.setattr(ollama,'reply_variants',writer);monkeypatch.setattr(ollama,'chat',writer)
@@ -61,7 +61,9 @@ def test_generation_uses_local_guidance_and_a_short_independent_rule_deadline(cl
         assert result['quality']['timing']['route']=='rules'
         assert result['quality']['timing']['model_seconds']==0
     writer.assert_not_awaited();assert checker.await_count
-    assert all(call.kwargs.get('timeout_seconds')==8 for call in checker.await_args_list)
+    from app.generation_budget import OWNER_RULE_CHECK_SECONDS
+    assert OWNER_RULE_CHECK_SECONDS == 45
+    assert all(call.kwargs.get('timeout_seconds', OWNER_RULE_CHECK_SECONDS)==OWNER_RULE_CHECK_SECONDS for call in checker.await_args_list)
 
 
 def test_failed_rule_check_keeps_useful_guidance_and_durable_retry(client,monkeypatch):
