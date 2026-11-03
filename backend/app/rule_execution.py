@@ -13,7 +13,7 @@ import re
 from threading import RLock
 from time import monotonic
 
-VERSION = 'context-rules-2026-11-03-verified-lotion'
+VERSION = 'context-rules-2026-11-03-untried-review'
 PROFILES = json.loads(Path(__file__).with_name('owner_rule_profiles.json').read_text(encoding='utf-8'))
 
 
@@ -61,6 +61,39 @@ def simple_positive(review):
     from types import SimpleNamespace
     return empty_positive(SimpleNamespace(text='', **{key: getattr(review, key, default) for key, default in
         [('rating',0),('risk','NORMAL'),('manual',False),('safety_critical',False),('marketplace','')]}))
+
+
+UNTRIED_TEXTS = frozenset({
+    'позже дам информацию по качеству',
+    'еще не пробовал', 'еще не пробовал позже дополню отзыв',
+    'пока не использовал', 'на вид качественный еще не проверял',
+})
+
+
+def untried_template(review, rules, revision=0, *, product=None):
+    """Exact neutral messages and separately audited whole policies only."""
+    from types import SimpleNamespace
+    from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
+    from .product_guidance import positive_review_reply
+    from .safety import validate_reply
+    text = re.sub(r'[.!?,;…]', ' ', (getattr(review, 'text', '') or '').casefold().replace('ё', 'е'))
+    if ' '.join(text.split()) not in UNTRIED_TEXTS:
+        return None
+    if not empty_positive(SimpleNamespace(text='', **{key: getattr(review, key, default) for key, default in
+            [('rating',0),('risk','NORMAL'),('manual',False),('safety_critical',False),('marketplace','')]})):
+        return None
+    applicable = select_rules(rules, review, product)[0] if product is not None else rules
+    if not rules or any(not profile(rule).get('local_untried') and constraints([rule])['semantic'] for rule in applicable):
+        return None
+    value = positive_review_reply(review, product, int(revision) % 3)
+    if not value:
+        return None
+    value, _ = apply_local_preferences(value, review, rules)
+    try:
+        value = validate_reply(apply_signature(value, rules))
+    except ValueError:
+        return None
+    return value if not local_issues(value, rules, review) else None
 
 
 FAMILIES = {
@@ -186,7 +219,9 @@ def positive_template(review, rules, revision=0, *, product=None):
     """A narrow, reviewed no-claims answer; arbitrary semantic rules opt out."""
     from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
     from .safety import validate_reply
-    if not rules or not simple_positive(review):
+    if not simple_positive(review):
+        return untried_template(review, rules, revision, product=product)
+    if not rules:
         return None
     # Evaluate the same applicable policy as the final verifier. A certified
     # workflow/category exclusion must not disable the no-claims route, while an
@@ -212,7 +247,9 @@ def verified_positive_reply(reply, review, rules, *, product=None):
     """
     from .owner_reply_policy import apply_local_preferences, apply_signature, local_issues
     from .safety import validate_reply
-    if not simple_positive(review) or not positive_template(review, rules, product=product):
+    if not simple_positive(review):
+        return any(reply == untried_template(review, rules, i, product=product) for i in range(3))
+    if not positive_template(review, rules, product=product):
         return False
     candidates = {positive_template(review, rules, i, product=product) for i in range(3)}
     if not (getattr(review, 'text', '') or '').strip():

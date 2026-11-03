@@ -953,7 +953,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         if candidate and initial_draft and not specific_case and review.risk == 'NORMAL':
             # Some fact-bound scenarios have one immutable instruction body.
             # Rotate courtesy wording without changing that verified content.
-            thanks = ('Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо за Вашу оценку.')[(generation_revision + offset) % 3]
+            from .product_guidance import untested_review
+            experience_thanks = 'Спасибо за Вашу оценку.' if untested_review(review.text) else 'Спасибо, что поделились опытом.'
+            thanks = ('Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', experience_thanks)[(generation_revision + offset) % 3]
             candidate = re.sub(r'(?:Спасибо|Благодарим)[^.!?]*[.!?]', lambda match: thanks, candidate, count=1, flags=re.I)
         if candidate:
             candidate = formatted(candidate)

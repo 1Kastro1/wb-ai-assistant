@@ -56,7 +56,8 @@
       "replaced_sprayer",
       "lotion_cleaning"
     ],
-    "local_positive": true
+    "local_positive": true,
+    "local_untried": true
   },
   "17d190c396fbbd74b589e6e0b234a801a44347ae5fead50a23cab18179eb457d": {
     "empty_inapplicable": true,
@@ -87,7 +88,8 @@
   },
   "1df71e888bcfd1e86ac7ebf56caa9c306990c36d2cb5999f1800c7c39879c195": {
     "label": "Стиль и формат отзывов по образцам Ozon 2–3 ноября 2026 года (объединённое правило)",
-    "local_positive": true
+    "local_positive": true,
+    "local_untried": true
   },
   "1ea72cffe4dda72bcba9104e5e200f9b9628e12bbd3b48d3c023324787c7ab35": {
     "family": "parts",
@@ -207,7 +209,8 @@
       "replaced_sprayer",
       "lotion_cleaning"
     ],
-    "local_positive": true
+    "local_positive": true,
+    "local_untried": true
   },
   "4d2838e6d26c532e8ffa792fca0c2ed3caa2629e5999e3f5c2cac622ff76c9cd": {
     "empty_inapplicable": true,
@@ -282,7 +285,8 @@
       "replaced_sprayer",
       "lotion_cleaning"
     ],
-    "local_positive": true
+    "local_positive": true,
+    "local_untried": true
   },
   "68fc2cc14cf403b0dd360abb76400fa09e6daf1e36576010e25ab377c0152109": {
     "family": "cosmetics",
@@ -377,7 +381,8 @@
       "replaced_sprayer",
       "lotion_cleaning"
     ],
-    "local_positive": true
+    "local_positive": true,
+    "local_untried": true
   },
   "9ddae636ece3b30f64db32f88a6c7db7c18eab4287fa2834f914b86fbcc5dda9": {
     "empty_inapplicable": true,
@@ -631,7 +636,8 @@
       "replaced_sprayer",
       "lotion_cleaning"
     ],
-    "local_positive": true
+    "local_positive": true,
+    "local_untried": true
   },
   "ea0ef15c863f619c19a037dd43115ee1de341cd808958a0d386916006e28db91": {
     "empty_inapplicable": true,
