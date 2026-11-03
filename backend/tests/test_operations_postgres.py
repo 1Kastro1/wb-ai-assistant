@@ -12,6 +12,47 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_streaming_checker_is_single_under_concurrent_enqueue(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from app.rule_retry import automatic_queue
+        url=make_url(os.environ['DATABASE_URL']);self.assertEqual(url.database,'wb_workbench_tests')
+        engine=create_engine(url);Base.metadata.create_all(engine);factory=sessionmaker(engine)
+        account='verify-race-'+uuid4().hex
+        def enqueue_one(_):
+            with factory() as db:
+                job=automatic_queue(db,account);jid=job.id;db.commit();return jid
+        try:
+            with ThreadPoolExecutor(max_workers=4) as pool:ids=list(pool.map(enqueue_one,range(8)))
+            self.assertEqual(len(set(ids)),1)
+            with factory() as db:
+                self.assertTrue(db.get(Job,ids[0]).result['technical_scan'])
+                db.execute(delete(Job).where(Job.id==ids[0]));db.commit()
+        finally:engine.dispose()
+
+    def test_generation_checkpoint_migration_is_idempotent_and_preserves_outcomes(self):
+        import importlib.util
+        from pathlib import Path
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        url=make_url(os.environ['DATABASE_URL']);self.assertEqual(url.database,'wb_workbench_tests')
+        engine=create_engine(url);schema='outcome_migration_'+uuid4().hex
+        spec=importlib.util.spec_from_file_location('outcome_migration',Path(__file__).parents[1]/'migrations/versions/0017_generation_outcome_category.py')
+        migration=importlib.util.module_from_spec(spec);spec.loader.exec_module(migration)
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql('CREATE SCHEMA '+schema)
+                connection.exec_driver_sql('SET LOCAL search_path TO '+schema)
+                connection.exec_driver_sql('CREATE TABLE generation_outcomes(job_id text,review_id text,attention boolean)')
+                connection.exec_driver_sql("INSERT INTO generation_outcomes VALUES ('job','review',true)")
+                with Operations.context(MigrationContext.configure(connection)):
+                    migration.upgrade();migration.upgrade()
+                    self.assertEqual(connection.exec_driver_sql('SELECT category FROM generation_outcomes').scalar(),'generated')
+                    migration.downgrade()
+                    self.assertTrue(connection.exec_driver_sql('SELECT attention FROM generation_outcomes').scalar())
+                connection.exec_driver_sql('SET LOCAL search_path TO public')
+                connection.exec_driver_sql('DROP SCHEMA '+schema+' CASCADE')
+        finally:engine.dispose()
+
     def test_publication_schedule_migration_preserves_existing_slots(self):
         import importlib.util
         from pathlib import Path

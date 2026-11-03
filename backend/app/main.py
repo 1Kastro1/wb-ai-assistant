@@ -771,6 +771,7 @@ class StoreConnection(Payload):
 
 
 class ScheduleInput(Payload):
+    drafts_all_history: bool | None = None
     publication_low_ratings: bool | None = None
     publication_all_low_ratings: bool | None = None
     publication_markets: dict[str, bool] | None = None
@@ -1027,7 +1028,7 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
         for store_id in affected:
             value.pop('last_publication:' + store_id, None)
     # Start newly enabled tasks promptly; changing an interval keeps its last run.
-    reset_kinds = []
+    reset_kinds = ['drafts'] if value.get('drafts_all_history') != current.get('drafts_all_history') else []
     for kind, field in (('reviews', 'reviews_sync_enabled'), ('questions', 'questions_sync_enabled'),
                         ('drafts', 'drafts_enabled'), ('question_drafts', 'question_drafts_enabled')):
         if value['enabled'] and value.get(field) and not (current['enabled'] and current.get(field)):
@@ -1036,7 +1037,7 @@ def schedule_set(body: ScheduleInput, auth: OWNER, db: DB, background: Backgroun
         if any(key == 'last_' + kind or key.startswith('last_' + kind + ':') for kind in reset_kinds):
             value.pop(key)
     if value.get('drafts_enabled'):
-        value['drafts_since'] = (datetime.now(timezone.utc) - timedelta(days=int(value.get('drafts_days', 7)))).isoformat()
+        value['drafts_since'] = ('' if value.get('drafts_all_history') else (datetime.now(timezone.utc) - timedelta(days=int(value.get('drafts_days', 7)))).isoformat())
     value = normalize_schedule(value)
     paused_kinds = [kind for kind, field in (('drafts', 'drafts_enabled'), ('question_drafts', 'question_drafts_enabled'))
                     if current['enabled'] and current.get(field) and not (value['enabled'] and value.get(field))]
@@ -1092,7 +1093,7 @@ async def start_auto_replies(background: BackgroundTasks, auth: MARKET_OPERATOR,
     if not store: raise HTTPException(404, 'Магазин не найден')
     can_operate_store(auth, store)
     schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
-    since = (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
+    since = '' if schedule.get('drafts_all_history') else (datetime.now(timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     current = time.time()
     schedule.update({'enabled': True, 'drafts_enabled': True,
                      'generation_enabled': True, 'last_drafts': current, f'last_drafts:{store.id}': current, 'drafts_since': since})

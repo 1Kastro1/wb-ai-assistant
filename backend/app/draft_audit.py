@@ -156,11 +156,27 @@ async def _recheck_one(job_id, session_factory=Session):
         if job.cancel_requested:
             job.status = 'cancelled'; db.commit(); return
         if scan:
-            did = db.scalar(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
+            query = select(Draft.id).join(Review, Review.id == Draft.review_id).where(
                 Review.wb_account_id == state['account_id'], Review.is_answered == False,
                 Review.status != 'publishing', Draft.id > state.get('cursor_id', ''),
-                *([~Review.marketplace.like('%_question')] if state.get('reviews_only') else [])).order_by(Draft.id).limit(1))
+                *([~Review.marketplace.like('%_question')] if state.get('reviews_only') else []))
+            if state.get('technical_scan'):
+                query = query.where((Draft.quality_technical == True) | (Draft.quality_pending == True))
+            did = db.scalar(query.order_by(Draft.id).limit(1))
             if not did:
+                if state.get('technical_scan'):
+                    remaining = db.scalar(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
+                        Review.wb_account_id == state['account_id'], Review.is_answered == False,
+                        Review.status != 'publishing',
+                        (Draft.quality_technical == True) | (Draft.quality_pending == True)).limit(1))
+                    if remaining:
+                        from .rule_retry import retry_delay
+                        cycle = state.get('cycles', 0) + 1
+                        job.status = 'queued'
+                        job.result = {**state, 'cursor_id': '', 'cycles': cycle,
+                            'retry_at': time.time()+retry_delay(cycle), 'last_served_at': now(),
+                            'message': 'Ответы сохранены. Следующий проход проверки после восстановления сервиса.'}
+                        db.commit(); return
                 job.status, job.progress = 'completed', 100
                 job.result = {**state, 'message': f"Проверено: {state.get('checked', 0)}; подтверждено: {state.get('passed', 0)}. Остальные ответы не одобрены автоматически.", 'updated_at': now()}
                 db.commit(); return
@@ -168,6 +184,9 @@ async def _recheck_one(job_id, session_factory=Session):
             did = ids[cursor] if cursor < len(ids) else None
         draft = db.get(Draft, did) if did else None
         rid = draft.review_id if draft else None
+        if state.get('technical_scan') and did:
+            job.result = {**state, 'current_draft_id': did}
+            db.commit()
     async def operation():
         with session_factory() as db:
             review, draft = db.get(Review, rid), db.get(Draft, did)
@@ -187,11 +206,11 @@ async def _recheck_one(job_id, session_factory=Session):
             if learned:
                 answer, verdict = learned
             else:
-                from .generation_budget import OWNER_RULE_CHECK_SECONDS, MANUAL_RULE_CHECK_SECONDS
+                from .generation_budget import OWNER_RULE_CHECK_SECONDS, MANUAL_RULE_CHECK_SECONDS, AUTO_RULE_CHECK_SECONDS
                 answer, verdict = await enforce_owner_rules(draft.text, review, product, rules, facts,
                     assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
-                    check_seconds=MANUAL_RULE_CHECK_SECONDS if (state.get('manual_check')
-                        or check_only and state.get('check_retries', 0) > 0) else OWNER_RULE_CHECK_SECONDS,
+                    check_seconds=MANUAL_RULE_CHECK_SECONDS if state.get('manual_check') else
+                        AUTO_RULE_CHECK_SECONDS if check_only else OWNER_RULE_CHECK_SECONDS,
                     check_only=check_only,
                     allow_fast_positive=check_only)
             db.rollback()
@@ -237,8 +256,9 @@ async def _recheck_one(job_id, session_factory=Session):
         retry = bool(check_only and draft and review and not review.is_answered and review.status != 'publishing'
                      and technical_check(draft.quality))
         if retry and scan:
-            from .rule_retry import enqueue
-            enqueue(db, draft, review, state.get('requested_by',''))
+            if not state.get('technical_scan'):
+                from .rule_retry import enqueue
+                enqueue(db, draft, review, state.get('requested_by',''))
             state['deferred'] = state.get('deferred',0) + 1
         elif retry:
             from .rule_retry import retry_delay

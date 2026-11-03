@@ -31,6 +31,7 @@ export default function AutomationSettings({schedule,onSave,busy=false,assistant
     {control.generation&&!assistantEnabled&&<small className="automation-assistant-note">Для генерации включите ассистента.</small>}
    </div>;})}
   </section>)}</div>
+  <label className="automation-history-scope"><input type="checkbox" checked={Boolean(values.drafts_all_history)} disabled={saving||busy} onChange={e=>update({drafts_all_history:e.target.checked})}/><span><b>Все отзывы без ответа</b><small>Генерация за всё время на подключённых маркетах, включая оценки 1–3★. Существующие ответы и ручные правки сохраняются.</small></span></label>
   <PublicationAutomation values={values} schedule={schedule} update={update} busy={saving||busy} dirty={dirty} assistantEnabled={assistantEnabled}/>
   <ReviewPolicyCampaign/>
   <div className="automation-background"><span className="automation-background-icon"><AppIcon name="История действий"/></span><div><b>Продолжит работу, даже если закрыть сайт</b><p>Обновление данных, подготовка и включённая выгрузка выполняются на сервере. Если автоматическая выгрузка выключена, ответы сохраняются как черновики — отправка после вашего подтверждения.</p></div></div>

@@ -1128,7 +1128,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             lambda value: assess_reply(review, product, value, verified_facts),
             protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
             local_only=fast_only, defer_semantic=model_outage,
-            check_seconds=8 if isinstance(recovery, dict) and recovery.get('policy_regeneration') else None)
+            check_seconds=None)
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still

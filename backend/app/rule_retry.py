@@ -1,7 +1,28 @@
 """Retry verification of saved text; never regenerate or publish a reply."""
 from uuid import uuid4
 from sqlalchemy import select
-from .db import Job, now
+from .db import Job, now, IS_SQLITE
+
+
+def automatic_queue(db, account):
+    """One durable streaming checker per store, rather than one job per draft."""
+    import hashlib
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    jid = 'verify-store-' + hashlib.sha256(account.encode()).hexdigest()[:24]
+    state = {'account_id': account, 'check_only': True, 'policy_scan': True,
+             'technical_scan': True, 'cursor_id': '', 'checked': 0,
+             'message': 'Проверка сохранённых ответов магазина'}
+    insert = sqlite_insert if IS_SQLITE else pg_insert
+    db.execute(insert(Job).values(id=jid, kind='draft_recheck', status='queued', priority=65,
+        max_attempts=1000000, result=state).on_conflict_do_nothing(index_elements=['id']))
+    job = db.scalar(select(Job).where(Job.id == jid).with_for_update().execution_options(populate_existing=True))
+    if job.status == 'running' and job.cancel_requested:
+        return job
+    if job.status not in ('queued', 'running') or job.cancel_requested:
+        job.status, job.cancel_requested, job.progress, job.attempts = 'queued', False, 0, 0
+        job.result = state
+    return job
 
 
 def technical_check(quality):
@@ -22,11 +43,15 @@ def retry_delay(attempt):
 
 def enqueue(db, draft, review, actor_id='', *, manual=False):
     # Caller holds the draft row lock (or its generation lease).
+    if not manual:
+        return automatic_queue(db, review.wb_account_id)
     active = db.scalars(select(Job).where(Job.kind == 'draft_recheck',
         Job.status.in_(('queued', 'running')), Job.cancel_requested == False,
         Job.result['account_id'].as_string() == review.wb_account_id).order_by(Job.created_at, Job.id))
     for existing in active:
         state = existing.result or {}
+        if manual and state.get('technical_scan') and existing.status == 'running' and state.get('current_draft_id') == draft.id:
+            return existing
         remaining = (state.get('draft_ids') or [])[int(state.get('cursor', 0)):]
         if state.get('check_only') and not state.get('policy_scan') and (
                 state.get('retry_draft_id') == draft.id or remaining == [draft.id]):
@@ -46,4 +71,20 @@ def enqueue(db, draft, review, actor_id='', *, manual=False):
         job.result = {**job.result, 'manual_check': True, 'requested_check_at': now()}
     db.add(job)
     return job
+
+
+def consolidate(db):
+    """Supersede redundant automatic checks, preserving explicit user checks."""
+    changed = 0
+    for job in list(db.scalars(select(Job).where(Job.kind == 'draft_recheck',
+            Job.status.in_(('queued','running')), Job.cancel_requested == False))):
+        state = job.result or {}
+        if state.get('retry_draft_id') and state.get('check_only') and not state.get('manual_check'):
+            target = automatic_queue(db, state.get('account_id') or 'owner')
+            job.cancel_requested = True
+            if job.status == 'queued': job.status = 'cancelled'
+            job.result = {**state, 'superseded_by': target.id,
+                'message': 'Проверка продолжится в общей очереди магазина'}
+            changed += 1
+    return changed
 

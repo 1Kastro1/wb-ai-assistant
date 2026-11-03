@@ -7,7 +7,7 @@ from .db import Job, StoreProfile, Account, setting
 DEFAULTS = {'enabled': False, 'reviews_hours': 3, 'questions_hours': 3,
             'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False,
             'question_drafts_enabled': False, 'drafts_hours': 6, 'auto_propose': False,
-            'min_quality': 96, 'max_proposals': 100, 'drafts_days': 7,
+            'drafts_all_history': False, 'min_quality': 96, 'max_proposals': 100, 'drafts_days': 7,
             'publication_low_ratings': False, 'publication_all_low_ratings': False, 'publication_enabled': False, 'publication_hours': 1, 'publication_reviews': True, 'publication_questions': True}
 
 
@@ -54,6 +54,10 @@ def enqueue_generation(db, schedule, store, kind, current):
     enabled = schedule.get('question_drafts_enabled') if kind == 'question_drafts' else schedule.get('drafts_enabled')
     if not schedule.get('enabled') or not enabled or not setting(db, 'assistant_enabled', True):
         return False
+    refreshing = kind == 'drafts' and db.scalar(select(Job.id).where(Job.kind == 'draft_recheck',
+            Job.status.in_(('queued','running')), Job.cancel_requested == False,
+            Job.result['account_id'].as_string() == store.id,
+            Job.result['policy_regeneration'].as_boolean() == True).limit(1))
     last_key = f'last_{kind}:{store.id}'
     last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
     hours = schedule.get('question_drafts_hours', schedule.get('drafts_hours', 6)) if kind == 'question_drafts' else schedule.get('drafts_hours', 6)
@@ -62,7 +66,7 @@ def enqueue_generation(db, schedule, store, kind, current):
     result = {'account_id': store.id, 'scheduled': True,
               'message': 'Плановая подготовка ответов на вопросы' if kind == 'question_drafts' else 'Плановая подготовка ответов на отзывы'}
     if kind == 'drafts':
-        result['since'] = (datetime.fromtimestamp(current, timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
+        result['since'] = (datetime.fromtimestamp(current, timezone.utc)-timedelta(days=1)).isoformat() if refreshing else '' if schedule.get('drafts_all_history') else (datetime.fromtimestamp(current, timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
     db.add(Job(id=str(uuid4()), kind=kind, priority=250, result=result))
     schedule[last_key] = current
     return True

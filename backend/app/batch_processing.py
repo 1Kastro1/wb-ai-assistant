@@ -109,6 +109,9 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
                       Review.marketplace.like('%_question') if questions else ~Review.marketplace.like('%_question')]
         if not single:
             conditions.append(Draft.id.is_(None))
+            if not questions and initial.get('scheduled'):
+                from sqlalchemy import and_
+                conditions.append(~and_(Review.marketplace=='ozon',func.trim(Review.text)==''))
         if selected:
             conditions.append(Review.id.in_(selected))
         if since:

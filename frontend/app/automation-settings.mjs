@@ -4,6 +4,7 @@ export function scheduleValues(schedule={}){
   reviews_sync_enabled:active&&Boolean(schedule.reviews_sync_enabled??schedule.sync_enabled??true),
   questions_sync_enabled:active&&Boolean(schedule.questions_sync_enabled??schedule.sync_enabled??true),
   drafts_enabled:active&&Boolean(schedule.drafts_enabled),
+  drafts_all_history:Boolean(schedule.drafts_all_history),
   question_drafts_enabled:active&&Boolean(schedule.question_drafts_enabled),
   publication_enabled:active&&Boolean(schedule.publication_enabled),
   publication_hours:schedule.publication_hours??1,
@@ -25,7 +26,7 @@ export function schedulePayload(values){
   if(!Number.isInteger(value)||value<1||value>168)throw new Error('Укажите целое число часов от 1 до 168.');
   payload[key]=value;
  }
- for(const key of ['reviews_sync_enabled','questions_sync_enabled','drafts_enabled','question_drafts_enabled','publication_enabled','publication_reviews','publication_questions','publication_low_ratings','publication_all_low_ratings'])payload[key]=Boolean(values[key]);
+ for(const key of ['drafts_all_history','reviews_sync_enabled','questions_sync_enabled','drafts_enabled','question_drafts_enabled','publication_enabled','publication_reviews','publication_questions','publication_low_ratings','publication_all_low_ratings'])payload[key]=Boolean(values[key]);
  payload.publication_markets=Object.fromEntries(['wb','ozon','yandex'].map(provider=>[provider,Boolean(values.publication_markets?.[provider]??true)]));
  if(payload.publication_enabled&&!payload.publication_reviews&&!payload.publication_questions&&!payload.publication_low_ratings)throw new Error('Выберите ответы на отзывы или вопросы для автоматической выгрузки.');
  return payload;

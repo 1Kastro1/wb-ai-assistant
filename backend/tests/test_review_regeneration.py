@@ -13,7 +13,7 @@ def seed(db):
         for suffix in ('auto','human','sent','question'):
             rid=account+suffix
             db.add(Review(id=rid,wb_review_id=rid,wb_account_id=account,product_id=account,
-                rating=5,marketplace=market+('_question' if suffix=='question' else ''),text='',status='draft_ready'))
+                rating=5,marketplace=market+('_question' if suffix=='question' else ''),text='Все супер' if market=='ozon' else '',status='draft_ready'))
             db.flush()
             db.add(Draft(id=rid,review_id=rid,text='Старый ответ',original='Старый ответ',
                 edits=[{'by':owner.id}] if suffix=='human' else []))
@@ -35,7 +35,8 @@ def test_all_market_regeneration_is_durable_preserves_manual_and_never_publishes
             assert auto.edits and auto.edits[-1]['by']=='automation'
             for suffix in ('human','sent','question'): assert db.get(Draft,account+suffix).text=='Старый ответ'
         assert len(list(db.scalars(select(Publication))))==3
-        assert len(list(db.scalars(select(GenerationOutcome))))==3
+        assert len(list(db.scalars(select(GenerationOutcome))))==6
+        assert len(list(db.scalars(select(GenerationOutcome).where(GenerationOutcome.category=='preserved'))))==3
         assert all(db.get(Job,jid).status=='completed' for jid in ids)
         revisions={d.id:d.revision for d in db.scalars(select(Draft))}
     for jid in ids: asyncio.run(regeneration.step(jid))
