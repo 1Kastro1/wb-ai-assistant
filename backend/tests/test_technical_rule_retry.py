@@ -60,7 +60,7 @@ def test_explicit_saved_reply_recheck_precedes_background_scans(client):
     seed_error()
     with Session() as db:
         db.add(Job(id='old-policy-scan', kind='draft_recheck', created_at='2026-01-01', result={'policy_scan':True}))
-        job = enqueue(db, db.get(Draft,'d'), db.get(Review,'r'), 'owner')
+        job = enqueue(db, db.get(Draft,'d'), db.get(Review,'r'), 'owner', manual=True)
         db.commit()
         assert next_job(db).id == job.id
 
@@ -68,8 +68,8 @@ def test_explicit_saved_reply_recheck_precedes_background_scans(client):
 def test_single_generation_and_newest_explicit_check_do_not_wait_for_old_retries(client):
     from app.queue_policy import next_job
     with Session() as db:
-        db.add_all([Job(id='old-check',kind='draft_recheck',created_at='2026-01-01',result={'retry_draft_id':'old'}),
-            Job(id='new-check',kind='draft_recheck',created_at='2026-11-01',result={'retry_draft_id':'new'}),
+        db.add_all([Job(id='old-check',kind='draft_recheck',created_at='2026-01-01',result={'retry_draft_id':'old','manual_check':True}),
+            Job(id='new-check',kind='draft_recheck',created_at='2026-11-01',result={'retry_draft_id':'new','manual_check':True}),
             Job(id='generate',kind='single_draft',created_at='2026-11-01',result={})]);db.commit()
         assert next_job(db).id=='generate'
         db.get(Job,'generate').status='completed';db.commit()
@@ -107,9 +107,11 @@ def test_check_only_preserves_text_and_keeps_retrying_outages_until_cancelled(cl
     with Session() as db:
         job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r')); jid = job.id; db.commit()
     monkeypatch.setattr(services, 'assess_reply', lambda *a, **k: {'passed': True, 'issues': [], 'score': 96})
+    calls = [0]
     async def check(answer, *args, **kwargs):
         assert kwargs['check_only'] is True
-        assert kwargs['check_seconds'] == 45
+        assert kwargs['check_seconds'] == (45 if calls[0] == 0 else 180)
+        calls[0] += 1
         return answer, {'passed': passed, 'checked': passed, 'technical_error': not passed,
                         'matched': 1, 'violations': [], 'issues': [] if passed else ['таймаут']}
     monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
@@ -176,3 +178,89 @@ def test_endpoint_rejects_other_store_and_published_draft(client, monkeypatch):
         db.get(Review, 'r').wb_account_id = 'other'; db.commit()
     assert client.post('/drafts/d/recheck-rules').status_code == 404
 
+
+
+def test_manual_click_resumes_backoff_without_duplicate_or_approval(client, monkeypatch):
+    from app import main
+    from app.queue_policy import next_job
+    seed_error(rating=1)
+    async def no_work(): pass
+    monkeypatch.setattr(main, 'run_job_queue', no_work)
+    with Session() as db:
+        job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r'))
+        job.result = {**job.result, 'retry_at': time.time() + 300, 'check_retries': 9}
+        jid = job.id
+        db.commit()
+    response = client.post('/drafts/d/recheck-rules')
+    assert response.status_code == 200 and response.json()['id'] == jid
+    with Session() as db:
+        job = db.get(Job, jid)
+        assert job.result['retry_at'] == 0 and job.result['manual_check'] is True
+        assert job.result['check_retries'] == 9
+        assert next_job(db).id == jid
+        assert db.get(Draft, 'd').quality['owner_rules']['passed'] is False
+        assert db.get(Draft, 'd').revision == 7
+    compact = client.get('/jobs?compact=true').json()
+    item = next(row for row in compact if row['id'] == jid)
+    assert item['result']['retry_draft_id'] == 'd'
+    assert bool(item['result']['manual_check']) is True
+    assert client.post('/drafts/d/recheck-rules').json()['id'] == jid
+
+
+def test_manual_click_does_not_restart_running_check(client, monkeypatch):
+    from app import main
+    seed_error()
+    async def no_work(): pass
+    monkeypatch.setattr(main, 'run_job_queue', no_work)
+    with Session() as db:
+        job = enqueue(db, db.get(Draft, 'd'), db.get(Review, 'r'))
+        job.status = 'running'
+        job.result = {**job.result, 'started_at': 'original-start'}
+        jid = job.id
+        db.commit()
+    assert client.post('/drafts/d/recheck-rules').json()['id'] == jid
+    with Session() as db:
+        assert db.get(Job, jid).status == 'running'
+        assert db.get(Job, jid).result['started_at'] == 'original-start'
+
+
+@pytest.mark.parametrize('rating', [1, 2, 3, 4, 5])
+def test_manual_recheck_has_cpu_budget_for_every_rating_without_rewriting(client, monkeypatch, rating):
+    from app import services, owner_reply_policy
+    from app.generation_budget import MANUAL_RULE_CHECK_SECONDS
+    seed_error(rating=rating)
+    with Session() as db:
+        review = db.get(Review, 'r')
+        review.text = 'Делал всё по инструкции. Не работает'
+        review.manual = rating <= 3
+        job = enqueue(db, db.get(Draft, 'd'), review, 'owner', manual=True)
+        jid = job.id
+        db.commit()
+    monkeypatch.setattr(services, 'assess_reply', lambda *a, **k: {'passed': True, 'issues': [], 'score': 96})
+    async def check(answer, review, *args, **kwargs):
+        assert review.rating == rating and review.text == 'Делал всё по инструкции. Не работает'
+        assert kwargs['check_seconds'] == MANUAL_RULE_CHECK_SECONDS == 180
+        assert kwargs['check_only'] is True
+        return answer, {'passed': True, 'checked': True, 'matched': 1, 'issues': [], 'violations': []}
+    monkeypatch.setattr(owner_reply_policy, 'enforce_owner_rules', check)
+    asyncio.run(recheck_step(jid))
+    with Session() as db:
+        draft, review = db.get(Draft, 'd'), db.get(Review, 'r')
+        assert draft.text == 'Добрый день! Спасибо за отзыв.' and draft.revision == 7 and draft.edits == []
+        assert review.manual == (rating <= 3)
+        assert not review.is_answered
+        assert db.get(Job, jid).status == 'completed'
+
+
+def test_automatic_retry_backlog_does_not_starve_generation(client):
+    from app.queue_policy import next_job
+    with Session() as db:
+        db.add_all([Job(id='auto-retry', kind='draft_recheck', created_at='2026-01-01',
+            result={'retry_draft_id':'d','check_only':True,'requested_by':'owner'}),
+            Job(id='batch',kind='drafts',created_at='2026-01-01',result={})])
+        db.commit()
+        assert next_job(db).id == 'batch'
+        # An actual direct click still takes precedence over ordinary work.
+        db.get(Job,'auto-retry').result={'retry_draft_id':'d','manual_check':True}
+        db.commit()
+        assert next_job(db).id == 'auto-retry'

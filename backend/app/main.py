@@ -1626,7 +1626,8 @@ def jobs(auth: AUTH, db: DB, request: Request, compact: bool = False):
     if compact:
         fields = ('account_id', 'requested_by', 'manual_batch', 'operation_key', 'total', 'processed', 'failed',
                   'message', 'timing', 'started_at', 'finished_at', 'updated_at', 'failures', 'selected_ids', 'since', 'last_served_at', 'retry_at', 'detail', 'checked', 'changed', 'manual_preserved',
-                  'skipped', 'attention', 'manual_errors', 'remaining', 'retrying', 'current_reviews', 'queue_version', 'requested_total')
+                  'skipped', 'attention', 'manual_errors', 'remaining', 'retrying', 'current_reviews', 'queue_version', 'requested_total',
+                  'retry_draft_id', 'check_retries', 'manual_check')
         columns = [column for column in Job.__table__.columns if column.name != 'result']
         query = select(*columns, *(Job.result[key].label('r_' + key) for key in fields))
         if auth['role'] != 'owner':
@@ -2292,7 +2293,7 @@ def retry_draft_rules(did: str, background: BackgroundTasks, auth: MARKET_OPERAT
     if review.is_answered or review.status == 'publishing':
         raise HTTPException(409, 'Ответ уже отправляется или опубликован')
     from .rule_retry import enqueue
-    job = enqueue(db, existing, review, auth['user_id'])
+    job = enqueue(db, existing, review, auth['user_id'], manual=True)
     db.commit()
     background.add_task(run_job_queue)
     return public(job)

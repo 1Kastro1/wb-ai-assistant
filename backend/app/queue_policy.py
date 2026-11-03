@@ -32,16 +32,19 @@ def queue_ordering():
         (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
             Job.result['policy_regeneration'].as_boolean() == True,
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))
+    manual_check = ((Job.result['retry_draft_id'].as_string().is_not(None))
+                    & (Job.result['manual_check'].as_boolean() == True))
     direct_waiting = select(Job.id).where(Job.status == 'queued', Job.cancel_requested == False,
         or_(Job.kind.in_(('single_draft', 'single_question_draft')),
-            Job.result['retry_draft_id'].as_string().is_not(None)),
+            manual_check),
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
     overdue_generation = batch_generation & (served < generation_cutoff) & ~direct_waiting
     interactive = case((or_(overdue_send, overdue_generation), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
-                       (Job.result['retry_draft_id'].as_string().is_not(None), 1),
+                       (manual_check, 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)
-    requested_check = case((Job.result['retry_draft_id'].as_string().is_not(None), Job.created_at), else_='')
+    requested_check = case((Job.result['retry_draft_id'].as_string().is_not(None),
+        func.coalesce(Job.result['requested_check_at'].as_string(), Job.created_at)), else_='')
     return (interactive, requested_check.desc(), served, Job.priority, Job.created_at, Job.id)
 
 

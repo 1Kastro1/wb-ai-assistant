@@ -209,3 +209,16 @@ test('vehicle identifiers remain visible before expanding a question',()=>{
  assert(html.includes('identifier-preview'));assert(html.includes('RD1-5300053'));assert(html.indexOf('identifier-preview')<html.indexOf('<details'));
  assert(!html.includes('Совместимость подтверждена'));
 });
+
+
+test('saved-text verification displays queued, running and delayed retry states in its card',()=>{
+ const quality={passed:false,owner_rules:{matched:6,status:'error',technical_error:true,passed:false}};
+ for(const [status,retryAt,label] of [['queued',0,'Проверка в очереди'],['running',0,'Проверяем правила…'],['queued',Date.now()/1000+300,'Повторить сейчас']]){
+  const html=render({recheck:async()=>{},ruleCheckJob:{status,result:{retry_at:retryAt}},review:{rating:1,text:'Не работает',draft:{text:'Сохранённый ответ',quality,revision:7}}});
+  assert(html.includes(label));assert(html.includes('Текст ответа сохранён'));
+  assert(html.includes('Сохранённый ответ'));assert(html.includes(' open='));
+  assert(html.includes('aria-live="polite"'));
+  assert(!html.includes('Готов к отправке'));
+  if(status==='running')assert(html.includes('до трёх минут'));
+ }
+});
