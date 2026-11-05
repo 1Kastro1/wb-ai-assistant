@@ -606,8 +606,9 @@ def analytics(db, days=0, product_id='', account_id=''):
         func.avg(Review.rating),
         func.sum(case(((Review.is_answered == False) & (Draft.id.is_(None)), 1), else_=0)),
         func.sum(case(((Review.is_answered == False) & (Review.created_at >= (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()), 1), else_=0)),
+        *(func.sum(case((Review.rating == rating, 1), else_=0)) for rating in range(1, 6)),
     ).select_from(Review).outerjoin(Draft,Draft.review_id==Review.id).where(*filters)
-    total, unanswered, negative, manual, published, average, without_draft, recent_unanswered = db.execute(aggregate).one()
+    total, unanswered, negative, manual, published, average, without_draft, recent_unanswered, *rating_counts = db.execute(aggregate).one()
     topic_where = ["r.marketplace NOT LIKE '%_question'"]
     topic_params = {}
     if days:
@@ -623,8 +624,12 @@ def analytics(db, days=0, product_id='', account_id=''):
     topic_sql = f'SELECT j.value, COUNT(*) FROM reviews AS r, {topic_function}(r.topics) AS j'
     if topic_where:
         topic_sql += ' WHERE ' + ' AND '.join(topic_where)
-    topic_sql += ' GROUP BY j.value ORDER BY j.value'
-    topics = dict(db.execute(sql_text(topic_sql), topic_params).all())
+    topic_group = ' GROUP BY j.value ORDER BY j.value'
+    topics = dict(db.execute(sql_text(topic_sql + topic_group), topic_params).all())
+    negative_topics = {}
+    if product_id:
+        negative_sql = topic_sql + ' AND r.rating <= 3' + topic_group
+        negative_topics = dict(db.execute(sql_text(negative_sql), topic_params).all())
     problem_rows = db.execute(
         select(Product.id, Product.name, Product.brand, func.count(Review.id), func.avg(Review.rating))
         .join(Review, Review.product_id == Product.id)
@@ -646,6 +651,9 @@ def analytics(db, days=0, product_id='', account_id=''):
         'average': round(float(average), 2) if average is not None else 0,
         'drafts': db.scalar(select(func.count()).select_from(Draft).join(Review).where(*filters)),
         'topics': topics,
+        'negative_topics': negative_topics,
+        'rating_distribution': {str(rating): int(count or 0) for rating, count in enumerate(rating_counts, 1)},
+        'product_id': product_id,
         'problem_products': [{'id': row[0], 'name': row[1], 'brand': row[2], 'negative': row[3], 'average': round(float(row[4]), 1)} for row in problem_rows],
         'period_days': days,
     }

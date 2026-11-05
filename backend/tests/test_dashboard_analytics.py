@@ -63,6 +63,9 @@ class AnalyticsCases:
                     self.assertEqual(result['published'],sum(r['answered'] for r in rows))
                     self.assertEqual(result['failed_jobs'],2)
                     self.assertEqual(result['topics'],{'topic':len(rows)})
+                    self.assertEqual(result['rating_distribution'], {str(star):sum(r['rating']==star for r in rows) for star in range(1,6)})
+                    low=sum(r['rating']<=3 for r in rows)
+                    self.assertEqual(result['negative_topics'], {'topic':low} if product and low else {})
 
     def test_empty_store_is_a_real_zero(self):
         with self.factory() as db:
