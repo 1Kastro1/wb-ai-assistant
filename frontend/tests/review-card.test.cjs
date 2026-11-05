@@ -256,3 +256,15 @@ test('complaint product selection is exposed to keyboard and assistive technolog
  assert(html.includes('aria-pressed="true"'));assert(html.includes('is-selected'));
  assert(html.includes('aria-controls="product-feedback-panel"'));
 });
+
+
+test('switching stores safely renders the cleared marketplace overview while a new snapshot loads',()=>{
+ const Overview=loadComponent(path.join(__dirname,'../app/MarketplaceOverview.tsx')).default;
+ for(const overview of [null,{}, {days:0}]){
+  const html=renderToStaticMarkup(React.createElement(Overview,{overview,busy:true,onPeriod(){},onSelect(){}}));
+  assert(html.includes('Все магазины'));assert(!html.includes('market-overview-card '));
+  assert(html.includes('—'));
+ }
+ const loaded=renderToStaticMarkup(React.createElement(Overview,{overview:{days:0,stores:[],totals:{reviews:15,reviews_unanswered:3,questions:2,questions_unanswered:1,reviews_drafts:4,questions_drafts:0}},busy:false,onPeriod(){},onSelect(){}}));
+ assert(loaded.includes('15'));assert(loaded.includes('3'));
+});
