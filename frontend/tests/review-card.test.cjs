@@ -35,7 +35,7 @@ const Card=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx')).default;
 test('complaint products are full accessible buttons with exact identity, counts and keyboard focus',()=>{
  const Problems=loadComponent(path.join(__dirname,'../app/ProblemProducts.tsx')).default;
  const html=renderToStaticMarkup(React.createElement(Problems,{products:[{id:'exact-product',name:'Kangaroo Profoam',brand:'KANGAROO',negative:12,average:2.2}],loading:false,onSelect(){},onAttention(){}}));
- assert(html.includes('Показать негативные отзывы о товаре Kangaroo Profoam'));
+ assert(html.includes('Показать статистику обратной связи о товаре Kangaroo Profoam'));
  assert(html.includes('problem-product-count'));assert(html.includes('12'));assert(html.includes('отзывов 1–3★'));
  assert(html.includes('Средняя оценка 2.2'));
  const source=fs.readFileSync(path.join(__dirname,'../app/ProblemProducts.tsx'),'utf8');
@@ -221,4 +221,38 @@ test('saved-text verification displays queued, running and delayed retry states 
   assert(!html.includes('Готов к отправке'));
   if(status==='running')assert(html.includes('до трёх минут'));
  }
+});
+
+
+const FeedbackCard=loadComponent(path.join(__dirname,'../app/ProductFeedbackInsights.tsx')).ProductFeedbackCard;
+function feedbackView(overrides={}){
+ return renderToStaticMarkup(React.createElement(FeedbackCard,{product:{id:'p',name:'Точный товар',brand:'KANGAROO'},data:null,days:0,loading:false,error:'',onRetry(){},onClear(){},onReviews(){},...overrides}));
+}
+test('product feedback renders selected totals and complaint topics, including published reviews',()=>{
+ const html=feedbackView({data:{product_id:'p',period_days:0,total:100,unanswered:7,negative:20,average:4.25,rating_distribution:{1:10,2:5,3:5,4:10,5:70},negative_topics:{'запах':15,'упаков':5}}});
+ assert(html.includes('Точный товар'));assert(html.includes('100 отзывов'));assert(html.includes('4,25'));
+ assert(html.includes('20% отзывов с оценкой'));assert(html.includes('5 звёзд: 70'));
+ assert(html.includes('Аромат и запах'));assert(html.includes('Упаковка'));
+ assert(html.includes('Читать отзывы 1–3★'));assert(html.includes('Все отзывы товара'));
+});
+test('a changed product or period never displays the previous product feedback',()=>{
+ const data={product_id:'previous',period_days:0,total:777,unanswered:777,negative:777,average:1,rating_distribution:{1:777},negative_topics:{'Чужая тема':777}};
+ for(const candidate of [data,{...data,product_id:'p',period_days:30}]){
+  const html=feedbackView({data:candidate});assert(!html.includes('777'));assert(!html.includes('Чужая тема'));
+  assert(html.includes('Готовим статистику выбранного товара'));
+ }
+});
+test('product feedback distinguishes loading, errors, zero results and no selection',()=>{
+ assert(feedbackView({loading:true}).includes('Загружаем обратную связь по товару'));
+ assert(feedbackView({error:'Нет соединения'}).includes('role="alert"'));
+ assert(feedbackView({error:'Нет соединения'}).includes('Повторить загрузку'));
+ const empty=feedbackView({data:{product_id:'p',period_days:0,total:0,unanswered:0,negative:0,average:0,rating_distribution:{},negative_topics:{}}});
+ assert(empty.includes('За этот период отзывов нет'));assert(!empty.includes('NaN'));assert(empty.includes('Оценок пока нет'));
+ const initial=feedbackView({product:null});assert(initial.includes('Выберите товар'));assert(!initial.includes('Читать отзывы'));
+});
+test('complaint product selection is exposed to keyboard and assistive technology',()=>{
+ const Problems=loadComponent(path.join(__dirname,'../app/ProblemProducts.tsx')).default;
+ const html=renderToStaticMarkup(React.createElement(Problems,{products:[{id:'selected',name:'Выбранный товар',negative:2,average:2}],selectedId:'selected',loading:false,onSelect(){},onAttention(){}}));
+ assert(html.includes('aria-pressed="true"'));assert(html.includes('is-selected'));
+ assert(html.includes('aria-controls="product-feedback-panel"'));
 });
