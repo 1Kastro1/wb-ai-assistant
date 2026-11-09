@@ -113,6 +113,8 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
         payload = response.get('result',response)
         items = payload.get('reviews')
         if not isinstance(items,list): raise ValueError('Ozon не вернул список отзывов')
+        if payload.get('has_next') and str(payload.get('last_id') or '') in seen:
+            raise ValueError('Ozon повторил страницу отзывов; прогресс сохранён')
         for item in items:
             if cancelled and cancelled(): raise asyncio.CancelledError()
             if str(item['id']) in page_done:

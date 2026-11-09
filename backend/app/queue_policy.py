@@ -43,7 +43,7 @@ def queue_ordering():
     # continuous rotation of model checks/publication can starve fresh reviews
     # for days, even though the import's numeric priority is reasonable.
     # Each import yields only after committing its resume checkpoint.
-    overdue_sync = Job.kind.in_(('products', 'reviews', 'questions')) & (served < generation_cutoff)
+    overdue_sync = Job.kind.in_(('products', 'reviews', 'questions')) & (served < generation_cutoff) & ~direct_waiting
     interactive = case((or_(overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (manual_check, 1),

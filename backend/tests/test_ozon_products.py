@@ -213,7 +213,8 @@ def test_ozon_review_cursor_error_preserves_committed_progress(client, monkeypat
     with Session() as db:
         with pytest.raises(ValueError, match='повторил'):
             asyncio.run(ozon.sync_reviews(db, store, checkpoint=saved.append))
-        assert saved == [{'last_id': 'same', 'processed': 1}]
+        assert saved == [{'last_id': '', 'processed': 1, 'page_done_ids': ['r']},
+                         {'last_id': 'same', 'processed': 1}]
         assert db.scalar(select(Review).where(Review.wb_account_id == store)).text == 'Спасибо'
 
 
