@@ -34,7 +34,7 @@ class QueueVerificationPostgres(unittest.TestCase):
                     ('passed',{'checked':True,'passed':True})]:
                     rid=prefix+suffix
                     db.add(Review(id=rid,wb_review_id=rid,product_id=prefix,rating=5,text='Test',risk='NORMAL',manual=False));db.flush()
-                    db.add(Draft(id=rid,review_id=rid,text='Saved text',revision=9,
+                    db.add(Draft(id=rid,review_id=rid,text='Saved text',original='Saved text',revision=9,
                         quality={'passed':rules['passed'],'owner_rules':rules}))
                 db.flush()
                 rows=set(db.scalars(select(Draft.id).join(Review).where(Draft.id.startswith(prefix),automatic_check_condition())))
