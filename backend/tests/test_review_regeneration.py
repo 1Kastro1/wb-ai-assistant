@@ -31,12 +31,15 @@ def test_all_market_regeneration_is_durable_preserves_manual_and_never_publishes
     with Session() as db:
         for account in ('owner','oz','ya'):
             auto=db.get(Draft,account+'auto')
-            assert auto.text!='Старый ответ' and auto.original=='Старый ответ'
-            assert auto.edits and auto.edits[-1]['by']=='automation'
+            assert auto.text=='Старый ответ' and auto.original=='Старый ответ'
+            assert not auto.edits and auto.revision == 1
             for suffix in ('human','sent','question'): assert db.get(Draft,account+suffix).text=='Старый ответ'
         assert len(list(db.scalars(select(Publication))))==3
         assert len(list(db.scalars(select(GenerationOutcome))))==6
-        assert len(list(db.scalars(select(GenerationOutcome).where(GenerationOutcome.category=='preserved'))))==3
+        assert len(list(db.scalars(select(GenerationOutcome).where(GenerationOutcome.category=='preserved'))))==6
+        checks = list(db.scalars(select(Job).where(Job.result['rule_change'].as_boolean() == True)))
+        assert len(checks) == 3
+        assert all(j.result['check_only'] and j.result['policy_scan'] for j in checks)
         assert all(db.get(Job,jid).status=='completed' for jid in ids)
         revisions={d.id:d.revision for d in db.scalars(select(Draft))}
     for jid in ids: asyncio.run(regeneration.step(jid))

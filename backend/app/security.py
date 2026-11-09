@@ -8,6 +8,7 @@ import time
 from urllib.parse import urlsplit
 import httpx
 from .db import Session, Audit, setting
+from .publication_errors import PublicationError
 
 
 def redact(text):
@@ -95,6 +96,7 @@ class EgressGuard:
         ('yandex', 'product_cards'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/offer-cards'),
         ('yandex', 'category_parameters'): ('POST', 'https://api.partner.market.yandex.ru/v2/category/{category_id}/parameters'),
         ('yandex', 'reviews'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback'),
+        ('yandex', 'review_comments'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback/comments'),
         ('yandex', 'publish'): ('POST', 'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback/comments/update'),
         ('yandex', 'questions'): ('POST', 'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions'),
         ('yandex', 'question_publish'): ('POST', 'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions/update'),
@@ -129,6 +131,7 @@ class EgressGuard:
     async def request(self, provider, operation, *, token=None, params=None, body=None, headers=None, url=None, return_text=False, timeout_seconds=None):
         start = time.monotonic()
         status, host = 'BLOCKED', 'blocked'
+        writing = operation in ('publish', 'question_publish')
         try:
             method, template = self.validate(provider, operation)
             url = url or template
@@ -164,14 +167,36 @@ class EgressGuard:
                     break
                 if not response.is_success:
                     advice = 'Сервис временно недоступен; повторите позже.' if response.status_code >= 500 else 'Превышен лимит запросов; повтор будет выполнен позже.' if response.status_code == 429 else 'Проверьте ключ и права доступа.' if response.status_code in (401, 403) else 'Проверьте параметры запроса.'
+                    if writing:
+                        # A timeout/gateway failure may arrive after the upstream
+                        # committed the comment. Only explicit refusals permit retry.
+                        refused = response.status_code in (400, 401, 403, 404, 405, 413, 415, 422, 429, 420)
+                        delay = response.headers.get('Retry-After', '')
+                        raise PublicationError(f'{provider}: HTTP {response.status_code}. {advice}',
+                            outcome='rejected' if refused else 'uncertain',
+                            retryable=response.status_code in (420, 429),
+                            retry_after=int(delay) if delay.isdigit() else 60)
                     raise ValueError(f'{provider}: HTTP {response.status_code}. {advice}')
                 if return_text:
                     return response.text
-                return response.json() if response.content else {}
+                try:
+                    return response.json() if response.content else {}
+                except ValueError:
+                    if writing:
+                        raise PublicationError('Ответ маркетплейса не распознан. Выполняется сверка отправки.') from None
+                    raise ValueError('Ответ внешнего сервиса не распознан.') from None
         except httpx.HTTPError as error:
             status = 'NETWORK_ERROR'
             service = 'сервер Wildberries' if provider == 'wb' else 'внешний сервис'
-            raise ValueError(f'Не удалось установить соединение с {service} ({type(error).__name__}). Проверьте интернет или повторите позже; данные не отправлены.') from None
+            if writing:
+                not_sent = isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+                raise PublicationError(f'Ошибка соединения с {service} ({type(error).__name__}).',
+                    outcome='not_sent' if not_sent else 'uncertain', retryable=not_sent) from None
+            raise ValueError(f'Не удалось установить соединение с {service} ({type(error).__name__}). Повторите позже.') from None
+        except ValueError as error:
+            if writing and status == 'BLOCKED' and not isinstance(error, PublicationError):
+                raise PublicationError(str(error), outcome='not_sent') from None
+            raise
         finally:
             with Session() as db:
                 db.add(Audit(provider=provider if provider in ('wb', 'ozon', 'yandex', 'telegram', 'ollama', 'web', 'tavily') else 'unknown', host=host, operation=operation if (provider, operation) in self.ENDPOINTS else 'blocked', status=status, duration_ms=int((time.monotonic() - start) * 1000)))

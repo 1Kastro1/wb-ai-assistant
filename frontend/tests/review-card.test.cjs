@@ -88,6 +88,15 @@ test('timeout and pending checks are distinct from text violations',()=>{
  assert(status({checked:true,issues:['не учтена упаковка']}).includes('не учтена упаковка'));
 });
 
+test('permanent verification failure does not promise an automatic retry or accuse the answer',()=>{
+ const {OwnerRuleStatus}=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx'));
+ const html=renderToStaticMarkup(React.createElement(OwnerRuleStatus,{quality:{owner_rules:{matched:3,passed:false,checked:false,status:'blocked',retryable:false,issues:['context limit']}}}));
+ assert(html.includes('Нужна настройка проверки'));
+ assert(html.includes('Ответ сохранён'));
+ assert(!html.includes('Проверка продолжится в фоне'));
+ assert(!html.includes('Замечания к тексту'));
+});
+
 const UniqomFitment=loadComponent(path.join(__dirname,'../app/UniqomFitment.tsx')).default;
 const uniqomLinks=loadComponent(path.join(__dirname,'../app/uniqomCatalog.ts'));
 test('Uniqom opens one exact Frame and never embeds an ambiguous vehicle choice',()=>{

@@ -66,6 +66,7 @@ jobs:
           python -m unittest discover -s backend/tests -p 'test_postgres_draft_conflicts.py'
           python -m unittest discover -s backend/tests -p 'test_dashboard_analytics.py'
           python -m unittest discover -s backend/tests -p 'test_operations_postgres.py'
+          python -m unittest discover -s backend/tests -p 'test_queue_verification_postgres.py'
       - name: Verify complete backend suite on disposable SQLite
         env:
           DATABASE_URL: ''

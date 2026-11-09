@@ -94,7 +94,7 @@ def test_disable_during_first_request_stops_further_publications(client, ready, 
     assert len(ready) == 1
 
 
-def test_uncertain_result_stops_store_without_retrying_sent_request(client, ready, monkeypatch):
+def test_uncertain_result_reserves_only_affected_reviews_without_retrying(client, ready, monkeypatch):
     class Provider:
         async def publish(self, db, review, text):
             ready.append(review.id); raise ValueError('Marketplace timeout')
@@ -103,10 +103,12 @@ def test_uncertain_result_stops_store_without_retrying_sent_request(client, read
     jid = jobs()[0]; asyncio.run(automatic.run_step(jid))
     with Session() as db:
         job = db.get(Job, jid)
-        assert job.result['uncertain'] == 1
+        assert job.result['uncertain'] == 2
         job.status = 'queued'; db.commit()  # recovery after a process restart
     asyncio.run(automatic.run_step(jid))
-    assert len(ready) == 1
+    assert len(ready) == 2 and len(set(ready)) == 2
+    with Session() as db:
+        assert db.scalar(select(func.count()).select_from(Job).where(Job.kind == 'publication_reconcile')) == 1
 
 
 def test_changed_revision_is_not_sent_from_old_action_snapshot(client, ready, monkeypatch):
@@ -163,7 +165,7 @@ def test_inflight_slot_after_crash_is_reported_and_never_reposted(client, ready)
         db.get(Review, rid).status = 'publishing'; db.commit()
         assert next(s for s in automatic.runtime(db, setting(db,'automation_schedule'))['stores'] if s['id']==store_id)['uncertain']==1
     asyncio.run(automatic.run_step(jid))
-    assert not ready
+    assert [item[1] for item in ready] == [store_id + 'question']
 
 
 def test_checkpoint_resume_keeps_exact_counts_and_never_repeats_a_reply(client, ready, monkeypatch):

@@ -84,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -1227,6 +1227,10 @@ async def execute_job(job_id):
                 from .scheduled_publication import run_step
                 await run_step(job_id)
                 db.refresh(job)
+            elif kind == 'publication_reconcile':
+                from .publication_reconciliation import run_step
+                await run_step(job_id)
+                db.refresh(job)
             elif kind == 'wb_excluded_recovery':
                 from .bulk_recovery import run_step
                 await run_step(job_id)
@@ -1332,7 +1336,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -1394,6 +1398,8 @@ def queue_scheduled_jobs(current=None):
         row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update())
         value = normalize_schedule(row.value if row else {})
         enqueue_due_jobs(db, value, time.time() if current is None else current)
+        from .publication_reconciliation import enqueue_due
+        enqueue_due(db)
         set_setting(db, 'automation_schedule', value)
         db.commit()
 
@@ -2595,6 +2601,8 @@ def create_memory(body: CreateMemoryInput, request: Request, auth: OWNER, db: DB
         set_setting(db, 'memory-meta:' + mid, {'created_at': now(),
                     'created_by_name': actor.display_name if actor else auth.get('username', '')})
         try:
+            from .rule_change_recheck import rule_changed, snapshot
+            rule_changed(db, None, snapshot(item), auth['user_id'])
             db.commit()
         except IntegrityError:
             db.rollback()
@@ -2643,11 +2651,14 @@ def memory_kind(mid: str, body: MemoryKind, request: Request, auth: OWNER, db: D
     item = db.get(Memory, mid)
     if not item:
         raise HTTPException(404, 'Правило не найдено')
+    from .rule_change_recheck import rule_changed, snapshot
+    before = snapshot(item)
     item.kind = body.kind
     meta = setting(db, 'memory-meta:' + mid, {})
     actor = db.get(User, auth['user_id'])
     set_setting(db, 'memory-meta:' + mid, {**meta, 'updated_at': now(),
                 'updated_by_name': actor.display_name if actor else auth.get('username', '')})
+    rule_changed(db, before, snapshot(item), auth['user_id'])
     db.commit()
     request.state.activity_details = rule_details(public(item), 'rule_updated')
     return {**public(item), **setting(db, 'memory-meta:' + mid, {})}
@@ -2657,10 +2668,13 @@ def memory_kind(mid: str, body: MemoryKind, request: Request, auth: OWNER, db: D
 def memory_enabled(mid: str, body: MemoryEnabled, request: Request, auth: OWNER, db: DB):
     item=db.get(Memory,mid)
     if not item:raise HTTPException(404,'Правило не найдено')
+    from .rule_change_recheck import rule_changed, snapshot
+    before = snapshot(item)
     item.enabled=body.enabled
     meta=setting(db,'memory-meta:'+mid,{})
     actor=db.get(User,auth['user_id'])
     set_setting(db,'memory-meta:'+mid,{**meta,'updated_at':now(),'updated_by_name':actor.display_name if actor else auth.get('username','')})
+    rule_changed(db, before, snapshot(item), auth['user_id'])
     db.commit()
     request.state.activity_details={**rule_details(public(item),'rule_updated'),'event':'rule_enabled' if item.enabled else 'rule_disabled'}
     return {**public(item),**setting(db,'memory-meta:'+mid,{})}
@@ -2720,11 +2734,14 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
 @app.delete('/memory/{mid}')
 def memory_delete(mid: str, request: Request, auth: OWNER, db: DB):
     existing = db.get(Memory,mid)
+    from .rule_change_recheck import rule_changed, snapshot
+    before = snapshot(existing)
     details = rule_details(public(existing),'rule_deleted') if existing else {}
     result = db.execute(delete(Memory).where(Memory.id == mid))
     if result.rowcount != 1:
         db.rollback()
         raise HTTPException(404, 'Правило уже удалено или не найдено')
+    rule_changed(db, before, None, auth['user_id'])
     db.commit()
     request.state.activity_details = details
     return {'ok': True, 'id': mid}

@@ -83,7 +83,10 @@ def test_opaque_cursor_checkpoint_preserves_progress(client,monkeypatch):
     with Session() as db:
         with pytest.raises(ValueError,match='повторил'):
             asyncio.run(sync.sync_reviews(integrations.OzonProvider(),db,'ozon-shop',checkpoint=checkpoints.append))
-        assert checkpoints==[{'last_id':'opaque-cursor','processed':1}]
+        assert checkpoints==[
+            {'last_id':'','processed':1,'page_done_ids':['remote']},
+            {'last_id':'opaque-cursor','processed':1},
+            {'last_id':'opaque-cursor','processed':2,'page_done_ids':['remote']}]
         assert db.get(Review,'r').text=='Saved review'
 
 

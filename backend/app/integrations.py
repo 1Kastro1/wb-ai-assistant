@@ -391,7 +391,11 @@ class WildberriesProvider:
         return total
 
     async def publish(self, db, review, text):
-        token = wb_token(db, review.wb_account_id)
+        from .publication_errors import PublicationError, before_send
+        try:
+            token = wb_token(db, review.wb_account_id)
+        except ValueError as error:
+            raise before_send(error) from None
         if review.marketplace == 'wb_question':
             question_id = review.wb_review_id.removeprefix('question:')
             current = await guard.request('wb', 'question', token=token, params={'id': question_id})
@@ -401,12 +405,19 @@ class WildberriesProvider:
                 raise ValueError('На вопрос уже есть ответ в WB')
             await guard.request('wb', 'question_publish', token=token, body={'id': question_id, 'text': text, 'state': 'wbRu'})
             return
-        current = await guard.request('wb', 'review', token=token, params={'id': review.wb_review_id})
+        try:
+            current = await guard.request('wb', 'review', token=token, params={'id': review.wb_review_id})
+        except ValueError as error:
+            raise before_send(error) from None
         if current.get('error') or current.get('data', {}).get('id') != review.wb_review_id:
-            raise ValueError('WB не подтвердил существование выбранного отзыва')
+            raise PublicationError('WB не подтвердил существование выбранного отзыва', outcome='not_sent')
         if current.get('data', {}).get('answer'):
-            raise ValueError('У отзыва уже есть ответ в WB')
-        await guard.request('wb', 'publish', token=token, body={'id': review.wb_review_id, 'text': text})
+            from .publication_reconciliation import wb_evidence
+            return wb_evidence(current, review.wb_review_id, text)
+        result = await guard.request('wb', 'publish', token=token, body={'id': review.wb_review_id, 'text': text})
+        if not isinstance(result, dict) or result.get('error'):
+            raise PublicationError('WB не подтвердил результат отправки. Выполняется сверка.')
+        return {'state': 'accepted'}
 
 
 wb = WildberriesProvider()
@@ -483,7 +494,11 @@ class OzonProvider:
         return await sync_reviews(self, db, store_id, progress, cancelled, resume, checkpoint, between_pages)
 
     async def publish(self, db, review, text):
-        store, token = store_credentials(db, review.wb_account_id)
+        from .publication_errors import PublicationError, before_send
+        try:
+            store, token = store_credentials(db, review.wb_account_id)
+        except ValueError as error:
+            raise before_send(error) from None
         if review.marketplace == 'ozon_question':
             question_id = review.wb_review_id.removeprefix('question:')
             current = await guard.request('ozon', 'question_info', headers=self.headers(store, token), body={'question_id': question_id})
@@ -500,10 +515,11 @@ class OzonProvider:
         from .publication_constraints import publication_restriction
         restriction = publication_restriction(review)
         if restriction:
-            raise ValueError(restriction)
+            raise PublicationError(restriction, outcome='not_sent')
         result = await guard.request('ozon', 'publish', headers=self.headers(store, token), body={'review_id': review.wb_review_id, 'text': text})
         if not isinstance(result, dict) or not isinstance(result.get('comment_id'), str) or not result['comment_id'].strip():
-            raise ValueError('Ozon не подтвердил создание комментария. Нужна сверка; автоповтор исключён.')
+            raise PublicationError('Ozon не подтвердил создание комментария. Выполняется сверка.')
+        return {'state': 'accepted', 'comment_id': result['comment_id'].strip()}
 
     async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)
@@ -538,7 +554,7 @@ class YandexProvider:
         if operation in ('questions', 'question_publish'):
             suffix = '/update' if operation == 'question_publish' else ''
             return f'https://api.partner.market.yandex.ru/v1/businesses/{business_id}/goods-questions{suffix}'
-        suffix = '/comments/update' if operation == 'publish' else ''
+        suffix = '/comments/update' if operation == 'publish' else '/comments' if operation == 'review_comments' else ''
         return f'https://api.partner.market.yandex.ru/v2/businesses/{business_id}/goods-feedback{suffix}'
 
     async def test(self, db, store_id):
@@ -681,7 +697,11 @@ class YandexProvider:
         return total
 
     async def publish(self, db, review, text):
-        store, token = store_credentials(db, review.wb_account_id)
+        from .publication_errors import PublicationError, before_send
+        try:
+            store, token = store_credentials(db, review.wb_account_id)
+        except ValueError as error:
+            raise before_send(error) from None
         if review.marketplace == 'yandex_question':
             question_id = review.wb_review_id.removeprefix('question:')
             if not question_id.isdigit(): raise ValueError('Некорректный идентификатор вопроса Яндекс Маркета')
@@ -691,8 +711,14 @@ class YandexProvider:
                 raise ValueError('Яндекс Маркет не подтвердил существование вопроса')
             await guard.request('yandex', 'question_publish', headers={'Api-Key': token}, url=self.target(store, 'question_publish'), body={'operationType': 'CREATE', 'parentEntityId': {'id': int(question_id), 'type': 'QUESTION'}, 'text': text})
             return
-        if not review.wb_review_id.isdigit(): raise ValueError('Некорректный идентификатор отзыва Яндекс Маркета')
-        await guard.request('yandex', 'publish', headers={'Api-Key': token}, url=self.target(store, 'publish'), body={'feedbackId': int(review.wb_review_id), 'comment': {'text': text[:4096]}})
+        if not review.wb_review_id.isdigit() or not 1 <= len(text) <= 4096:
+            raise PublicationError('Некорректный идентификатор отзыва или длина ответа Яндекс Маркета', outcome='not_sent')
+        result = await guard.request('yandex', 'publish', headers={'Api-Key': token}, url=self.target(store, 'publish'), body={'feedbackId': int(review.wb_review_id), 'comment': {'text': text}})
+        from .publication_reconciliation import yandex_comment_evidence
+        if not isinstance(result, dict) or result.get('status') != 'OK':
+            raise PublicationError('Яндекс Маркет не подтвердил результат отправки. Выполняется сверка.')
+        evidence = yandex_comment_evidence(result.get('result') or {}, review.wb_review_id, text)
+        return evidence or {'state': 'accepted'}
 
     async def sync_questions(self, db, store_id, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         store, token = store_credentials(db, store_id)

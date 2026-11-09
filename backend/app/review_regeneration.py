@@ -128,6 +128,12 @@ async def lane(job_id,name,session_factory,limit):
                     from .generation_control import record_usage
                     record_usage(db,job_id,rid,'reused',updated=False)
                     category='generated'
+                elif draft:
+                    # A policy refresh verifies saved text. It is not permission
+                    # to replace an existing reply with a newly generated answer.
+                    from .rule_change_recheck import enqueue_draft
+                    enqueue_draft(db,draft,review,state.get('requested_by',''))
+                    category='preserved'
                 else:
                     token=batch_context.set({'job_id':job_id,'policy_regeneration':True})
                     try:
