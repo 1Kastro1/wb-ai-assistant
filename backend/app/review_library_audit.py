@@ -216,16 +216,18 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             pending=select(ReviewLibraryAuditRow).join(Review,Review.id==ReviewLibraryAuditRow.review_id).where(
                 ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')),
                 Review.wb_account_id==stage['account_id'],Review.marketplace==stage['marketplace'])
-            due=db.scalar(pending.where(ReviewLibraryAuditRow.retry_at<=time.time())
-                .order_by(ReviewLibraryAuditRow.retry_at,ReviewLibraryAuditRow.review_id).limit(1)) if not retried else None
-            from_retry=due is not None
-            # Exclusion also resumes older checkpoints whose first failure held
-            # the cursor in place; a pending row is never accidentally rescanned.
+            # Persist lane fairness across slices: a long retry must not use
+            # every slice while new reviews in the same market remain.
             recorded=select(ReviewLibraryAuditRow.review_id).where(ReviewLibraryAuditRow.job_id==job_id,
                 ReviewLibraryAuditRow.review_id==Review.id).exists()
-            rid=due.review_id if due else db.scalar(select(Review.id).where(
+            new_rid=db.scalar(select(Review.id).where(
                 Review.wb_account_id==stage['account_id'],Review.marketplace==stage['marketplace'],
                 Review.id>stage['cursor'],Review.id<=stage['last_id'],~recorded).order_by(Review.id).limit(1))
+            due=db.scalar(pending.where(ReviewLibraryAuditRow.retry_at<=time.time())
+                .order_by(ReviewLibraryAuditRow.retry_at,ReviewLibraryAuditRow.review_id).limit(1)) if (
+                    not retried and (state.get('last_lane')!='retry' or not new_rid)) else None
+            from_retry=due is not None
+            rid=due.review_id if due else new_rid
             if not rid:
                 remaining=db.scalar(select(func.count()).select_from(pending.subquery())) or 0
                 if remaining:
@@ -272,7 +274,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             db.flush()
             deferred=db.scalar(select(func.count()).select_from(ReviewLibraryAuditRow).where(
                 ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')))) or 0
-            state.update(stages=stages,retry_at=0,deferred=deferred,last_progress_at=now(),
+            state.update(stages=stages,retry_at=0,deferred=deferred,last_lane='retry' if from_retry else 'new',last_progress_at=now(),
                 message=f"{stage['marketplace']}: проверено {stage['checked']} из {stage['total']}, подтверждено {stage['verified']}, требуют внимания {stage['attention']}, ожидают повтора {deferred}")
             job.progress=min(99,round(state['checked']*100/max(1,state['total'])))
             yielding=time.monotonic()-started>=seconds or iteration==limit-1
