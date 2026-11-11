@@ -1,3 +1,4 @@
+from app.db import VerifiedReplyText,VerifiedReplyContext
 import asyncio
 from types import SimpleNamespace
 import pytest
@@ -63,7 +64,7 @@ def test_new_variant_rotates_learns_and_reuses_only_success(client, monkeypatch,
         second = asyncio.run(services.generate_draft(db, 'buyer'))
         assert second['quality']['passed'], second['quality']
         assert second['text'] != first['text']
-        assert list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+        assert list(db.scalars(select(VerifiedReplyContext)))
     with Session() as db:
         r,p=db.get(Review,'buyer'),db.get(Product,'lotion')
         rules=matching_owner_rules(db,p)
@@ -91,7 +92,7 @@ def test_failed_verification_never_teaches_template(client, monkeypatch):
         result=asyncio.run(services.generate_draft(db,'buyer'))
         assert not result['quality']['passed']
         assert result['quality']['owner_rules']['technical_error']
-        assert not list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+        assert not list(db.scalars(select(VerifiedReplyContext)))
 
 
 def test_unchanged_verifier_repair_cannot_masquerade_as_new_variant(client, monkeypatch):
