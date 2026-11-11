@@ -72,6 +72,15 @@ class RotationTests(unittest.TestCase):
     def test_partial_set_cannot_be_sealed(self):
         with self.assertRaises(FileNotFoundError):retention.seal(self.root,'20261109T030000Z')
 
+    def test_empty_or_linked_key_is_not_a_complete_backup(self):
+        for linked in (False,True):
+            with tarfile.open(self.root/(self.stamp+'.config.tar.gz'),'w:gz') as archive:
+                key=tarfile.TarInfo('fernet.key')
+                if linked:key.type=tarfile.SYMTYPE;key.linkname='/outside/key'
+                archive.addfile(key)
+                env=tarfile.TarInfo('.env');env.size=1;archive.addfile(env,io.BytesIO(b'x'))
+            with self.assertRaises(ValueError):retention.seal(self.root,self.stamp)
+
     def test_manifest_must_have_all_expected_components(self):
         path=self.root/(self.stamp+'.verified.json')
         data=json.loads(path.read_text());del data['parts']['config.tar.gz'];path.write_text(json.dumps(data))
