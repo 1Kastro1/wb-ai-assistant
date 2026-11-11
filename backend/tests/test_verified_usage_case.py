@@ -1,3 +1,4 @@
+from app.db import VerifiedReplyText,VerifiedReplyContext
 import asyncio
 import pytest
 from unittest.mock import AsyncMock
@@ -28,7 +29,7 @@ def test_current_evidence_recipe_is_freshly_checked_and_learned_without_model(cl
         assert '5 минут' in first['text'] and 'скользкой' in first['text']
         second=asyncio.run(services.generate_draft(db,'buyer'))
         assert second['text']!=first['text'] and second['quality']['passed']
-        assert list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+        assert list(db.scalars(select(VerifiedReplyContext)))
         p,r=db.get(Product,'lotion'),db.get(Review,'buyer')
         rules=matching_owner_rules(db,p)
         facts=services.review_verified_facts(db,r,p,rules)
@@ -62,5 +63,5 @@ def test_unknown_policy_still_requires_semantic_check_and_timeout_is_not_approva
         result=asyncio.run(services.generate_draft(db,'buyer'))
         assert not result['quality']['passed']
         assert result['quality']['owner_rules']['technical_error']
-        assert not list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+        assert not list(db.scalars(select(VerifiedReplyContext)))
     assert checker.await_count
