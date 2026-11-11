@@ -5,6 +5,10 @@ umask 077
 backup_dir=/var/backups/wb-ai-assistant
 compose_file=/srv/wb-ai-assistant/docker-compose.yml
 compose_env=/srv/wb-ai-assistant/.env
+if [ "${WB_ASSISTANT_UPDATE_LOCK_HELD:-0}" != 1 ]; then
+  exec 8>/var/lock/wb-assistant-update.lock
+  flock -x 8
+fi
 mkdir -p "$backup_dir"
 exec 9>"$backup_dir/.backup.lock"
 flock -x 9
