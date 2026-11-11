@@ -70,7 +70,7 @@ def report(db):
 async def inspect_review(job_id,rid,session_factory):
     from .services import assess_reply,review_verified_facts,generate_draft
     from .owner_reply_rules import matching_owner_rules
-    from .owner_reply_policy import enforce_owner_rules,attach_rule_quality
+    from .owner_reply_policy import enforce_owner_rules,attach_rule_quality,local_issues,fingerprint
     from .generation_control import exclusive_generation,ReviewSkipped,batch_context
     from .rule_execution import verification_key
     from .learned_reply_templates import load_template,remember_template
@@ -102,8 +102,17 @@ async def inspect_review(job_id,rid,session_factory):
             key=verification_key(answer,review,product,rules,facts)
             assess=lambda text:assess_reply(review,product,text,facts)
             expected=(was_published,review.status,review.existing_answer,draft.id if draft else '',draft.revision if draft else 0,answer)
-            learned=load_template(db,review,product,rules,facts,assess,exact_answer=answer)
-            if learned:checked,verdict=learned
+            local_quality=assess(answer)
+            defects=list(dict.fromkeys([*((local_quality.get('issues') or []) if not local_quality.get('passed') else []),*local_issues(answer,rules,review)]))
+            learned=None if defects else load_template(db,review,product,rules,facts,assess,exact_answer=answer)
+            if defects:
+                # A known local failure is sufficient to reject a saved reply.
+                # Never spend a model timeout proving a reply already ineligible.
+                checked=answer
+                verdict={'checked':True,'passed':False,'technical_error':False,
+                    'fingerprint':fingerprint(rules),'matched':len(rules),'issues':defects,
+                    'verification_method':'local_rejection','verification_seconds':0}
+            elif learned:checked,verdict=learned
             else:
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
                 checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
@@ -186,7 +195,8 @@ def selfcheck(db,job_id,stages):
 async def step(job_id,session_factory=Session,limit=40,seconds=25):
     from .rule_change_recheck import policy_version
     from .rule_retry import retry_delay,verification_failure
-    started=time.monotonic()
+    from .generation_control import GenerationBusy
+    started=time.monotonic();retried=False
     for iteration in range(limit):
         with session_factory() as db:
             job=db.get(Job,job_id)
@@ -200,19 +210,40 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                 checks=selfcheck(db,job_id,stages)
                 state.update(selfcheck=checks,library=statistics(db),completed_at=now(),message='Все площадки проверены. Автообновление и отправка остаются выключены.')
                 job.status,job.progress,job.result='completed',100,state
-                # Ordinary manual actions may use the learned library again.
-                # Schedules remain disabled and safe mode still blocks sending.
                 set_setting(db,MAINTENANCE,False)
                 db.commit();return
             stage=stages[index]
-            rid=db.scalar(select(Review.id).where(Review.wb_account_id==stage['account_id'],
-                Review.marketplace==stage['marketplace'],Review.id>stage['cursor'],Review.id<=stage['last_id']).order_by(Review.id).limit(1))
+            pending=select(ReviewLibraryAuditRow).join(Review,Review.id==ReviewLibraryAuditRow.review_id).where(
+                ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')),
+                Review.wb_account_id==stage['account_id'],Review.marketplace==stage['marketplace'])
+            # Persist lane fairness across slices: a long retry must not use
+            # every slice while new reviews in the same market remain.
+            recorded=select(ReviewLibraryAuditRow.review_id).where(ReviewLibraryAuditRow.job_id==job_id,
+                ReviewLibraryAuditRow.review_id==Review.id).exists()
+            new_rid=db.scalar(select(Review.id).where(
+                Review.wb_account_id==stage['account_id'],Review.marketplace==stage['marketplace'],
+                Review.id>stage['cursor'],Review.id<=stage['last_id'],~recorded).order_by(Review.id).limit(1))
+            due=db.scalar(pending.where(ReviewLibraryAuditRow.retry_at<=time.time())
+                .order_by(ReviewLibraryAuditRow.retry_at,ReviewLibraryAuditRow.review_id).limit(1)) if (
+                    not retried and (state.get('last_lane')!='retry' or not new_rid)) else None
+            from_retry=due is not None
+            rid=due.review_id if due else new_rid
             if not rid:
-                stage['completed_at']=now();state.update(stages=stages,stage=index+1,
+                remaining=db.scalar(select(func.count()).select_from(pending.subquery())) or 0
+                if remaining:
+                    earliest=db.scalar(pending.with_only_columns(func.min(ReviewLibraryAuditRow.retry_at)))
+                    state.update(deferred=remaining,retry_at=max(time.time()+1,earliest or time.time()+60),
+                        message=f"{stage['marketplace']}: проверено {stage['checked']} из {stage['total']}; ожидают повтора {remaining}. Следующий маркет не запущен.")
+                    job.status,job.result='queued',state;db.commit();return
+                stage['completed_at']=now();state.update(stages=stages,stage=index+1,deferred=0,retry_at=0,
                     account_id=stages[index+1]['account_id'] if index+1<len(stages) else stage['account_id'])
                 job.result=state;db.commit();continue
+        if from_retry:retried=True
         try:outcome=await inspect_review(job_id,rid,session_factory)
         except asyncio.CancelledError:raise
+        except GenerationBusy:
+            outcome={'status':'retry','failure_code':'generation_busy',
+                'issues':['Ответ ещё готовится; проверка повторится после освобождения записи']}
         except Exception as exc:
             failure=verification_failure(exc)
             outcome={'status':'retry' if failure['retryable'] else 'blocked','issues':[failure['reason']],
@@ -223,27 +254,32 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             state=dict(job.result or {});stages=[dict(s) for s in state['stages']];stage=stages[state['stage']]
             row=db.get(ReviewLibraryAuditRow,(job_id,rid))
             if row is None:row=ReviewLibraryAuditRow(job_id=job_id,review_id=rid);db.add(row)
+            final_before=row.status not in (None,'retry','blocked')
             row.status=outcome['status'];row.attempts=(row.attempts or 0)+1
             row.input_key=outcome.get('input_key','');row.template_id=outcome.get('template_id','')
             row.issues=outcome.get('issues',[]);row.updated_at=now()
+            if not from_retry:stage['cursor']=rid
             if outcome['status'] in ('retry','blocked'):
                 delay=retry_delay(row.attempts) if outcome['status']=='retry' else 3600
                 row.retry_at=time.time()+delay
-                state.update(retry_at=row.retry_at,current_review=rid,detail='; '.join(row.issues)[:500],
-                    message=f"{stage['marketplace']}: проверка сохранена, ожидает {'повтора' if outcome['status']=='retry' else 'исправления сервиса'}. Следующий маркет не запущен.")
-                job.status,job.result='queued',state;db.commit();return
-            stage['cursor']=rid
-            for target in (stage,state):
-                target['checked']=target.get('checked',0)+1
-                field='verified' if outcome['status']=='verified' else 'attention'
-                target[field]=target.get(field,0)+1
-            state.update(stages=stages,retry_at=0,current_review='',detail='',last_progress_at=now(),
-                message=f"{stage['marketplace']}: проверено {stage['checked']} из {stage['total']}, подтверждено {stage['verified']}, требуют внимания {stage['attention']}")
+                state.update(current_review=rid,detail='; '.join(row.issues)[:500])
+            else:
+                row.retry_at=0
+                if not final_before:
+                    for target in (stage,state):
+                        target['checked']=target.get('checked',0)+1
+                        field='verified' if outcome['status']=='verified' else 'attention'
+                        target[field]=target.get(field,0)+1
+                state.update(current_review='',detail='')
+            db.flush()
+            deferred=db.scalar(select(func.count()).select_from(ReviewLibraryAuditRow).where(
+                ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')))) or 0
+            state.update(stages=stages,retry_at=0,deferred=deferred,last_lane='retry' if from_retry else 'new',last_progress_at=now(),
+                message=f"{stage['marketplace']}: проверено {stage['checked']} из {stage['total']}, подтверждено {stage['verified']}, требуют внимания {stage['attention']}, ожидают повтора {deferred}")
             job.progress=min(99,round(state['checked']*100/max(1,state['total'])))
             yielding=time.monotonic()-started>=seconds or iteration==limit-1
             job.result=state;job.status='queued' if yielding else 'running';db.commit()
         if yielding:return
-    # A slice containing only empty/completed stages must also remain resumable.
     with session_factory() as db:
         job=db.get(Job,job_id)
         if job.status=='running':job.status='queued';db.commit()
