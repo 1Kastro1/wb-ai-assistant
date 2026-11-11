@@ -15,7 +15,7 @@ case "${1:---prepare-only}" in
   --rotate) rotation=apply ;;
   *) printf 'Use --prepare-only or --rotate\n' >&2; exit 2 ;;
 esac
-retention=/usr/local/lib/wb-ai-assistant/backup_retention.py
+retention=${2:-/usr/local/lib/wb-ai-assistant/backup_retention.py}
 test -f "$retention"
 db_tmp="$backup_dir/$stamp.postgres.dump.tmp"
 data_tmp="$backup_dir/$stamp.data.tar.gz.tmp"
