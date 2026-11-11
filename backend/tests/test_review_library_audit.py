@@ -299,3 +299,16 @@ def test_deferred_failure_allows_same_market_progress_without_crossing_barrier(m
         assert job.status=='completed' and job.result['checked']==4 and job.result['verified']==4
         assert job.result['stages'][0]['cursor']=='z-yandex' and job.result['deferred']==0
         assert db.scalar(select(func.count()).select_from(VerifiedReplyText))==1
+
+
+def test_generation_lease_after_restart_is_retryable_not_configuration_failure(monkeypatch):
+    from app.generation_control import GenerationBusy
+    async def busy(*args,**kwargs):raise GenerationBusy('Ответ уже готовится')
+    monkeypatch.setattr('app.review_library_audit.inspect_review',busy)
+    with Session() as db:seed(db);jid=start(db).id;db.commit()
+    asyncio.run(step(jid))
+    with Session() as db:
+        row=db.get(ReviewLibraryAuditRow,(jid,'r-yandex'))
+        assert row.status=='retry' and time.time()<row.retry_at<time.time()+180
+        assert db.get(Job,jid).result['stage']==0
+        assert not list(db.scalars(select(VerifiedReplyContext)))
