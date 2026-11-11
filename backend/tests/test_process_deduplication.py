@@ -1,3 +1,4 @@
+from app.db import VerifiedReplyText,VerifiedReplyContext
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -74,12 +75,8 @@ def test_duplicate_checks_reuse_only_current_exact_persisted_success(client,monk
             d=db.get(Draft,'bad')
             assert d.text==first['text'] and d.quality['passed']
             assert d.quality['owner_rules']['verification_method']=='learned_exact_context'
-            for row in db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))):
-                for entry in row.value.values():
-                    from app.learned_reply_templates import _variants
-                    texts=[v['answer'] for v in _variants(entry,db)]
-                    assert len(texts)==len(set(texts))
-
+            rows=list(db.scalars(select(VerifiedReplyContext)))
+            assert len(rows)==len({(r.context_key,r.kind,r.template_id) for r in rows})
 
 def test_candidates_deduplicated_after_required_style(client,monkeypatch):
     with Session() as db:

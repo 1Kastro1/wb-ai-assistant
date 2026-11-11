@@ -376,6 +376,39 @@ class Job(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, default=2)
 
 
+class VerifiedReplyText(Base):
+    __tablename__ = 'verified_reply_texts'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String, default=now)
+
+
+class VerifiedReplyContext(Base):
+    __tablename__ = 'verified_reply_contexts'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    template_id: Mapped[str] = mapped_column(ForeignKey('verified_reply_texts.id'), index=True)
+    context_key: Mapped[str] = mapped_column(String, index=True)
+    kind: Mapped[str] = mapped_column(String, index=True)
+    verdict: Mapped[dict] = mapped_column(JSON, default=dict)
+    presentation: Mapped[list] = mapped_column(JSON, default=list)
+    source_review_id: Mapped[str] = mapped_column(String, default='')
+    source_marketplace: Mapped[str] = mapped_column(String, default='')
+    verified_at: Mapped[float] = mapped_column(Float, default=0)
+
+
+class ReviewLibraryAuditRow(Base):
+    __tablename__ = 'review_library_audit_rows'
+    job_id: Mapped[str] = mapped_column(ForeignKey('jobs.id', ondelete='CASCADE'), primary_key=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey('reviews.id', ondelete='CASCADE'), primary_key=True)
+    status: Mapped[str] = mapped_column(String, index=True)
+    input_key: Mapped[str] = mapped_column(String, default='')
+    template_id: Mapped[str] = mapped_column(String, default='')
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    retry_at: Mapped[float] = mapped_column(Float, default=0, index=True)
+    issues: Mapped[list] = mapped_column(JSON, default=list)
+    updated_at: Mapped[str] = mapped_column(String, default=now)
+
+
 def setting(db, key, default=None):
     row = db.get(Setting, key)
     return row.value if row else default

@@ -2,7 +2,7 @@
 import time
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select, func, case, or_
-from .db import Job
+from .db import Job, setting
 
 
 class QueueYield(Exception):
@@ -12,6 +12,8 @@ class QueueYield(Exception):
 def next_job(db, kinds=None):
     statement = select(Job).where(Job.status == 'queued', Job.cancel_requested == False,
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
+    if setting(db,'review_library_maintenance',False):
+        statement=statement.where(Job.kind=='review_library_audit')
     if kinds is not None:
         statement = statement.where(Job.kind.in_(kinds))
     return db.scalar(statement.order_by(*queue_ordering()).limit(1))
