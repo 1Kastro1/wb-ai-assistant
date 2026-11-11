@@ -115,7 +115,8 @@ async def inspect_review(job_id,rid,session_factory):
                 draft.quality={**(draft.quality or {}),**quality}
                 review.status='manual_review' if review.manual or not quality['passed'] else 'draft_ready'
             tid=''
-            if quality['passed'] and verdict.get('checked') is True and verdict.get('passed') is True:
+            if (quality['passed'] and not quality.get('text_issues') and verdict.get('checked') is True
+                    and verdict.get('passed') is True and not verdict.get('technical_error') and not verdict.get('issues')):
                 proof=SimpleNamespace(text=answer,quality=quality,id=rid)
                 approved=remember_template(db,review,product,rules,facts,proof)
                 from .verified_reply_library import remember,text_id
