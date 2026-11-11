@@ -1174,7 +1174,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         db.add(draft)
     review.status = 'manual_review' if review.manual or not quality['passed'] or model.startswith('safety-fallback') else 'draft_ready'
     from .rule_retry import technical_check, enqueue
-    if technical_check(quality):
+    from .generation_control import batch_context
+    if technical_check(quality) and not (batch_context.get() or {}).get('suppress_rule_retry'):
         db.flush()
         enqueue(db, draft, review)
     if not requested_instruction.strip():
