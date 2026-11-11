@@ -56,7 +56,8 @@ def variants(db,key,kind):
     rows=db.execute(select(VerifiedReplyContext,VerifiedReplyText.text)
         .join(VerifiedReplyText,VerifiedReplyText.id==VerifiedReplyContext.template_id)
         .where(VerifiedReplyContext.context_key==key,VerifiedReplyContext.kind.in_((kind,'legacy')))
-        .order_by(VerifiedReplyContext.verified_at.desc(),VerifiedReplyContext.id).limit(12)).all()
+        .order_by(VerifiedReplyContext.verified_at.desc(),VerifiedReplyContext.id).limit(12)
+        .execution_options(populate_existing=True)).all()
     result=[]
     for entry,text in rows:
         if entry.kind=='legacy' and time.time()-entry.verified_at>MAX_AGE:continue
