@@ -185,7 +185,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
     from .rule_change_recheck import policy_version
     from .rule_retry import retry_delay,verification_failure
     started=time.monotonic()
-    for _ in range(limit):
+    for iteration in range(limit):
         with session_factory() as db:
             job=db.get(Job,job_id)
             if job.cancel_requested:job.status='cancelled';db.commit();return
@@ -236,8 +236,13 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             state.update(stages=stages,retry_at=0,current_review='',detail='',last_progress_at=now(),
                 message=f"{stage['marketplace']}: проверено {stage['checked']} из {stage['total']}, подтверждено {stage['verified']}, требуют внимания {stage['attention']}")
             job.progress=min(99,round(state['checked']*100/max(1,state['total'])))
-            job.result=state;job.status='queued';db.commit()
-        if time.monotonic()-started>=seconds:return
+            yielding=time.monotonic()-started>=seconds or iteration==limit-1
+            job.result=state;job.status='queued' if yielding else 'running';db.commit()
+        if yielding:return
+    # A slice containing only empty/completed stages must also remain resumable.
+    with session_factory() as db:
+        job=db.get(Job,job_id)
+        if job.status=='running':job.status='queued';db.commit()
 
 
 if __name__=='__main__':
