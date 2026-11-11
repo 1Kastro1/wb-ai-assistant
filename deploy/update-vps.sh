@@ -5,7 +5,7 @@ umask 077
 cd /srv/wb-ai-assistant
 exec 8>/var/lock/wb-assistant-update.lock
 flock -n 8
-/usr/local/sbin/wb-assistant-backup --prepare-only
+WB_ASSISTANT_UPDATE_LOCK_HELD=1 /usr/local/sbin/wb-assistant-backup --prepare-only
 stamp=$(cat /var/backups/wb-ai-assistant/latest-verified)
 git pull --ff-only origin main
 docker compose up -d --build
