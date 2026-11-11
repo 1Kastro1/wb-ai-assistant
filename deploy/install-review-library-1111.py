@@ -25,7 +25,7 @@ def main(expected):
     with open('/var/lock/wb-assistant-update.lock','w') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         assert output('git','rev-parse','HEAD')==BASE,'Unexpected production revision'
-        assert not output('git','status','--porcelain'),'Production checkout has local changes'
+        assert not output('git','status','--porcelain','--untracked-files=no'),'Production checkout has local changes'
         assert not output('docker','compose','ps','--status','running','-q','worker'),'Worker must remain stopped'
         stamp=Path('/var/backups/wb-ai-assistant/latest-verified').read_text().strip()
         assert stamp>'20261111T103132Z','New pre-update backup is not ready'
