@@ -145,3 +145,26 @@ def test_review_changed_during_check_cannot_receive_old_approval(monkeypatch):
         assert db.get(Draft,'d-yandex').text=='Ручное изменение'
         assert not list(db.scalars(select(VerifiedReplyContext)))
         assert db.get(Job,jid).result['checked']==0
+
+
+def test_contradictory_technical_success_never_teaches_template(monkeypatch):
+    async def broken(answer,*args,**kwargs):
+        return answer,{'passed':True,'checked':True,'technical_error':True,'issues':[]}
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',broken)
+    with Session() as db:seed(db);jid=start(db).id;db.commit()
+    asyncio.run(step(jid,limit=1))
+    with Session() as db:
+        assert not list(db.scalars(select(VerifiedReplyContext)))
+        assert db.get(Job,jid).result['checked']==0
+
+
+def test_status_is_owner_only_and_scheduler_cannot_restart_during_audit(client,monkeypatch):
+    from app.main import queue_scheduled_jobs
+    with Session() as db:seed(db);jid=start(db).id;db.commit()
+    queue_scheduled_jobs()
+    response=client.get('/review-library/status')
+    assert response.status_code==200 and response.json()['job']['id']==jid
+    with Session() as db:
+        assert len(list(db.scalars(select(Job).where(Job.status=='queued'))))==1
+    client.post('/auth/logout')
+    assert client.get('/review-library/status').status_code==401
