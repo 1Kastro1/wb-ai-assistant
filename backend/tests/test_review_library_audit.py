@@ -112,6 +112,8 @@ def test_retry_does_not_advance_market_or_approve_failed_check(monkeypatch):
         assert j.result['retry_at']>time.time()
         assert not list(db.scalars(select(VerifiedReplyContext)))
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
+    with Session() as db:
+        db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).retry_at=0;db.commit()
     asyncio.run(step(jid))
     with Session() as db:
         assert db.get(Job,jid).status=='completed'
@@ -225,3 +227,75 @@ def test_completed_campaign_releases_manual_queue_with_automation_still_paused(m
         assert not setting(db,'automation_schedule')['enabled']
         db.add(Job(id='owner-manual',kind='single_draft'));db.flush()
         assert next_job(db).id=='owner-manual'
+
+
+def test_obvious_content_failure_is_rejected_without_model_timeout(monkeypatch):
+    async def forbidden(*args,**kwargs):raise AssertionError('Known failure must not call the model')
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',forbidden)
+    with Session() as db:
+        seed(db)
+        draft=db.get(Draft,'d-yandex');draft.text='Спасибо.'
+        jid=start(db).id;db.commit()
+    asyncio.run(step(jid,limit=1))
+    with Session() as db:
+        row=db.get(ReviewLibraryAuditRow,(jid,'r-yandex'))
+        assert row.status=='attention' and row.attempts==1
+        assert db.get(Draft,'d-yandex').quality['owner_rules']['verification_method']=='local_rejection'
+        assert db.get(Draft,'d-yandex').text=='Спасибо.'
+        assert not list(db.scalars(select(VerifiedReplyContext)))
+
+
+def test_known_owner_rule_failure_never_requires_model_to_reject(monkeypatch):
+    async def forbidden(*args,**kwargs):raise AssertionError('Greeting violation is deterministic')
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',forbidden)
+    with Session() as db:
+        seed(db)
+        db.add(Memory(id='hello',kind='REVIEW_RULE',text='Каждый ответ начинай с «Добрый день!».',enabled=True))
+        db.get(Draft,'d-yandex').text='Здравствуйте! Благодарим за отзыв. Рады, что покупка Вам понравилась.'
+        jid=start(db).id;db.commit()
+    asyncio.run(step(jid,limit=1))
+    with Session() as db:
+        row=db.get(ReviewLibraryAuditRow,(jid,'r-yandex'))
+        assert row.status=='attention'
+        assert db.get(Draft,'d-yandex').quality['owner_rules']['verification_method']=='local_rejection'
+        assert not list(db.scalars(select(VerifiedReplyContext)))
+
+
+@pytest.mark.parametrize('old_checkpoint',[False,True])
+def test_deferred_failure_allows_same_market_progress_without_crossing_barrier(monkeypatch,old_checkpoint):
+    async def sometimes(answer,review,*args,**kwargs):
+        if review.id=='r-yandex':
+            return answer,{'passed':False,'checked':False,'technical_error':True,'retryable':True,'issues':['timeout']}
+        return await good(answer,review,*args,**kwargs)
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',sometimes)
+    with Session() as db:
+        seed(db)
+        db.add(Review(id='z-yandex',wb_review_id='second',product_id='p-yandex',wb_account_id='yandex',marketplace='yandex',text='Отлично!',rating=4))
+        db.flush();db.add(Draft(id='second',review_id='z-yandex',text='Добрый день! Спасибо за отзыв.',original='old'))
+        jid=start(db).id;db.commit()
+    if old_checkpoint:
+        asyncio.run(step(jid,limit=1))
+        with Session() as db:
+            job=db.get(Job,jid);state=dict(job.result);stages=[dict(v) for v in state['stages']]
+            stages[0]['cursor']='';job.result={**state,'stages':stages};db.commit()
+    asyncio.run(step(jid))
+    with Session() as db:
+        job=db.get(Job,jid)
+        assert job.result['checked']==1 and job.result['verified']==1 and job.result['deferred']==1
+        assert job.result['stage']==0 and job.result['stages'][1]['checked']==0
+        assert db.get(ReviewLibraryAuditRow,(jid,'z-yandex')).status=='verified'
+        assert db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).attempts==1
+        assert all(v.source_review_id!='r-yandex' for v in db.scalars(select(VerifiedReplyContext)))
+        db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).retry_at=0;db.commit()
+    asyncio.run(step(jid))
+    with Session() as db:
+        assert db.get(Job,jid).result['checked']==1 and db.get(Job,jid).result['deferred']==1
+        assert db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).attempts==2
+        db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).retry_at=0;db.commit()
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
+    asyncio.run(step(jid))
+    with Session() as db:
+        job=db.get(Job,jid)
+        assert job.status=='completed' and job.result['checked']==4 and job.result['verified']==4
+        assert job.result['stages'][0]['cursor']=='z-yandex' and job.result['deferred']==0
+        assert db.scalar(select(func.count()).select_from(VerifiedReplyText))==1
