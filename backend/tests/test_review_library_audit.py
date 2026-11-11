@@ -312,3 +312,30 @@ def test_generation_lease_after_restart_is_retryable_not_configuration_failure(m
         assert row.status=='retry' and time.time()<row.retry_at<time.time()+180
         assert db.get(Job,jid).result['stage']==0
         assert not list(db.scalars(select(VerifiedReplyContext)))
+
+
+def test_long_retry_slices_cannot_starve_new_reviews_in_same_market(monkeypatch):
+    async def sometimes(answer,review,*args,**kwargs):
+        if review.id in ('r-yandex','s-yandex'):
+            return answer,{'passed':False,'checked':False,'technical_error':True,'retryable':True,'issues':['timeout']}
+        return await good(answer,review,*args,**kwargs)
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',sometimes)
+    with Session() as db:
+        seed(db)
+        for rid,rating in (('s-yandex',5),('z-yandex',4)):
+            db.add(Review(id=rid,wb_review_id=rid,product_id='p-yandex',wb_account_id='yandex',marketplace='yandex',text='Отлично!',rating=rating))
+            db.flush();db.add(Draft(id=rid,review_id=rid,text='Добрый день! Спасибо за отзыв.',original='old'))
+        jid=start(db).id;db.commit()
+    # Each operation exhausts a slice, as a long real model call would.
+    asyncio.run(step(jid,seconds=0));asyncio.run(step(jid,seconds=0))
+    with Session() as db:
+        for rid in ('r-yandex','s-yandex'):db.get(ReviewLibraryAuditRow,(jid,rid)).retry_at=0
+        db.commit()
+    asyncio.run(step(jid,seconds=0))
+    with Session() as db:
+        assert db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).attempts==2
+    asyncio.run(step(jid,seconds=0))
+    with Session() as db:
+        assert db.get(ReviewLibraryAuditRow,(jid,'z-yandex')).status=='verified'
+        assert db.get(ReviewLibraryAuditRow,(jid,'s-yandex')).attempts==1
+        assert db.get(Job,jid).result['stage']==0 and db.get(Job,jid).result['checked']==1
