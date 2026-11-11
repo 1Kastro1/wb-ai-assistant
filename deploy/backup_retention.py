@@ -55,8 +55,9 @@ def seal(root, stamp):
                     raise ValueError('Invalid PostgreSQL dump header')
         else:
             with tarfile.open(path, 'r:gz') as archive:
-                names = {member.name.removeprefix('./') for member in archive}
-                if suffix == 'config.tar.gz' and not {'fernet.key', '.env'}.issubset(names):
+                members = {member.name.removeprefix('./'):member for member in archive}
+                if suffix == 'config.tar.gz' and not all(name in members and members[name].isfile()
+                        and members[name].size>0 for name in ('fernet.key','.env')):
                     raise ValueError('Configuration backup is incomplete')
         parts[suffix] = {'bytes': info.st_size, 'sha256': digest(path)}
     manifest = {'version': 1, 'stamp': stamp, 'catalog_verified': True,
