@@ -1,3 +1,4 @@
+from app.db import VerifiedReplyText,VerifiedReplyContext
 import asyncio
 from types import SimpleNamespace as NS
 import pytest
@@ -68,15 +69,8 @@ def test_failed_verdict_and_changed_name_are_not_examples(client):
         del review.buyer_name
         # A library entry with a failed check cannot become a generation example.
         from sqlalchemy import select
-        for row in db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))):
-            values = dict(row.value)
-            for key, entry in values.items():
-                entry = dict(entry)
-                entry['variants'] = [{**item, 'verdict': {**item['verdict'], 'passed': False,
-                                                       'technical_error': True}}
-                                     for item in entry['variants']]
-                values[key] = entry
-            row.value = values
+        for row in db.scalars(select(VerifiedReplyContext)):
+            row.verdict={**row.verdict,'passed':False,'technical_error':True}
         db.flush()
         assert services.previous_answer_examples(db, review, product) == []
 
