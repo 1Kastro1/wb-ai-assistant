@@ -1,3 +1,4 @@
+from app.db import VerifiedReplyText,VerifiedReplyContext
 import asyncio
 from unittest.mock import patch
 from sqlalchemy import select
@@ -37,7 +38,7 @@ def test_successful_separate_recheck_is_learned_and_reused_after_new_session(cli
     asyncio.run(recheck_step(jid))
     with Session() as db:
         assert db.get(Draft,'saved').quality['passed']
-        assert list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+        assert list(db.scalars(select(VerifiedReplyContext)))
         db.add(Review(id='next',wb_review_id='next',product_id='p',wb_account_id='owner',marketplace='wb',text='Все отлично!',rating=5,risk='NORMAL',manual=False));db.commit()
         result=asyncio.run(services.generate_draft(db,'next'))
         assert result['text']==answer
@@ -71,7 +72,7 @@ def test_failed_recheck_never_enters_library(client,monkeypatch):
     monkeypatch.setattr(owner_reply_policy,'enforce_owner_rules',timeout)
     asyncio.run(recheck_step(jid))
     with Session() as db:
-        assert not list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+        assert not list(db.scalars(select(VerifiedReplyContext)))
 
 
 def test_template_body_is_shared_across_contexts_and_legacy_duplicates_compact(client):
@@ -90,11 +91,10 @@ def test_template_body_is_shared_across_contexts_and_legacy_duplicates_compact(c
                 {'answer':answer,'at':time.time(),'verdict':d.quality['owner_rules']},
                 {'answer':'  '+answer+'  ','at':time.time(),'verdict':d.quality['owner_rules']}]}}))
         db.flush();result=compact_library(db);db.commit()
-        bodies=[entry['answer'] for row in db.scalars(select(Setting).where(Setting.key.startswith('verified-texts:'))) for entry in row.value.values()]
+        bodies=list(db.scalars(select(VerifiedReplyText.text)))
         assert bodies==[answer] and result['unique_templates']==1
-        for row in db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))):
-            for entry in row.value.values():
-                assert 'answer' not in entry
-                assert len(_variants(entry,db))==1
+        assert not list(db.scalars(select(Setting).where(Setting.key.startswith('verified-replies:'))))
+        contexts=list(db.scalars(select(VerifiedReplyContext)))
+        assert contexts and len({(c.context_key,c.kind,c.template_id) for c in contexts})==len(contexts)
         assert load_template(db,r,p,rules,facts,lambda value:{'passed':True})[0]==answer
         assert not load_template(db,r,p,rules+['Новое правило'],facts,lambda value:{'passed':True})
