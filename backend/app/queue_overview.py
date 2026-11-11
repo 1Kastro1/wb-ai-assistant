@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 from .db import Job, StoreProfile, setting, public
 from .config import DATA
 
-LABELS = {'publication_reconcile': 'Сверка отправленных ответов', 'scheduled_publication': 'Автоматическая выгрузка готовых ответов', 'products': 'Обновление товаров', 'reviews': 'Обновление отзывов', 'questions': 'Обновление вопросов',
+LABELS = {'review_library_audit':'Проверка отзывов и обучение шаблонов','publication_reconcile': 'Сверка отправленных ответов', 'scheduled_publication': 'Автоматическая выгрузка готовых ответов', 'products': 'Обновление товаров', 'reviews': 'Обновление отзывов', 'questions': 'Обновление вопросов',
           'drafts': 'Ответы на отзывы', 'question_drafts': 'Ответы на вопросы',
           'single_draft': 'Ответ на отзыв', 'single_question_draft': 'Ответ на вопрос',
           'draft_audit': 'Перепроверка черновиков', 'draft_recheck': 'Проверка правил ответа',
@@ -19,6 +19,7 @@ LABELS = {'publication_reconcile': 'Сверка отправленных отв
 
 def job_stage(kind,state):
     if kind in ('scheduled_publication','wb_publish_send','wb_publish_prepare','publication_reconcile'):return 'publication'
+    if kind=='review_library_audit':return 'verification'
     if kind in ('products','reviews','questions'):return 'sync'
     if kind=='draft_recheck' and not state.get('policy_regeneration') or kind=='draft_audit':return 'verification'
     return 'generation'
