@@ -195,6 +195,7 @@ def selfcheck(db,job_id,stages):
 async def step(job_id,session_factory=Session,limit=40,seconds=25):
     from .rule_change_recheck import policy_version
     from .rule_retry import retry_delay,verification_failure
+    from .generation_control import GenerationBusy
     started=time.monotonic();retried=False
     for iteration in range(limit):
         with session_factory() as db:
@@ -238,6 +239,9 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
         if from_retry:retried=True
         try:outcome=await inspect_review(job_id,rid,session_factory)
         except asyncio.CancelledError:raise
+        except GenerationBusy:
+            outcome={'status':'retry','failure_code':'generation_busy',
+                'issues':['Ответ ещё готовится; проверка повторится после освобождения записи']}
         except Exception as exc:
             failure=verification_failure(exc)
             outcome={'status':'retry' if failure['retryable'] else 'blocked','issues':[failure['reason']],
