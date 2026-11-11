@@ -82,7 +82,7 @@ def recount(db,job):
     counts=dict(db.execute(select(GenerationOutcome.category,func.count()).where(
         GenerationOutcome.job_id==job.id).group_by(GenerationOutcome.category)).all())
     state=dict(job.result or {})
-    state.update(processed=sum(counts.values()),saved=counts.get('generated',0),
+    state.update(processed=sum(v for k,v in counts.items() if k!='deferred_fast'),saved=counts.get('generated',0),
         preserved=counts.get('preserved',0),errors=counts.get('attention',0),updated_at=now())
     job.result=state
     job.progress=min(99,int(100*state['processed']/max(1,state.get('total',0))))
@@ -99,25 +99,27 @@ async def lane(job_id,name,session_factory,limit):
             if job.cancel_requested or job.status in ('completed','cancelled') or state.get(name+'_done'):
                 return
             if state.get(name+'_retry_at',0)>time.time():return
-            if name=='fast' and state.get('fast_disabled'):return
             query=scope(state['account_id'],state['cutoff'])
-            if not state.get('fast_disabled'):
+            if name=='fallback':
+                query=select(Review).where(Review.wb_account_id==state['account_id'],select(GenerationOutcome.review_id).where(
+                    GenerationOutcome.job_id==job_id, GenerationOutcome.review_id==Review.id,
+                    GenerationOutcome.category=='deferred_fast').correlate(Review).exists())
+            else:
                 query=query.where(fast_condition() if name=='fast' else ~fast_condition())
-            cursor=state.get(name+'_cursor')
+            cursor=state.get(name+'_cursor') if name!='fallback' else None
             if cursor:
                 query=query.where(or_(Review.created_at<cursor[0],and_(Review.created_at==cursor[0],Review.id<cursor[1])))
             review=db.scalar(query.order_by(Review.created_at.desc(),Review.id.desc()).limit(1))
             if not review:
                 job=db.scalar(select(Job).where(Job.id==job_id).with_for_update().execution_options(populate_existing=True))
-                if name=='context' and bool((job.result or {}).get('fast_disabled')) != bool(state.get('fast_disabled')):
-                    return  # The fast lane expanded this lane while we selected.
-                job.result={**job.result,name+'_done':True};db.commit();return
+                if name!='fallback':job.result={**job.result,name+'_done':True}
+                db.commit();return
             rid=review.id;position=[review.created_at,review.id]
             draft=db.scalar(select(Draft).where(Draft.review_id==rid))
             recovery={'policy_regeneration':True,'job_id':job_id,'account_id':state['account_id']}
             category=None;failure=None
             previous=db.get(GenerationOutcome,(job_id,rid))
-            if not previous:
+            if not previous or previous.category=='deferred_fast':
                 if protected_draft(db,review,draft,recovery):category='preserved'
                 elif current_reply(db,review,draft):
                     from .learned_reply_templates import remember_template
@@ -128,16 +130,21 @@ async def lane(job_id,name,session_factory,limit):
                     from .generation_control import record_usage
                     record_usage(db,job_id,rid,'reused',updated=False)
                     category='generated'
+                elif draft:
+                    # A policy refresh verifies saved text. It is not permission
+                    # to replace an existing reply with a newly generated answer.
+                    from .rule_change_recheck import enqueue_draft
+                    enqueue_draft(db,draft,review,state.get('requested_by',''))
+                    category='preserved'
                 else:
                     token=batch_context.set({'job_id':job_id,'policy_regeneration':True})
                     try:
                         await generate_draft(db,rid,recovery=recovery,fast_only=name=='fast')
                     except FastPathUnavailable:
                         db.rollback()
-                        job=db.scalar(select(Job).where(Job.id==job_id).with_for_update().execution_options(populate_existing=True))
-                        job.result={**job.result,'fast_disabled':True,'fast_done':True,
-                            'context_done':False,'context_cursor':None}
-                        db.commit();return
+                        # Defer only this review. The durable outcome survives a
+                        # restart without a huge JSON list or a global rescan.
+                        category='deferred_fast'
                     except GenerationBusy:
                         db.rollback();failure='busy'
                     except ReviewSkipped:
@@ -171,22 +178,32 @@ async def step(job_id,session_factory=Session,limit=1000):
         if not setting(db,'assistant_enabled',True):
             job.status='queued';job.result={**job.result,'retry_at':time.time()+60,
                 'message':'Ожидаем включения ассистента. Прогресс сохранён.'};db.commit();return
+        if (job.result or {}).get('fast_disabled'):
+            # Resume jobs made by the previous implementation. Committed
+            # outcomes keep already processed reviews from generating twice.
+            job.result={**job.result,'fast_disabled':False,'fast_done':False,
+                'fast_cursor':None,'lane_version':2}
         job.status='running';db.commit()
-    await asyncio.gather(lane(job_id,'fast',session_factory,limit),lane(job_id,'context',session_factory,limit))
     with session_factory() as db:
-        state=dict(db.get(Job,job_id).result or {})
-    if state.get('fast_disabled') and not state.get('context_done'):
-        await lane(job_id,'context',session_factory,limit)
+        pending=db.scalar(select(GenerationOutcome.review_id).where(
+            GenerationOutcome.job_id==job_id,GenerationOutcome.category=='deferred_fast').limit(1))
+    await asyncio.gather(lane(job_id,'fast',session_factory,limit),
+        lane(job_id,'fallback' if pending else 'context',session_factory,limit))
     with session_factory() as db:
         job=db.scalar(select(Job).where(Job.id==job_id).with_for_update())
         recount(db,job);state=dict(job.result or {})
         if job.cancel_requested:job.status='cancelled'
-        elif state.get('fast_done') and state.get('context_done'):
+        elif state.get('fast_done') and state.get('context_done') and not db.scalar(
+                select(GenerationOutcome.review_id).where(GenerationOutcome.job_id==job_id,
+                    GenerationOutcome.category=='deferred_fast').limit(1)):
             job.status,job.progress='completed',100
             state.update(finished_at=now(),message='Обновление завершено. Ручные правки и отправленные ответы сохранены.')
         else:
             job.status='queued'
             due=[state.get(n+'_retry_at',0) for n in ('fast','context') if not state.get(n+'_done')]
+            if db.scalar(select(GenerationOutcome.review_id).where(GenerationOutcome.job_id==job_id,
+                    GenerationOutcome.category=='deferred_fast').limit(1)):
+                due.append(state.get('fallback_retry_at',0))
             state.update(retry_at=min(due) if due else 0,last_served_at=now(),
                 message=f"Обработано: {state['processed']} из {state['total']}. Сохранено: {state['saved']}; защищено: {state['preserved']}; требуют внимания: {state['errors']}.")
         job.result=state;db.commit()

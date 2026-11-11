@@ -8,8 +8,8 @@ from .security import guard
 from .safety import mask_vin
 
 
-async def seller_reply(headers, review_id, cancelled=None):
-    offset, seen, pending, rejected = 0, set(), None, None
+async def seller_reply(headers, review_id, cancelled=None, *, expected_text=None, comment_id=None):
+    offset, seen, pending, rejected, mismatch = 0, set(), None, None, False
     for _ in range(100):
         if cancelled and cancelled():
             raise asyncio.CancelledError()
@@ -27,6 +27,13 @@ async def seller_reply(headers, review_id, cancelled=None):
                 raise ValueError('Ozon вернул комментарий другого отзыва')
             text = str(comment.get('text') or '').strip()
             status = str(comment.get('status') or '').upper()
+            if expected_text is not None:
+                # The publication snapshot is immutable; a later unrelated
+                # seller comment must never confirm this particular attempt.
+                same_id = not comment_id or str(comment.get('id') or comment.get('comment_id') or '') == str(comment_id)
+                if text != expected_text.strip() or not same_id:
+                    mismatch = True
+                    continue
             if comment.get('is_deleted') is True or status == 'DELETED':
                 continue
             if 'is_published' in comment or 'is_rejected' in comment:
@@ -37,6 +44,8 @@ async def seller_reply(headers, review_id, cancelled=None):
             if not text:
                 unknown = True; continue
             if status in ('', 'PUBLISHED', 'APPROVED'):
+                if expected_text is not None and not status and not comment.get('published_at'):
+                    unknown = True; continue
                 published.append(comment)
             elif status in ('PENDING', 'MODERATION', 'ON_MODERATION', 'PROCESSING'):
                 pending = pending or {'state':'answer_pending', 'text':text}
@@ -50,7 +59,7 @@ async def seller_reply(headers, review_id, cancelled=None):
         if unknown:
             raise ValueError('Статус комментария продавца Ozon не распознан; нужна сверка')
         if payload.get('has_next') is False or (len(comments) < 100 and not payload.get('has_next')):
-            return pending or rejected or {'state':'absent', 'text':''}
+            return pending or rejected or {'state':'mismatch' if mismatch else 'absent', 'text':''}
         next_offset = payload.get('offset', offset + len(comments))
         if not isinstance(next_offset, int) or next_offset <= offset or next_offset in seen:
             raise ValueError('Ozon повторил страницу комментариев; статус ответа сохранён')
@@ -68,7 +77,7 @@ def apply_reply(db, rid, expected, result):
     if not row or snapshot(row) != expected or row.status == 'publishing':
         db.rollback(); return 'changed'
     reservation = db.scalar(select(Publication).where(Publication.review_id == rid))
-    if reservation and reservation.status in ('in_flight', 'uncertain', 'mismatch'):
+    if reservation and reservation.status in ('in_flight', 'uncertain', 'mismatch', 'answer_pending'):
         db.rollback(); return 'reserved'
     state = result['state']
     if state == 'absent' and reservation and reservation.status == 'published':
@@ -91,6 +100,10 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
     store, token = store_credentials(db, store_id)
     headers = provider.headers(store, token)
     total, last_id = int((resume or {}).get('processed',0)), str((resume or {}).get('last_id',''))
+    # The API page cursor may be opaque. Keep that cursor until the whole page
+    # is done, and record completed review IDs so a cooperative yield after one
+    # comment lookup resumes the same page without skipping or repeating work.
+    page_done = set(str(value) for value in (resume or {}).get('page_done_ids', []))
     seen = {last_id} if last_id else set()
     for _ in range(10000):
         if cancelled and cancelled(): raise asyncio.CancelledError()
@@ -100,8 +113,12 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
         payload = response.get('result',response)
         items = payload.get('reviews')
         if not isinstance(items,list): raise ValueError('Ozon не вернул список отзывов')
+        if payload.get('has_next') and str(payload.get('last_id') or '') in seen:
+            raise ValueError('Ozon повторил страницу отзывов; прогресс сохранён')
         for item in items:
             if cancelled and cancelled(): raise asyncio.CancelledError()
+            if str(item['id']) in page_done:
+                continue
             previous = db.scalar(select(Review).where(Review.wb_account_id==store_id, Review.wb_review_id==str(item['id'])))
             saved = snapshot(previous) if previous else (False,'','unanswered')
             content = '\n'.join(str(item.get(k) or '') for k in ('text','positive','negative')).strip()
@@ -117,6 +134,9 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
             evidence = {'state':'absent','text':''} if zero and not saved[0] and not saved[1] else await seller_reply(headers,item['id'],cancelled)
             apply_reply(db,rid,expected,evidence)
             total += 1
+            page_done.add(str(item['id']))
+            if checkpoint: checkpoint({'last_id': last_id, 'processed': total,
+                                       'page_done_ids': sorted(page_done)})
         if between_pages: await between_pages()
         if progress: progress(min(95,5+total//100))
         if not items or payload.get('has_next') is False or (len(items)<100 and not payload.get('has_next')):
@@ -124,6 +144,7 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
         last_id = str(payload.get('last_id') or items[-1]['id'])
         if not last_id or last_id in seen: raise ValueError('Ozon повторил страницу отзывов; прогресс сохранён')
         seen.add(last_id)
+        page_done.clear()
         if checkpoint: checkpoint({'last_id':last_id, 'processed':total})
     raise ValueError('Достигнут лимит страниц отзывов Ozon; прогресс сохранён')
 

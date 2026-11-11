@@ -1,7 +1,7 @@
 export const workStages=[['sync','Обновление'],['generation','Ответы'],['verification','Проверка'],['publication','Выгрузка']];
 export function workStage(task){
  if(task.stage_key)return task.stage_key;
- if(['scheduled_publication','wb_publish_send','wb_publish_prepare'].includes(task.kind))return 'publication';
+ if(['scheduled_publication','wb_publish_send','wb_publish_prepare','publication_reconcile'].includes(task.kind))return 'publication';
  if(['products','reviews','questions'].includes(task.kind))return 'sync';
  if(task.stage?.includes('Проверка')||task.kind==='draft_recheck'&&!task.label?.includes('Обновление ответов'))return 'verification';
  return 'generation';

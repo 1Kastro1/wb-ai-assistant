@@ -153,7 +153,8 @@ def anonymous_opening(reply):
 
 def apply_local_preferences(reply, review, rules, style_only=False):
     config = context_constraints(rules, review)
-    reply = plain_text(reply)
+    from .reply_identity import normalize_reply_opening
+    reply = normalize_reply_opening(plain_text(reply), review)
     applied = []
     if config['no_reask'] and review.text.strip() and not style_only:
         reply = REASK.sub('', reply)
@@ -194,6 +195,9 @@ def apply_signature(reply, rules):
 def local_issues(reply, rules, review=None):
     config = context_constraints(rules, review)
     issues = []
+    from .reply_identity import normalize_reply_opening
+    if review is not None and normalize_reply_opening(reply, review) != reply:
+        issues.append('Не использовать неподтверждённое имя покупателя')
     if config['greeting'] and not any(reply.startswith(value) for value in (config['greetings'] or [config['greeting']])):
         issues.append('Не выполнено начало ответа: ' + config['greeting'])
     if config['signature'] and not reply.endswith(config['signature']):
@@ -367,16 +371,11 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 adjusted = candidate
                 applied.append('исправление по правилам магазина')
         except Exception as error:
-            from .batch_processing import transient
-            result['technical_error'] = transient(error) or isinstance(error, (ValueError, KeyError, TypeError))
-            result.update(checked=False)
-            reason = 'истекло время проверки' if isinstance(error, TimeoutError) else 'модель вернула некорректную проверку' if isinstance(error, (ValueError, KeyError, TypeError)) else 'сервис проверки недоступен'
-            if isinstance(error, ValueError) and str(error).startswith(('Правила слишком длинные', 'Контекст модели переполнен')):
-                reason = 'объём правил превышает контекст модели; сократите повторы или область применения'
-            elif isinstance(error, ValueError) and str(error).startswith('Не удалось установить соединение'):
-                reason = 'сервис модели недоступен или не ответил вовремя'
-            result['reason'] = reason
-            result['issues'].append('Ответ сохранён. Проверка правил продолжится автоматически после восстановления сервиса.' if result['technical_error'] else 'Не удалось проверить правила: ' + reason)
+            from .rule_retry import verification_failure
+            failure = verification_failure(error)
+            result.update(checked=False, technical_error=failure['retryable'], **failure)
+            result['issues'].append('Ответ сохранён. Проверка правил продолжится автоматически после восстановления сервиса.'
+                if failure['retryable'] else 'Ответ сохранён. Не удалось проверить правила: ' + failure['reason'])
     result['issues'] = list(dict.fromkeys(result['issues'] + local_issues(adjusted, rules, review)))
     result['violations'] = local_issues(adjusted, rules, review) if result.get('checked') is False else list(result['issues'])
     result['passed'] = not result['issues']
@@ -403,6 +402,7 @@ def attach_rule_quality(quality, rule_quality):
     quality['text_issues'] = list(text_issues)
     rule_quality = dict(rule_quality)
     rule_quality['status'] = ('verified' if rule_quality.get('passed') else
+                              'blocked' if rule_quality.get('retryable') is False else
                               'error' if rule_quality.get('technical_error') else
                               'pending' if rule_quality.get('checked') is False else 'violation')
     quality['owner_rules'] = rule_quality
@@ -425,7 +425,7 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=Non
                 'verification_method': 'local_saved_positive', 'verification_seconds': 0}
     if rules and (changed or previous.get('fingerprint') != current) and constraints(rules)['semantic']:
         issues.append('Ответ ожидает проверки по текущим правилам магазина.')
-        previous = {key: value for key, value in previous.items() if key not in ('technical_error', 'reason', 'verification_seconds', 'verification_method', 'status')}
+        previous = {key: value for key, value in previous.items() if key not in ('technical_error', 'retryable', 'failure_code', 'reason', 'verification_seconds', 'verification_method', 'status')}
     elif rules and previous.get('fingerprint') == current and not changed and not previous.get('passed', True):
         issues.extend(previous.get('issues') or ['Выполнение правил магазина не подтверждено. Подготовьте ответ заново.'])
     return {**previous, 'matched': len(rules), 'fingerprint': current,

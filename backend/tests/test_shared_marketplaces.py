@@ -90,11 +90,13 @@ class SharedMarketplaceTests(unittest.TestCase):
             db.commit()
             for provider in reversed(PROVIDERS):
                 style = services.owner_style_profile(db, 'shop-' + provider)
-                self.assertEqual(style['preferred_greeting'], 'Добрый день')
-                self.assertEqual(style['answered_count'], 1)
+                self.assertEqual(style['allowed_greetings'], ['Здравствуйте.', 'Добрый день!'])
+                self.assertNotIn('average_length', style)
                 review = db.get(Review, 'review-' + provider)
                 examples = services.previous_answer_examples(db, review, db.get(Product, review.product_id))
-                self.assertEqual(examples[0]['answer'], old.existing_answer)
+                # An imported published answer is not a verified example.
+                self.assertEqual(examples, [])
+            self.assertEqual(old.existing_answer, 'Добрый день! Благодарим за отзыв.')
             self.assertEqual(shared_counters(db, 'learned_edit_preferences:'), {'apology_added':5})
             self.assertEqual(shared_counters(db, 'reply_feedback:'), {'good':{'rules':2}})
 

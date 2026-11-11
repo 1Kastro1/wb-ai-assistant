@@ -18,7 +18,7 @@ def prepared(client,monkeypatch):
     monkeypatch.setattr(config,'REAL_PUBLISH',True)
     monkeypatch.setattr(services,'REAL_PUBLISH',True)
     monkeypatch.setattr(main,'run_job_queue',AsyncMock())
-    provider=SimpleNamespace(publish=AsyncMock())
+    provider=SimpleNamespace(publish=AsyncMock(return_value={'state':'published'}))
     monkeypatch.setattr(services,'provider_for',lambda store:provider)
     with Session() as db:
         set_setting(db,'test_mode',False);set_setting(db,'safe_mode',False)

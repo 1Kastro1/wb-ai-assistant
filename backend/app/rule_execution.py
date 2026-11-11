@@ -9,6 +9,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import re
 from threading import RLock
 from time import monotonic
@@ -55,10 +56,15 @@ def simple_positive(review):
     text = praise_text(review)
     if not text and (getattr(review, 'text', '') or '').strip():
         return False
-    if text not in SIMPLE_PRAISE_TEXTS:
+    # Compose only complete, known praise clauses. Unknown words (including
+    # complaints/questions after a comma) keep the semantic verification path.
+    clauses = [part.strip() for part in re.split(r'[,;.!\n]+',
+        (getattr(review, 'text', '') or '').casefold().replace('ё','е')) if part.strip()]
+    composed = 1 <= len(clauses) <= 4 and all(praise_text(SimpleNamespace(text=part))
+        in SIMPLE_PRAISE_TEXTS for part in clauses)
+    if text not in SIMPLE_PRAISE_TEXTS and not composed:
         return False
     # Reuse all existing safety/audience gates without mutating the input row.
-    from types import SimpleNamespace
     return empty_positive(SimpleNamespace(text='', **{key: getattr(review, key, default) for key, default in
         [('rating',0),('risk','NORMAL'),('manual',False),('safety_critical',False),('marketplace','')]}))
 
@@ -267,9 +273,53 @@ def verified_positive_reply(reply, review, rules, *, product=None):
             if candidate and candidate.startswith(original):
                 candidates.update(greeting + candidate[len(original):] for greeting in greetings)
     try:
-        return reply in candidates and validate_reply(reply) == reply and not local_issues(reply, rules, review)
+        return (reply in candidates or no_claims_positive_reply(reply, review, rules)) and validate_reply(reply) == reply and not local_issues(reply, rules, review)
     except ValueError:
         return False
+
+
+# An audited grammar permits ordinary variations without trusting arbitrary
+# model prose. Each complete sentence is reviewed; no product facts, promises,
+# usage advice, names, numbers or quoted buyer instructions are admitted.
+POSITIVE_THANKS = frozenset({
+    'Спасибо за отзыв', 'Спасибо за Ваш отзыв', 'Спасибо за Вашу оценку',
+    'Спасибо за высокую оценку', 'Спасибо за положительный отзыв',
+    'Благодарим за отзыв', 'Благодарим Вас за отзыв',
+    'Благодарим за положительный отзыв', 'Благодарим Вас за положительный отзыв',
+    'Благодарим за высокую оценку', 'Благодарим Вас за высокую оценку',
+})
+POSITIVE_ACKNOWLEDGEMENTS = frozenset({
+    'Рады, что покупка Вам понравилась', 'Рады, что Вы остались довольны покупкой',
+    'Нам приятно, что Вы остались довольны покупкой',
+    'Рады, что покупка оставила хорошее впечатление',
+})
+POSITIVE_WISHES = frozenset({
+    'Желаем приятного использования', 'Желаем Вам приятного использования',
+    'Желаем приятного использования покупки', 'Желаем Вам хорошего дня',
+    'Желаем хорошего дня', 'Желаем удачных покупок',
+    'Будем рады видеть Вас снова',
+})
+
+
+def no_claims_positive_reply(reply, review, rules):
+    from .owner_reply_policy import context_constraints
+    style = context_constraints(rules, review)
+    value = reply.strip()
+    signature = style.get('signature')
+    if signature:
+        if not value.endswith(signature):return False
+        value = value[:-len(signature)].rstrip()
+    greeting = next((g for g in (style['greetings'] or [style['greeting']]) if g and value.startswith(g)), None)
+    if not greeting:return False
+    body = value[len(greeting):].strip()
+    sentences = [part.strip() for part in re.split(r'[.!]', body) if part.strip()]
+    if not 1 <= len(sentences) <= 3 or sentences[0] not in POSITIVE_THANKS:return False
+    rest = sentences[1:]
+    if rest and rest[0] in POSITIVE_ACKNOWLEDGEMENTS:
+        # A blank rating supplies no buyer experience to acknowledge.
+        if not (getattr(review,'text','') or '').strip():return False
+        rest = rest[1:]
+    return not rest or len(rest)==1 and rest[0] in POSITIVE_WISHES
 
 
 def audited_case_template(review, product, rules):

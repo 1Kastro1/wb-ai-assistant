@@ -9,10 +9,11 @@ export function OwnerRuleStatus({quality}:{quality:Row}){
  const rules=quality.owner_rules;
  if(!rules?.matched)return null;
  const technical=rules.technical_error||rules.status==='error';
- const pending=!rules.passed&&!technical&&(rules.status==='pending'||rules.checked===false);
- const label=rules.passed?'Правила магазина выполнены':technical?'Проверка продолжится в фоне':pending?'Ожидает проверки правил':'Найдены замечания по правилам';
- const defects=rules.violations||(technical||pending?[]:rules.issues||[]);
- return <div className={rules.passed?'muted':'orange'} role="status"><p>{label} · Правил: {rules.matched}</p>{technical?<p>Текст сохранён. Проверка правил продолжится автоматически; публикация начнётся после успешной проверки.</p>:pending?<p>Подтверждение всех правил ещё не получено. Сохранённый ответ не потерян.</p>:null}{!rules.passed&&defects.length>0&&<div><b>Замечания к тексту</b><ul>{defects.map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul></div>}</div>;
+ const blocked=rules.status==='blocked'||rules.retryable===false;
+ const pending=!rules.passed&&!technical&&!blocked&&(rules.status==='pending'||rules.checked===false);
+ const label=rules.passed?'Правила магазина выполнены':blocked?'Нужна настройка проверки':technical?'Проверка продолжится в фоне':pending?'Ожидает проверки правил':'Найдены замечания по правилам';
+ const defects=rules.violations||(technical||pending||blocked?[]:rules.issues||[]);
+ return <div className={rules.passed?'muted':'orange'} role="status"><p>{label} · Правил: {rules.matched}</p>{blocked?<p>Ответ сохранён. Проверка остановлена из-за ошибки настройки или ограничений сервиса. Это не означает нарушение правил в тексте.</p>:technical?<p>Текст сохранён. Проверка правил продолжится автоматически; публикация начнётся после успешной проверки.</p>:pending?<p>Подтверждение всех правил ещё не получено. Сохранённый ответ не потерян.</p>:null}{!rules.passed&&defects.length>0&&<div><b>Замечания к тексту</b><ul>{defects.map((issue:string,i:number)=><li key={i}>{issue}</li>)}</ul></div>}</div>;
 }
 
 export function GenerationProgress({phase='running'}:{phase?:string}={}){

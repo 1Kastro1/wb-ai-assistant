@@ -26,7 +26,7 @@ def queue_ordering():
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
     # An already approved publication gets one ordinary slice after waiting.
     # Its next checkpoint refreshes last_served_at, so other work still runs.
-    overdue_send = Job.kind.in_(('wb_publish_send', 'scheduled_publication')) & (served < cutoff)
+    overdue_send = Job.kind.in_(('wb_publish_send', 'scheduled_publication', 'publication_reconcile')) & (served < cutoff)
     generation_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
     batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts')),
         (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
@@ -39,7 +39,12 @@ def queue_ordering():
             manual_check),
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
     overdue_generation = batch_generation & (served < generation_cutoff) & ~direct_waiting
-    interactive = case((or_(overdue_send, overdue_generation), -2), (urgent_positive, -1),
+    # Imports must age into the same fair, oldest-served band. Otherwise a
+    # continuous rotation of model checks/publication can starve fresh reviews
+    # for days, even though the import's numeric priority is reasonable.
+    # Each import yields only after committing its resume checkpoint.
+    overdue_sync = Job.kind.in_(('products', 'reviews', 'questions')) & (served < generation_cutoff) & ~direct_waiting
+    interactive = case((or_(overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (manual_check, 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)

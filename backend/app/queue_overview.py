@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 from .db import Job, StoreProfile, setting, public
 from .config import DATA
 
-LABELS = {'scheduled_publication': 'Автоматическая выгрузка готовых ответов', 'products': 'Обновление товаров', 'reviews': 'Обновление отзывов', 'questions': 'Обновление вопросов',
+LABELS = {'publication_reconcile': 'Сверка отправленных ответов', 'scheduled_publication': 'Автоматическая выгрузка готовых ответов', 'products': 'Обновление товаров', 'reviews': 'Обновление отзывов', 'questions': 'Обновление вопросов',
           'drafts': 'Ответы на отзывы', 'question_drafts': 'Ответы на вопросы',
           'single_draft': 'Ответ на отзыв', 'single_question_draft': 'Ответ на вопрос',
           'draft_audit': 'Перепроверка черновиков', 'draft_recheck': 'Проверка правил ответа',
@@ -18,7 +18,7 @@ LABELS = {'scheduled_publication': 'Автоматическая выгрузк�
 
 
 def job_stage(kind,state):
-    if kind in ('scheduled_publication','wb_publish_send','wb_publish_prepare'):return 'publication'
+    if kind in ('scheduled_publication','wb_publish_send','wb_publish_prepare','publication_reconcile'):return 'publication'
     if kind in ('products','reviews','questions'):return 'sync'
     if kind=='draft_recheck' and not state.get('policy_regeneration') or kind=='draft_audit':return 'verification'
     return 'generation'
@@ -58,7 +58,7 @@ def queue_overview(db, auth, store_id):
                       'saved': state.get('saved') if state.get('policy_regeneration') else state.get('processed') if job.kind in ('drafts', 'question_drafts', 'single_draft', 'single_question_draft') else None,
                       'verified': state.get('verified'), 'failed': state.get('failed', 0),
                       'attention': state.get('attention', 0), 'deferred': state.get('deferred', 0),
-                      'stage': 'Отправка готовых ответов' if job.kind == 'scheduled_publication' else 'Проверка сохранённого текста' if state.get('check_only') or state.get('positive_recheck') else 'Генерация ответов' if 'draft' in job.kind else 'Синхронизация',
+                      'stage': 'Сверка результата отправки' if job.kind == 'publication_reconcile' else 'Отправка готовых ответов' if job.kind == 'scheduled_publication' else 'Проверка сохранённого текста' if state.get('check_only') or state.get('positive_recheck') else 'Генерация ответов' if 'draft' in job.kind else 'Синхронизация',
                       'blocking_job': blocker.id if waiting and blocker else None})
     # Only a latest failed import is an unresolved sync incident. Old failures
     # remain in history after a later successful attempt.

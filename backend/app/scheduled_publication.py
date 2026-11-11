@@ -73,7 +73,8 @@ def candidate_query(store_id, schedule, cursor=None):
                  Draft.quality_attention == False),
             and_(Review.rating >= 4, ~question, Draft.quality_technical == True)),
         or_(*kinds) if kinds else False,
-        ~select(Publication.id).where(Publication.review_id == Review.id).correlate(Review).exists())
+        ~select(Publication.id).where(Publication.review_id == Review.id,
+            Publication.status != 'retryable').correlate(Review).exists())
     if cursor:
         query = query.where(or_(Review.created_at < cursor[0],
             and_(Review.created_at == cursor[0], Review.id < cursor[1])))
@@ -137,8 +138,11 @@ def eligibility_reason(db, review, draft, schedule):
         from .low_rating_templates import approved_template
         if not approved_template(db, review, draft):
             return 'Для низкой оценки нет подходящего проверенного шаблона. Нужна личная проверка.'
-    if db.scalar(select(Publication.id).where(Publication.review_id == review.id)):
-        return 'Публикация уже выполнялась; повторная отправка исключена.'
+    publication = db.scalar(select(Publication).where(Publication.review_id == review.id))
+    if publication:
+        from .publication_reconciliation import can_retry
+        if not can_retry(db, publication, review):
+            return 'Публикация уже выполнялась или ожидает безопасного повтора.'
     quality = draft.quality or {}
     if quality.get('passed') is not True or quality.get('text_issues'):
         return 'Сначала завершите проверку текста.'
@@ -193,7 +197,9 @@ def publication_counts(db, job):
         .where(Publication.scheduled_job_id == job.id).group_by(Publication.status)).all()
     counts = dict(rows)
     return {'published': counts.get('published', 0),
-        'uncertain': sum(counts.get(key, 0) for key in ('in_flight', 'uncertain', 'mismatch'))}
+        'uncertain': sum(counts.get(key, 0) for key in ('in_flight', 'uncertain', 'mismatch')),
+        'moderation': counts.get('answer_pending', 0), 'retryable': counts.get('retryable', 0),
+        'rejected': counts.get('rejected', 0)}
 
 
 def refresh_counts(db, job):
@@ -231,9 +237,10 @@ async def run_step(job_id, session_factory=Session):
             if index == 0:
                 refresh_counts(db, job)
             state = dict(job.result or {})
-            if state['uncertain']:
-                finish(db, job, schedule, 'Нужна сверка с маркетплейсом. Автоповтор исключён.')
-                return
+            # Each ambiguous attempt has a durable read-only reconciliation.
+            # Its unique reservation blocks that review, not unrelated replies.
+            from .publication_reconciliation import enqueue_due
+            enqueue_due(db)
             review = db.scalar(candidate_query(state['account_id'], schedule, state.get('cursor')).limit(1))
             if not review:
                 finish(db, job, schedule, 'Выгрузка завершена. Новые готовые ответы попадут в следующий запуск.')
@@ -243,6 +250,9 @@ async def run_step(job_id, session_factory=Session):
             draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
             recover_positive_verdict(db, review, draft)
             reason = eligibility_reason(db, review, draft, schedule)
+            if reason and ('правил' in reason or 'проверку текста' in reason):
+                from .rule_change_recheck import enqueue_draft
+                enqueue_draft(db, draft, review, actor_id=schedule.get('publication_authorized_by', ''))
             aid = None
             if not reason:
                 action = Action(id=str(uuid4()), kind='publish', payload={
@@ -271,9 +281,6 @@ async def run_step(job_id, session_factory=Session):
                 'last_reason': reason, 'updated_at': now(), 'last_served_at': now(),
                 'message': 'Публикуем готовые ответы на сервере'}
             job.status = 'cancelled' if job.cancel_requested else 'queued'
-            if job.result['uncertain']:
-                finish(db, job, schedule, 'Отправка остановлена: сверьте неопределённый результат с маркетплейсом. Автоповтор исключён.')
-                return
             db.commit()
             if job.status in ('completed', 'cancelled') or time.monotonic() - started >= 15:
                 return

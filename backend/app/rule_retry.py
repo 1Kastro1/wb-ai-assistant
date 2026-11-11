@@ -27,7 +27,38 @@ def automatic_queue(db, account):
 
 def technical_check(quality):
     rules = (quality or {}).get('owner_rules') or {}
-    return not rules.get('passed') and bool(rules.get('technical_error') or rules.get('status') == 'error')
+    return (rules.get('retryable') is not False and not rules.get('passed')
+            and bool(rules.get('technical_error') or rules.get('status') == 'error'))
+
+
+def verification_failure(error):
+    """Classify availability separately from an unchanged, invalid request.
+
+    A saved reply is never approved by an outage. Invalid model JSON can recover
+    on retry; exceeding the model context or missing credentials cannot recover
+    by sending the exact same request forever.
+    """
+    import json
+    import re
+    import httpx
+    from .batch_processing import transient
+    message = str(error)
+    if message.startswith(('Правила слишком длинные', 'Контекст модели переполнен')):
+        return {'retryable': False, 'failure_code': 'context_limit',
+                'reason': 'объём правил превышает контекст модели; сократите повторы или область применения'}
+    status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+    if status in (400, 401, 403, 404, 413, 422) or re.search(r'\bHTTP (?:400|401|403|404|413|422)\b', message, re.I):
+        return {'retryable': False, 'failure_code': 'service_configuration',
+                'reason': 'сервис проверки отклонил запрос; проверьте настройки модели и доступ'}
+    if isinstance(error, json.JSONDecodeError) or message.startswith((
+            'Некорректный результат проверки правил', 'Проверка не указала нарушенное правило')):
+        return {'retryable': True, 'failure_code': 'invalid_model_response',
+                'reason': 'модель вернула некорректную проверку'}
+    if transient(error):
+        return {'retryable': True, 'failure_code': 'timeout' if isinstance(error, TimeoutError) else 'service_unavailable',
+                'reason': 'истекло время проверки' if isinstance(error, TimeoutError) else 'сервис проверки недоступен'}
+    return {'retryable': False, 'failure_code': 'verification_error',
+            'reason': 'ошибка обработки проверки; требуется исправление сервиса'}
 
 
 def durable_retry(job, error):

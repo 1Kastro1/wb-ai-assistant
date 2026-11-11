@@ -9,21 +9,21 @@ from app.safety import classify
 
 def test_background_round_robin_does_not_starve_imports_and_interactive_wins(client):
     with Session() as db:
-        db.add_all([Job(id='audit', kind='draft_audit', priority=5, created_at='2026-01-01', result={}),
-                    Job(id='sync', kind='reviews', priority=200, created_at='2026-01-02', result={}),
+        db.add_all([Job(id='audit', kind='draft_audit', priority=5, created_at=(datetime.now(timezone.utc)-timedelta(seconds=3)).isoformat(), result={}),
+                    Job(id='sync', kind='reviews', priority=200, created_at=(datetime.now(timezone.utc)-timedelta(seconds=2)).isoformat(), result={}),
                     Job(id='click', kind='single_draft', priority=40, created_at='2026-01-03', result={}),
                     Job(id='retry', kind='questions', priority=1, created_at='2025-01-01', result={'retry_at': time.time()+60})])
         db.commit()
         assert next_job(db).id == 'click'
         db.get(Job, 'click').status = 'completed'; db.commit()
         assert next_job(db).id == 'audit'
-        db.get(Job, 'audit').result = {'last_served_at':'2026-01-04'}; db.commit()
+        db.get(Job, 'audit').result = {'last_served_at':datetime.now(timezone.utc).isoformat()}; db.commit()
         assert next_job(db).id == 'sync'
 
 
 def test_wb_recovery_precedes_background_but_respects_clicks_backoff_and_cancel(client):
     with Session() as db:
-        db.add_all([Job(id='sync', kind='products', priority=1, created_at='2025-01-01', result={}),
+        db.add_all([Job(id='sync', kind='products', priority=1, created_at=datetime.now(timezone.utc).isoformat(), result={}),
                     Job(id='wb', kind='wb_excluded_recovery', priority=45, created_at='2026-01-01',
                         result={'last_served_at': '2026-10-27T17:00:00', 'account_id': 'owner'}),
                     Job(id='click', kind='single_draft', priority=100, created_at='2026-02-01', result={})])

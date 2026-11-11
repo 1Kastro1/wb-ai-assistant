@@ -173,44 +173,44 @@ def _addresses_review_topic(review_text, reply_text):
 
 
 def owner_style_profile(db, account_id='owner'):
-    answered = db.scalar(select(func.count()).select_from(Review).where(~Review.marketplace.like('%_question'), Review.is_answered == True, Review.existing_answer != '')) or 0
-    cache_key = 'learned_reply_style:all-marketplaces'
-    cached = setting(db, cache_key)
-    if cached and cached.get('answered_count') == answered:
-        return cached
-    texts = list(db.scalars(select(Review.existing_answer).where(~Review.marketplace.like('%_question'), Review.is_answered == True, Review.existing_answer != '').order_by(Review.created_at.desc(), Review.id).limit(2000)))
-    greetings = Counter('Добрый день' if t.lower().startswith('добрый день') else 'Здравствуйте' if t.lower().startswith('здравствуйте') else 'другое' for t in texts)
-    profile = {
-        'answered_count': answered,
-        'preferred_greeting': greetings.most_common(1)[0][0] if texts else 'Здравствуйте',
-        'average_length': round(sum(map(len, texts)) / len(texts)) if texts else 0,
-        'uses_team_signature': sum('команда юником' in t.lower() for t in texts) > len(texts) / 3 if texts else False,
-        'return_guidance_examples': sum('возврат' in t.lower() for t in texts),
-        'owner_preferences': ['3–5 предложений', 'тёплый и дружелюбный тон', 'ответ по существу отзыва', 'эмодзи только для позитивных отзывов'],
+    # Publication is not evidence of good style or compliance. In particular,
+    # imported marketplace replies must not silently become owner instructions.
+    # Active, scoped rules are supplied separately with each generation request.
+    return {
+        'version': 'shared-style-2026-11-09',
+        'authority': 'Действующие правила магазина имеют приоритет над этими настройками по умолчанию.',
+        'allowed_greetings': ['Здравствуйте.', 'Добрый день!'],
+        'owner_preferences': [
+            'Тёплый естественный тон, уважительно на «Вы», ответ по существу.',
+            'Обычно 2–4 содержательных предложения; при нескольких существенных замечаниях можно больше.',
+            'Для новой высокой оценки без текста — два тёплых предложения: одна благодарность за оценку и нейтральное пожелание.',
+            'При похвале отмечай только названные достоинства; жалобы и вопросы учитывай при любом числе звёзд.',
+            'Без эмодзи, HTML и служебных пометок; подпись один раз по действующему правилу.',
+            'Не переноси имена, автомобиль, сроки и обещания действий из чужих отзывов.',
+        ],
     }
-    set_setting(db, cache_key, profile)
-    db.commit()
-    return profile
 
 
 def previous_answer_examples(db, review, product, limit=5):
-    candidates = list(db.scalars(
-        select(Review).join(Product).where(
-            Review.is_answered == True,
-            Review.existing_answer != '',
-            ~Review.marketplace.like('%_question'),
-            (Review.product_id == product.id) | (Product.brand == product.brand) | (Product.category == product.category),
-        ).order_by(Review.created_at.desc()).limit(400)
-    ))
-    wanted = set(WORDS.findall(review.text.lower()))
-    scored = []
-    for old in candidates:
-        old_product = db.get(Product, old.product_id)
-        overlap = len(wanted & set(WORDS.findall((old.text + ' ' + old_product.name).lower())))
-        score = overlap * 4 + (20 if old.product_id == product.id else 0) + (3 if old_product.brand == product.brand else 0) + (1 if old_product.category == product.category else 0)
-        scored.append((score, old.created_at, {'review': old.text[:1000], 'answer': old.existing_answer[:2000], 'product': old_product.name, 'same_product': old.product_id == product.id}))
-    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [item[2] for item in scored[:limit] if item[0] > 0]
+    """Use the checked library, never arbitrary historical published replies.
+
+    Its key binds the whole buyer context, product, facts, name visibility and
+    current rules. The only broader match is audited, fact-free short praise.
+    A fresh local assessment still runs; an example never grants publication.
+    """
+    if limit <= 0 or not review or not product or review.marketplace.endswith('_question'):
+        return []
+    from .learned_reply_templates import load_template
+    from .reply_identity import normalize_reply_opening
+    rules = matching_owner_rules(db, product)
+    facts = review_verified_facts(db, review, product, rules)
+    verified = load_template(db, review, product, rules, facts,
+        lambda value: assess_reply(review, product, value, facts))
+    if not verified or normalize_reply_opening(verified[0], review) != verified[0]:
+        return []
+    return [{'review': review.text[:1000], 'answer': verified[0],
+             'product': product.name, 'same_product': True,
+             'source': 'verified_current_context'}]
 
 
 def shared_reply_style(db):
@@ -1292,6 +1292,8 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
         actor=db.get(User,actor_id) if actor_id else None
         set_setting(db,'memory-meta:'+memory.id,{'created_at':now(),'created_by_name':actor.display_name if actor else 'Автоматизация'})
         action.status, action.result = 'completed', {'saved': True, 'confirmed_by': actor_id, 'confirmed_at': now()}
+        from .rule_change_recheck import rule_changed, snapshot
+        rule_changed(db, None, snapshot(memory), actor_id or '')
         db.commit()
         return public(action)
     if setting(db, 'safe_mode', False):
@@ -1345,9 +1347,17 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
         if validate_reply(draft.text) != draft.text:
             raise ValueError('Текст требует очистки. Подготовьте новое подтверждение')
         if not test:
-            if db.scalar(select(Publication).where(Publication.review_id == review.id)):
+            from .publication_reconciliation import can_retry, prepare_attempt
+            publication = db.scalar(select(Publication).where(Publication.review_id == review.id).with_for_update())
+            if publication and not can_retry(db, publication, review):
                 raise ValueError('Для ответа уже выполнялась публикация. Сначала проверьте его в маркетплейсе')
-            db.add(Publication(id=str(uuid4()), review_id=review.id, action_id=action.id, status='in_flight', scheduled_job_id=scheduled_job_id or ''))
+            if publication:
+                publication.action_id, publication.status = action.id, 'in_flight'
+                publication.scheduled_job_id = scheduled_job_id or ''
+            else:
+                publication = Publication(id=str(uuid4()), review_id=review.id, action_id=action.id, status='in_flight', scheduled_job_id=scheduled_job_id or '')
+                db.add(publication)
+            prepare_attempt(db, publication, review, item)
             review.status = 'publishing'
     action.status = 'executing'
     db.commit()
@@ -1359,18 +1369,20 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
             results.append({'review_id': review.id, 'status': 'SIMULATED', 'wb_write': 0})
         else:
             job = db.scalar(select(Publication).where(Publication.review_id == review.id))
+            from .publication_reconciliation import record_outcome
             try:
                 store = db.get(StoreProfile, review.wb_account_id)
                 provider = provider_for(store) if store else None
                 if not provider: raise ValueError('Провайдер магазина не поддерживается')
-                await provider.publish(db, review, item['text'])
-                review.status, review.is_answered, review.existing_answer = 'published', True, item['text']
-                job.status = 'published'
-                results.append({'review_id': review.id, 'status': 'published'})
-            except ValueError:
-                # Avoid duplicate replies when the marketplace accepted a request but the response was lost.
-                review.status, job.status = 'manual_review', 'uncertain'
-                results.append({'review_id': review.id, 'status': 'uncertain', 'message': 'Проверьте ответ в маркетплейсе. Автоповтор запрещён.'})
+                evidence = await provider.publish(db, review, item['text'])
+                status = record_outcome(db, job, review, evidence)
+                results.append({'review_id': review.id, 'status': status})
+            except ValueError as error:
+                status = record_outcome(db, job, review, error=error)
+                results.append({'review_id': review.id, 'status': status,
+                    'message': 'Отправка ожидает безопасного повтора.' if status == 'retryable' else
+                    'Маркетплейс отклонил отправку.' if status == 'rejected' else
+                    'Сверяем результат с маркетплейсом; повторная отправка исключена.'})
         db.commit()
     action.status = 'completed' if all(x['status'] in ('SIMULATED', 'published') for x in results) else 'needs_review'
     action.result = {'items': results, 'test_mode': test, 'confirmed_by': actor_id, 'confirmed_at': now()}

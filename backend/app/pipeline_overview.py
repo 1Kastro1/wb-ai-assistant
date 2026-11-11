@@ -41,7 +41,7 @@ def _overview(db,stores):
     latest={};stages={}
     from sqlalchemy import or_
     groups={'sync':Job.kind.in_(('products','reviews','questions')),
-        'publication':Job.kind.in_(('scheduled_publication','wb_publish_send','wb_publish_prepare')),
+        'publication':Job.kind.in_(('scheduled_publication','wb_publish_send','wb_publish_prepare','publication_reconcile')),
         'generation':or_(Job.kind.in_(('drafts','single_draft','question_drafts','single_question_draft')),
             and_(Job.kind=='draft_recheck',Job.result['policy_regeneration'].as_boolean()==True)),
         'verification':or_(Job.kind=='draft_audit',and_(Job.kind=='draft_recheck',

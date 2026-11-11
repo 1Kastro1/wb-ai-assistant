@@ -5,7 +5,8 @@ import pytest
 
 
 @pytest.mark.parametrize('kind,store', [('wb_publish_send','owner'), ('scheduled_publication','owner'),
-    ('scheduled_publication','ozon-store'), ('scheduled_publication','yandex-store')])
+    ('scheduled_publication','ozon-store'), ('scheduled_publication','yandex-store'),
+    ('publication_reconcile','ozon-store')])
 def test_approved_publication_cannot_starve_behind_rechecks(client, kind, store):
     current=datetime.now(timezone.utc)
     old=(current-timedelta(minutes=5)).isoformat()
@@ -19,7 +20,7 @@ def test_approved_publication_cannot_starve_behind_rechecks(client, kind, store)
         assert next_job(db).id=='positive'
 
 
-@pytest.mark.parametrize('kind', ['wb_publish_send','scheduled_publication'])
+@pytest.mark.parametrize('kind', ['wb_publish_send','scheduled_publication','publication_reconcile'])
 def test_cancelled_and_backoff_sends_are_never_promoted(client, kind):
     current=datetime.now(timezone.utc)
     old=(current-timedelta(minutes=5)).isoformat()
