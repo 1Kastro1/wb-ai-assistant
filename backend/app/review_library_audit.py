@@ -4,11 +4,23 @@ import time
 from types import SimpleNamespace
 from uuid import uuid4
 from sqlalchemy import select, func
-from .db import Session, Job, Review, Draft, Product, StoreProfile, ReviewLibraryAuditRow, setting, set_setting, now
+from .db import Session, Job, Review, Draft, Product, Publication, StoreProfile, ReviewLibraryAuditRow, setting, set_setting, now
 
 KIND='review_library_audit'
 MAINTENANCE='review_library_maintenance'
 ORDER=('yandex','wb','ozon')
+
+
+def published(review):
+    return bool(review.is_answered or review.status=='published')
+
+
+def publication_protected(db,review):
+    if review.status in ('publishing','answer_pending','pending_confirmation'):return True
+    states=('in_flight','uncertain','answer_pending','mismatch')
+    if not published(review):states=(*states,'published')
+    return bool(db.scalar(select(Publication.id).where(Publication.review_id==review.id,
+        Publication.status.in_(states)).limit(1)))
 
 
 def start(db):
@@ -68,7 +80,8 @@ async def inspect_review(job_id,rid,session_factory):
         review=db.get(Review,rid)
         draft=db.scalar(select(Draft).where(Draft.review_id==rid))
         if not review:return {'status':'removed'}
-        missing=not review.is_answered and review.status!='publishing' and not draft
+        if publication_protected(db,review):return {'status':'attention','issues':['Сохранён статус публикации; требуется личная сверка']}
+        missing=not published(review) and not draft
         if missing:
             token=batch_context.set({'job_id':job_id,'suppress_rule_retry':True})
             try:await generate_draft(db,rid,skip_existing=True)
@@ -80,15 +93,15 @@ async def inspect_review(job_id,rid,session_factory):
             if not review:return {'status':'removed'}
             product=db.get(Product,review.product_id)
             draft=db.scalar(select(Draft).where(Draft.review_id==rid))
-            published=review.is_answered
-            answer=review.existing_answer if published else draft.text if draft else ''
-            if review.status=='publishing':return {'status':'attention','issues':['Неопределённый результат публикации; требуется сверка']} 
+            was_published=published(review)
+            answer=review.existing_answer if was_published else draft.text if draft else ''
+            if publication_protected(db,review):return {'status':'attention','issues':['Сохранён статус публикации; требуется личная сверка']} 
             if not product or not answer.strip():return {'status':'attention','issues':['Нет доступного текста ответа или товара']}
             rules=matching_owner_rules(db,product)
             facts=review_verified_facts(db,review,product,rules)
             key=verification_key(answer,review,product,rules,facts)
             assess=lambda text:assess_reply(review,product,text,facts)
-            expected=(published,review.existing_answer,draft.id if draft else '',draft.revision if draft else 0,answer)
+            expected=(was_published,review.status,review.existing_answer,draft.id if draft else '',draft.revision if draft else 0,answer)
             learned=load_template(db,review,product,rules,facts,assess,exact_answer=answer)
             if learned:checked,verdict=learned
             else:
@@ -101,17 +114,17 @@ async def inspect_review(job_id,rid,session_factory):
             product=db.get(Product,review.product_id) if review else None
             draft=db.scalar(select(Draft).where(Draft.review_id==rid).with_for_update())
             if (not review or not product or db.get(Job,job_id).cancel_requested):return {'status':'retry','issues':['Проверка прервана']}
-            current_answer=review.existing_answer if review.is_answered else draft.text if draft else ''
-            current=(review.is_answered,review.existing_answer,draft.id if draft else '',draft.revision if draft else 0,current_answer)
+            current_answer=review.existing_answer if published(review) else draft.text if draft else ''
+            current=(published(review),review.status,review.existing_answer,draft.id if draft else '',draft.revision if draft else 0,current_answer)
             fresh_rules=matching_owner_rules(db,product)
             fresh_facts=review_verified_facts(db,review,product,fresh_rules)
-            if (current!=expected or verification_key(current_answer,review,product,fresh_rules,fresh_facts)!=key):
+            if (publication_protected(db,review) or current!=expected or verification_key(current_answer,review,product,fresh_rules,fresh_facts)!=key):
                 return {'status':'retry','issues':['Контекст изменился во время проверки']}
             if checked!=answer:
                 verdict={**verdict,'passed':False,'checked':False,'issues':['Проверка предложила изменение; исходный текст сохранён']}
             verdict={**verdict,'input_key':key,'checked_at':now()}
             quality=attach_rule_quality(assess(answer),verdict)
-            if not published and draft:
+            if not was_published and draft:
                 draft.quality={**(draft.quality or {}),**quality}
                 review.status='manual_review' if review.manual or not quality['passed'] else 'draft_ready'
             tid=''
@@ -152,7 +165,7 @@ def selfcheck(db,job_id,stages):
             continue
         review=db.get(Review,rid);product=db.get(Product,review.product_id)
         draft=db.scalar(select(Draft).where(Draft.review_id==rid))
-        answer=review.existing_answer if review.is_answered else draft.text if draft else ''
+        answer=review.existing_answer if published(review) else draft.text if draft else ''
         rules=matching_owner_rules(db,product);facts=review_verified_facts(db,review,product,rules)
         if context_key(review,product,rules,facts):
             loaded=load_template(db,review,product,rules,facts,
