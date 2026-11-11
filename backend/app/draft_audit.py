@@ -212,10 +212,17 @@ async def _recheck_one(job_id, session_factory=Session):
             rules = matching_owner_rules(db, product, for_questions=question)
             facts = trusted_product_facts(db, product) if question else review_verified_facts(db, review, product, rules)
             assess = (lambda value: assess_question_answer(review, product, value, facts, owner_rules=rules)) if question else (lambda value: assess_reply(review, product, value, facts))
-            if state.get('rule_change'):
+            from .rule_execution import verification_key
+            input_key = verification_key(draft.text, review, product, rules, facts)
+            previous = (draft.quality or {}).get('owner_rules') or {}
+            if state.get('rule_change') or (check_only and not state.get('manual_check')
+                    and previous.get('input_key') == input_key):
                 from .rule_change_recheck import should_check
                 if not should_check(db, draft, review, product, state, rules):
                     return False
+            if (check_only and not state.get('manual_check') and previous.get('input_key') == input_key
+                    and previous.get('retry_at', 0) > time.time()):
+                return False
             attempted = True
             protected = manually_edited(draft)
             learned = None
@@ -254,6 +261,13 @@ async def _recheck_one(job_id, session_factory=Session):
             fresh_quality = {**(draft.quality or {}), **assess(answer)}
             fresh_quality.pop('text_issues', None)
             fresh_quality.pop('owner_rules', None)
+            # One shared result/backoff for this exact saved text, policy and
+            # context, regardless of which automatic scan encounters it next.
+            from .rule_retry import technical_check, retry_delay
+            failures = int(previous.get('check_failures',0)) + 1 if previous.get('input_key')==input_key else 1
+            verdict = {**verdict, 'input_key': input_key, 'checked_at': now(),
+                'check_failures': failures if technical_check({'owner_rules':verdict}) else 0,
+                'retry_at': time.time()+retry_delay(failures) if technical_check({'owner_rules':verdict}) else 0}
             quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
