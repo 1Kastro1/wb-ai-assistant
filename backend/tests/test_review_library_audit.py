@@ -211,3 +211,17 @@ def test_empty_store_checkpoint_remains_queued_after_worker_slice():
         job=db.get(Job,jid)
         assert job.status=='queued' and job.result['stage']==1
         assert job.result['checked']==0
+
+
+def test_completed_campaign_releases_manual_queue_with_automation_still_paused(monkeypatch):
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
+    from app.queue_policy import next_job
+    with Session() as db:seed(db);jid=start(db).id;db.commit()
+    asyncio.run(step(jid))
+    with Session() as db:
+        assert db.get(Job,jid).status=='completed'
+        assert setting(db,'review_library_maintenance') is False
+        assert setting(db,'safe_mode') is True
+        assert not setting(db,'automation_schedule')['enabled']
+        db.add(Job(id='owner-manual',kind='single_draft'));db.flush()
+        assert next_job(db).id=='owner-manual'
