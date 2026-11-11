@@ -168,3 +168,34 @@ def test_status_is_owner_only_and_scheduler_cannot_restart_during_audit(client,m
         assert len(list(db.scalars(select(Job).where(Job.status=='queued'))))==1
     client.post('/auth/logout')
     assert client.get('/review-library/status').status_code==401
+
+
+@pytest.mark.parametrize('status',['uncertain','answer_pending','published','mismatch'])
+def test_pending_or_confirmed_publication_never_becomes_sendable_draft(monkeypatch,status):
+    from app.db import Publication
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
+    with Session() as db:
+        seed(db)
+        db.get(Review,'r-yandex').status='manual_review'
+        db.add(Publication(id='sent',review_id='r-yandex',action_id='old',status=status))
+        jid=start(db).id;db.commit()
+    asyncio.run(step(jid,limit=1))
+    with Session() as db:
+        assert db.get(Review,'r-yandex').status=='manual_review'
+        assert db.get(Publication,'sent').status==status
+        assert not list(db.scalars(select(VerifiedReplyContext)))
+        assert db.get(Job,jid).result['attention']==1
+
+
+def test_published_status_is_read_only_even_when_provider_flag_is_stale(monkeypatch):
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
+    with Session() as db:
+        seed(db)
+        review=db.get(Review,'r-yandex');review.status='published'
+        review.existing_answer='Добрый день! Спасибо за отзыв.'
+        jid=start(db).id;db.commit()
+    asyncio.run(step(jid,limit=1))
+    with Session() as db:
+        assert db.get(Review,'r-yandex').status=='published'
+        assert db.get(Draft,'d-yandex').quality=={}
+        assert db.get(Job,jid).result['verified']==1
