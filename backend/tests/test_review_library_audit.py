@@ -199,3 +199,15 @@ def test_published_status_is_read_only_even_when_provider_flag_is_stale(monkeypa
         assert db.get(Review,'r-yandex').status=='published'
         assert db.get(Draft,'d-yandex').quality=={}
         assert db.get(Job,jid).result['verified']==1
+
+
+def test_empty_store_checkpoint_remains_queued_after_worker_slice():
+    with Session() as db:
+        seed(db)
+        db.add(StoreProfile(id='000-empty',provider='yandex',name='Empty'))
+        job=start(db);jid=job.id;job.status='running';db.commit()
+    asyncio.run(step(jid,limit=1))
+    with Session() as db:
+        job=db.get(Job,jid)
+        assert job.status=='queued' and job.result['stage']==1
+        assert job.result['checked']==0
