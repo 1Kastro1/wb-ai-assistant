@@ -55,7 +55,7 @@ class RotationTests(unittest.TestCase):
 
     def test_newer_unknown_and_temporary_files_are_preserved(self):
         paths=['20261112T030000Z.postgres.dump','20261110T030000Z.postgres.dump.tmp',
-               'manual.dump','unrelated-project.tar.gz','latest-verified']
+               'manual.dump','unrelated-project.tar.gz','latest-verified','20260000T030000Z.postgres.dump']
         for name in paths:(self.root/name).write_text('preserve')
         retention.apply(self.root,self.stamp)
         self.assertTrue(all((self.root/name).exists() for name in paths))
