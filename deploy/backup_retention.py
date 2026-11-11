@@ -77,7 +77,7 @@ def verify(root, stamp):
     path = root / (stamp + '.verified.json')
     regular(path)
     manifest = json.loads(path.read_text())
-    if (manifest.get('stamp') != stamp or manifest.get('catalog_verified') is not True
+    if (manifest.get('version') != 1 or manifest.get('stamp') != stamp or manifest.get('catalog_verified') is not True
             or set(manifest.get('parts', {})) != set(PARTS)):
         raise ValueError('A complete verified replacement is required')
     for suffix in PARTS:
@@ -94,6 +94,8 @@ def plan(root, stamp, data_backups=None):
     for path in root.iterdir():
         match = re.fullmatch(r'(\d{8}T\d{6}Z)\.(postgres\.dump|data\.tar\.gz|config\.tar\.gz|verified\.json)', path.name)
         if match and match[1] < stamp and not path.is_symlink():
+            try:stamp_time(match[1])
+            except ValueError:continue
             candidates.append(path)
         elif (re.fullmatch(r'before-pr\d+-\d{8}t\d{6}z', path.name)
                 and path.is_dir() and not path.is_symlink()):
