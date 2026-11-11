@@ -176,8 +176,10 @@ def selfcheck(db,job_id,stages):
                     lambda value:{'passed':True},exact_answer=answer):
                 raise ValueError('Нарушена изоляция правил шаблона')
         results.append({'marketplace':stage['marketplace'],'store':stage['account_id'],'status':'passed' if context_key(review,product,rules,facts) else 'reference_only','sample':rid})
-    if not setting(db,'safe_mode',False) or setting(db,'automation_schedule',{}).get('publication_enabled'):
-        raise ValueError('Автоматическая отправка должна оставаться выключенной')
+    schedule=setting(db,'automation_schedule',{})
+    if not setting(db,'safe_mode',False) or any(schedule.get(key) for key in (
+            'enabled','reviews_sync_enabled','questions_sync_enabled','drafts_enabled','question_drafts_enabled','publication_enabled')):
+        raise ValueError('Автоматическое обновление, генерация и отправка должны оставаться выключенными')
     return {'markets':results,'library':statistics(db),'checked_at':now(),'publication_disabled':True}
 
 
@@ -198,7 +200,9 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                 checks=selfcheck(db,job_id,stages)
                 state.update(selfcheck=checks,library=statistics(db),completed_at=now(),message='Все площадки проверены. Автообновление и отправка остаются выключены.')
                 job.status,job.progress,job.result='completed',100,state
-                # Keep maintenance on until an owner explicitly resumes automation.
+                # Ordinary manual actions may use the learned library again.
+                # Schedules remain disabled and safe mode still blocks sending.
+                set_setting(db,MAINTENANCE,False)
                 db.commit();return
             stage=stages[index]
             rid=db.scalar(select(Review.id).where(Review.wb_account_id==stage['account_id'],
