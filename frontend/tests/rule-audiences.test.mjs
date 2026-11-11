@@ -5,10 +5,14 @@ import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 const require=createRequire(import.meta.url),fs=require('node:fs'),path=require('node:path'),ts=require('typescript'),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const file=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../app/MemoryRules.tsx');
-const module={exports:{}};
-const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
-new Function('require','module','exports',code)(name=>name==='./presentation.mjs'?{ruleTitle}:name==='./client'?{api(){throw new Error('SSR must not send requests')}}:require(name),module,module.exports);
-const Rules=module.exports.default;
+function loadComponent(file){
+ const module={exports:{}};
+ const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
+ const localRequire=name=>name==='./presentation.mjs'?{ruleTitle}:name==='./client'?{api(){throw new Error('SSR must not send requests')}}:name.startsWith('.')?loadComponent(path.resolve(path.dirname(file),name+'.tsx')):require(name);
+ new Function('require','module','exports',code)(localRequire,module,module.exports);
+ return module.exports;
+}
+const Rules=loadComponent(file).default;
 const items=[{id:'r',text:'REVIEW_ONLY_CONTENT',kind:'REVIEW_RULE',scope:'global',enabled:true},{id:'q',text:'UNIQOM_QUESTION_ONLY_CONTENT',kind:'QUESTION_RULE',scope:'global',enabled:true}];
 const render=initialKind=>renderToStaticMarkup(React.createElement(Rules,{items,products:[],owner:true,initialKind,onRefresh(){},onPropose(){},onDelete(){}}));
 
