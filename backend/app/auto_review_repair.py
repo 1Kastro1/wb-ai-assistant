@@ -11,10 +11,11 @@ async def repair(review, product, rules, facts, assess, *, local_only=False):
     from .generation_budget import AUTO_RULE_CHECK_SECONDS
     # Critical technical conclusions stay protected. This routine does not
     # clear risk flags, publication restrictions, or human revisions.
-    if review.risk != 'NORMAL' or review.safety_critical:
+    brake = brake_template(review, product, rules)
+    if review.risk != 'NORMAL' or (review.safety_critical and not brake):
         return None
     case = specific_review_case(review, product)
-    candidate = (brake_template(review, product, rules)
+    candidate = (brake
                  or positive_template(review, rules, product=product)
                  or untried_template(review, rules, product=product)
                  or (case or {}).get('answer')
