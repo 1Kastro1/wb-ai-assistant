@@ -32,8 +32,10 @@ class PostgresOperations(unittest.TestCase):
                 connection.exec_driver_sql("CREATE TABLE products(id text PRIMARY KEY, brand text, part_number text, facts json)")
                 connection.exec_driver_sql("INSERT INTO products VALUES ('direct','NITTO','A-17','[]'),('legacy','NITTO','','[]')")
                 connection.commit()
-                with Operations.context(MigrationContext.configure(connection)):
-                    migration.upgrade(); migration.upgrade()
+                context = MigrationContext.configure(connection)
+                with context.begin_transaction():
+                    with Operations.context(context):
+                        migration.upgrade(); migration.upgrade()
                 connection.commit()
                 self.assertEqual(connection.exec_driver_sql('SELECT count(*) FROM products').scalar(), 2)
                 valid = connection.exec_driver_sql("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname LIKE 'ix_products_%'").scalars().all()
@@ -42,7 +44,7 @@ class PostgresOperations(unittest.TestCase):
                 for predicate, name in [
                     ("lower(trim(brand))='nitto' AND upper(replace(replace(replace(replace(replace(part_number,'-',''),' ',''),'.',''),'/',''),'_',''))='A17'", 'ix_products_brand_article_lookup'),
                     ("lower(trim(brand))='nitto' AND part_number='' AND cast(facts AS VARCHAR) LIKE '%A-17%'", 'ix_products_legacy_brand_lookup')]:
-                    plan = str(connection.exec_driver_sql('EXPLAIN SELECT id FROM products WHERE ' + predicate).all())
+                    plan = str(connection.execute(text('EXPLAIN SELECT id FROM products WHERE ' + predicate)).all())
                     self.assertIn(name, plan)
                 connection.commit()
                 with Operations.context(MigrationContext.configure(connection)):
