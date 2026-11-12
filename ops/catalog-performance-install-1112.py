@@ -3,14 +3,14 @@ import fcntl, hashlib, importlib.util, json, os, re, subprocess, sys, time, urll
 from pathlib import Path
 ROOT = Path('/srv/wb-ai-assistant')
 BASE = '2ae41a30b90db16e8efb678bb8f5cf998b8300c5'
-SOURCE = '7c8b17a9d267158e9a2c637536e8181a8fa65949'
+SOURCE = '4ee2e5baae6e1f2a477f6f71a9556ed8d5036868'
 IMAGE = 'wb-ai-assistant-backend:catalog-fast-checked-1112'
 FOLDER = Path('/root/catalog-fast-build-1112')
 PREPARED = Path('/root/catalog-fast-build-1112.json')
 FILES = ['backend/app/catalog_lookup_sql.py', 'backend/app/db.py',
-    'backend/app/services.py', 'backend/app/shared_marketplaces.py',
+    'backend/app/services.py', 'backend/app/shared_marketplaces.py', 'backend/app/maintenance.py',
     'backend/migrations/versions/0020_catalog_lookup_indexes.py']
-TESTS = ['backend/tests/test_catalog_lookup_performance.py', 'backend/tests/test_operations_postgres.py']
+TESTS = ['backend/tests/test_catalog_lookup_performance.py', 'backend/tests/test_operations_postgres.py', 'backend/tests/test_portable_backup.py']
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, text=True, **kw)
