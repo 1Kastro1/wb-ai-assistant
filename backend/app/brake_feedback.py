@@ -13,7 +13,7 @@ def case(review, product):
     from .vehicle_identifiers import vehicle_identifiers
     if (not review or not product or getattr(review,'rating',0) not in (4,5) or getattr(review,'risk','NORMAL')!='NORMAL'
         or getattr(review,'manual',False) or getattr(review,'safety_critical',False)
-        or getattr(review,'marketplace','').endswith('_question')):return None
+        or (getattr(review,'marketplace','') or '').endswith('_question')):return None
     name=((getattr(product,'name','') or '')+' '+(getattr(product,'category','') or '')).lower().replace('ё','е')
     if not re.search(r'диск\w*\s+тормозн|тормозн\w*\s+диск',name):return None
     text=' '.join((review.text or '').lower().replace('ё','е').split())
