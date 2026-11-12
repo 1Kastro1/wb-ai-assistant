@@ -3,7 +3,7 @@ import fcntl,hashlib,importlib.util,json,os,re,subprocess,sys,time,urllib.reques
 from pathlib import Path
 ROOT=Path('/srv/wb-ai-assistant')
 BASE='7f1ca6d59f2a0cf894ed93565470c9877bd607d5'
-SOURCE='6d0b6712cb62dc7a8cfc8b99cba6f438aa4e15ac'
+SOURCE='8a88bbec1b64a03118975b2bf191425373c4669d'
 IMAGE='wb-ai-assistant-backend:brake-feedback-checked-1112'
 FOLDER=Path('/root/brake-feedback-build-1112')
 PREPARED=Path('/root/brake-feedback-build-1112.json')
