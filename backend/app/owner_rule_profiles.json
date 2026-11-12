@@ -51,8 +51,8 @@
     "local_positive": false
   },
   "15e8656f51f272ceca4846bd8db914207f1cf079b07ee2f287ff656d4c3c2689": {
-    "label": "Смысл отзыва и полезный ответ",
     "local_brake_feedback": true,
+    "label": "Смысл отзыва и полезный ответ",
     "local_cases": [
       "replaced_sprayer",
       "lotion_cleaning"
@@ -88,8 +88,8 @@
     "local_positive": false
   },
   "1df71e888bcfd1e86ac7ebf56caa9c306990c36d2cb5999f1800c7c39879c195": {
-    "label": "Стиль и формат отзывов по образцам Ozon 2–3 ноября 2026 года (объединённое правило)",
     "local_brake_feedback": true,
+    "label": "Стиль и формат отзывов по образцам Ozon 2–3 ноября 2026 года (объединённое правило)",
     "local_positive": true,
     "local_untried": true
   },
@@ -186,10 +186,10 @@
     "local_positive": true
   },
   "46521afc3e3ce94eb0246ace9af695fc64dea65fb258228fd1b8030599e6e1d5": {
+    "local_brake_feedback": true,
     "empty_inapplicable": true,
     "family": "brakes",
     "label": "Рекомендации для отзывов — Тормозные колодки и диски",
-    "local_brake_feedback": true,
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -283,8 +283,8 @@
     "local_positive": true
   },
   "61d8698fb39ca921dc8b6dc0638f114d8e74bd6255976bf79d31d3227193d101": {
-    "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.»",
     "local_brake_feedback": true,
+    "label": "В конце каждого ответа на отзыв добавляй подпись «С уважением ГК Юником.»",
     "local_cases": [
       "replaced_sprayer",
       "lotion_cleaning"
@@ -354,13 +354,6 @@
     ],
     "local_positive": true
   },
-  "87be6d7fd5f8102562bd2623b1f2c9082adb98f6ef07a7da30ab6f173b1acf4b": {
-    "family": "brakes",
-    "label": "Тормозные диски: отрицания, опыт и первые впечатления",
-    "local_brake_feedback": true,
-    "local_positive": true,
-    "local_untried": true
-  },
   "886aa13912ab2b57678550010fa5d66073161103081cc82da01689b3689b1774": {
     "empty_inapplicable": true,
     "label": "Упаковка, протечки и недостача в отзывах. Применяй только к соответствующей жало",
@@ -429,8 +422,8 @@
     "local_positive": true
   },
   "b1420b81f98cfb0e9a6c0abe496c12c35567697e7837de8076e3102324b4f23a": {
-    "label": "Стиль и формат ответа на отзыв",
     "local_brake_feedback": true,
+    "label": "Стиль и формат ответа на отзыв",
     "local_cases": [
       "replaced_sprayer",
       "lotion_cleaning"
@@ -604,10 +597,10 @@
     "local_positive": true
   },
   "dec42ecea2244a08214ecfeaa977c8ae67b0ead76b73c4227df41441759a31d8": {
+    "local_brake_feedback": true,
     "empty_inapplicable": true,
     "family": "parts",
     "label": "Применяй только если отзыв касается соответствующей категории товара",
-    "local_brake_feedback": true,
     "local_cases": [
       "replaced_sprayer"
     ],
@@ -644,8 +637,8 @@
     "local_positive": false
   },
   "e8a7a05b6485449fae2accfc050be9a855c90d0a5fce3f8e978dcde7ced5792c": {
-    "label": "Получение, упаковка, несоответствие и обращения",
     "local_brake_feedback": true,
+    "label": "Получение, упаковка, несоответствие и обращения",
     "local_cases": [
       "replaced_sprayer",
       "lotion_cleaning"
@@ -716,5 +709,12 @@
       "replaced_sprayer"
     ],
     "local_positive": true
+  },
+  "87be6d7fd5f8102562bd2623b1f2c9082adb98f6ef07a7da30ab6f173b1acf4b": {
+    "family": "brakes",
+    "label": "Тормозные диски: отрицания, опыт и первые впечатления",
+    "local_brake_feedback": true,
+    "local_positive": true,
+    "local_untried": true
   }
 }
