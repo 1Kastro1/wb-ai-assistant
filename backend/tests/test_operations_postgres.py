@@ -12,6 +12,26 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_page_equivalence_keeps_source_spellings_on_postgres(self):
+        from app.shared_marketplaces import equivalent_products, equivalent_product_groups
+        url=make_url(os.environ['DATABASE_URL']);self.assertEqual(url.database,'wb_workbench_tests')
+        engine=create_engine(url);Base.metadata.create_all(engine);factory=sessionmaker(engine)
+        prefix='catalog-page-'+uuid4().hex
+        try:
+            with factory() as db:
+                products=[Product(id=prefix+suffix,name='Filter',brand=prefix,part_number=article)
+                    for suffix,article in [('compact','A17'),('dash','A-17')]]
+                products.append(Product(id=prefix+'legacy',name='Filter',brand=prefix,part_number='',facts=[
+                    {'text':'Артикул производителя: A-17','source':'Карточка товара','source_type':'marketplace','verification_status':'VERIFIED'}]))
+                db.add_all(products);db.flush()
+                expected={p.id:{c.id for c in equivalent_products(db,p)} for p in products}
+                groups=equivalent_product_groups(db,products)
+                self.assertEqual({key:{p.id for p in value} for key,value in groups.items()},expected)
+                self.assertNotIn(prefix+'legacy',expected[prefix+'compact'])
+                self.assertIn(prefix+'legacy',expected[prefix+'dash'])
+                db.rollback()
+        finally:engine.dispose()
+
     def test_catalog_lookup_indexes_migrate_concurrently_and_support_both_paths(self):
         import importlib.util
         from pathlib import Path
