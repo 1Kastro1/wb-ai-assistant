@@ -292,7 +292,9 @@ def manual_review_condition():
 
 def _review_query(filters):
     view = filters.get('view', 'all')
-    query = select(Review).join(Product)
+    query = select(Review)
+    if any(filters.get(key) for key in ('q', 'brands', 'categories', 'include_product')):
+        query = query.join(Product)
     if view in ('manual', 'wrong_item', 'no_effect', 'odor') or filters.get('manual_only') or filters.get('technical_only') or filters.get('attention'):
         query = query.outerjoin(Draft, Draft.review_id == Review.id)
     conditions = [Review.rating <= filters.get('max_rating', 5), ~Review.marketplace.like('%_question')]
@@ -380,6 +382,11 @@ def review_items(db, rows):
     actor_ids.update(edit.get('by') for d in drafts.values() for edit in d.edits or [] if edit.get('by') not in (None, '', 'automation'))
     actors = {u.id: u for u in db.scalars(select(User).where(User.id.in_(actor_ids)))} if actor_ids else {}
     rule_rows = list(db.scalars(select(Memory).where(Memory.enabled == True).order_by(Memory.id))) if drafts else []
+    counterparts = {}
+    if any(str(rule.scope).strip().casefold().startswith(('product:', 'category:')) for rule in rule_rows):
+        from .shared_marketplaces import equivalent_product_groups
+        draft_product_ids = {row.product_id for row in rows if row.id in drafts}
+        counterparts = equivalent_product_groups(db, [products[pid] for pid in draft_product_ids])
     rule_cache = {}
     result = []
     for row in rows:
@@ -388,7 +395,8 @@ def review_items(db, rows):
         key = (row.product_id, row.marketplace.endswith('_question'))
         draft=drafts.get(row.id)
         if draft and key not in rule_cache:
-            rule_cache[key] = matching_owner_rules(db, products[row.product_id], for_questions=key[1], rule_rows=rule_rows)
+            rule_cache[key] = matching_owner_rules(db, products[row.product_id], for_questions=key[1], rule_rows=rule_rows,
+                counterpart_products=counterparts.get(row.product_id))
         item['draft'] = draft_public(db, draft, actors, rule_cache.get(key,[]))
         result.append(item)
     return result
@@ -411,7 +419,7 @@ def reviews_page(db, **filters):
 def review_facets(db, account_id):
     result = {}
     for name, column in (('brands', Product.brand), ('categories', Product.category)):
-        query = _review_query({'account_id': account_id}).with_only_columns(column, maintain_column_froms=True).where(column != '').distinct().order_by(column)
+        query = _review_query({'account_id': account_id, 'include_product': True}).with_only_columns(column, maintain_column_froms=True).where(column != '').distinct().order_by(column)
         result[name] = list(db.scalars(query))
     return result
 
