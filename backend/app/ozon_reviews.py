@@ -6,6 +6,7 @@ from sqlalchemy import select, or_
 from .db import Session, Review, Draft, Publication, StoreProfile, User, setting, set_setting, now
 from .security import guard
 from .safety import mask_vin
+from .review_sections import review_sections
 
 
 async def seller_reply(headers, review_id, cancelled=None, *, expected_text=None, comment_id=None):
@@ -124,7 +125,8 @@ async def sync_reviews(provider, db, store_id, progress=None, cancelled=None, re
             content = '\n'.join(str(item.get(k) or '') for k in ('text','positive','negative')).strip()
             row = upsert_market_review(db, store, item['id'],item.get('sku') or item.get('product_id') or 'unknown',
                 item.get('product_name') or item.get('sku_name'),'',item.get('rating'),content,
-                item.get('published_at') or item.get('created_at'),saved[0],saved[1])
+                item.get('published_at') or item.get('created_at'),saved[0],saved[1],
+                sections=review_sections(item, 'ozon'))
             if saved[2] in ('publishing','answer_pending','answer_unknown'):
                 row.status = saved[2]
             expected, rid = snapshot(row), row.id
