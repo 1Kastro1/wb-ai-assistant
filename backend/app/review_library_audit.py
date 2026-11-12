@@ -131,6 +131,9 @@ async def inspect_review(job_id,rid,session_factory):
             local_quality=assess(answer)
             defects=list(dict.fromkeys([*((local_quality.get('issues') or []) if not local_quality.get('passed') else []),*local_issues(answer,rules,review)]))
             learned=None if defects else load_template(db,review,product,rules,facts,assess,exact_answer=answer)
+            replacement=None
+            from .draft_audit import manually_edited
+            can_repair=automatic and (was_published or (draft and not manually_edited(draft)))
             if defects:
                 # A known local failure is sufficient to reject a saved reply.
                 # Never spend a model timeout proving a reply already ineligible.
@@ -141,14 +144,27 @@ async def inspect_review(job_id,rid,session_factory):
             elif learned:checked,verdict=learned
             else:
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
-                checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
-                    protected=review.risk!='NORMAL',check_only=True,allow_fast_positive=True,
-                    check_seconds=AUTO_RULE_CHECK_SECONDS)
-            replacement=None
-            from .draft_audit import manually_edited
-            if (automatic and not verdict.get('technical_error')
+                from .generation_control import FastPathUnavailable
+                options={'protected':review.risk!='NORMAL','check_only':True,'allow_fast_positive':True,
+                    'check_seconds':AUTO_RULE_CHECK_SECONDS}
+                try:
+                    checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
+                        **options,local_only=bool(can_repair))
+                except FastPathUnavailable:
+                    # A separately proven no-claims template can replace an
+                    # unchecked historic variant without waiting for a model.
+                    # This never certifies the old text or an unknown policy.
+                    from .auto_review_repair import repair
+                    fast=await repair(review,product,rules,facts,assess,local_only=True)
+                    proof=(fast[1].get('owner_rules') or {}) if fast else {}
+                    if (fast and fast[1].get('passed') and proof.get('checked') is True
+                        and proof.get('passed') is True and not proof.get('technical_error') and not proof.get('issues')):
+                        replacement=fast;checked=answer;verdict=proof
+                    else:
+                        checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,**options)
+            if (can_repair and replacement is None and not verdict.get('technical_error')
                 and (not answer.strip() or not verdict.get('passed') or not local_quality.get('passed'))
-                and (was_published or (draft and not manually_edited(draft)))):
+                ):
                 from .auto_review_repair import repair
                 repaired=await repair(review,product,rules,facts,assess)
                 if repaired:
