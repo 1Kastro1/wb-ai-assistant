@@ -39,6 +39,48 @@ def equivalent_products(db, product):
     return [product, *(candidate for candidate in matches if candidate.id != product.id)]
 
 
+def equivalent_product_groups(db, products):
+    """Resolve a page in two queries, preserving each source's legacy predicate."""
+    from .catalog_lookup_sql import brand_lookup_key, article_lookup_key
+    products = list(products)
+    result = {product.id: [product] for product in products}
+    sources = []
+    for product in products:
+        identity = product_identity(product)
+        if identity:
+            articles = tuple(sorted({*manufacturer_articles(product), identity[1]}))
+            sources.append((product, identity, articles))
+    if not sources:
+        return result
+    identities = {identity for _, identity, _ in sources}
+    brand = brand_lookup_key(Product.brand)
+    article = article_lookup_key(Product.part_number)
+    direct = list(db.scalars(select(Product).where(or_(
+        *(and_(brand == key[0], article == key[1]) for key in sorted(identities))))))
+    by_identity = {key: [] for key in identities}
+    for candidate in direct:
+        key = product_identity(candidate)
+        if key in by_identity:
+            by_identity[key].append(candidate)
+    # The same canonical article can have different source spellings. Keep
+    # their original LIKE alternatives separate, rather than widening matches.
+    signatures = list(dict.fromkeys((identity, articles) for _, identity, articles in sources))
+    flags = [and_(brand == key[0], or_(
+        *(Product.facts.cast(String).contains(raw) for raw in articles)))
+        for key, articles in signatures]
+    legacy = {signature: [] for signature in signatures}
+    for row in db.execute(select(Product, *flags).where(Product.part_number == '', or_(*flags))):
+        candidate = row[0]
+        key = product_identity(candidate)
+        for signature, matched in zip(signatures, row[1:]):
+            if matched and key == signature[0]:
+                legacy[signature].append(candidate)
+    for product, identity, articles in sources:
+        candidates = by_identity[identity] + legacy[(identity, articles)]
+        result[product.id] = [product, *(candidate for candidate in candidates if candidate.id != product.id)]
+    return result
+
+
 def shared_counters(db, prefix):
     result = {}
     def add(target, source):
