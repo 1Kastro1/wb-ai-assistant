@@ -91,7 +91,7 @@ def enable_automatic_repair(db,job_id):
     job.result=state;job.status='queued'
 
 
-async def inspect_review(job_id,rid,session_factory):
+async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
     from .services import assess_reply,review_verified_facts,generate_draft
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules,attach_rule_quality,local_issues,fingerprint
@@ -106,6 +106,7 @@ async def inspect_review(job_id,rid,session_factory):
         if not review:return {'status':'removed'}
         if publication_protected(db,review):return {'status':'attention','issues':['Сохранён статус публикации; требуется личная сверка']}
         missing=not published(review) and not draft
+        if missing and templates_only:return {'status':'unmatched'}
         if missing:
             token=batch_context.set({'job_id':job_id,'suppress_rule_retry':True})
             try:await generate_draft(db,rid,skip_existing=True)
@@ -134,14 +135,23 @@ async def inspect_review(job_id,rid,session_factory):
             replacement=None
             from .draft_audit import manually_edited
             can_repair=automatic and (was_published or (draft and not manually_edited(draft)))
-            if defects:
+            if can_repair:
+                matched=load_template(db,review,product,rules,facts,assess)
+                if matched:
+                    learned=matched
+                    if matched[0]!=answer:
+                        replacement=(matched[0],{**attach_rule_quality(assess(matched[0]),matched[1]),
+                            'automatic_repair':{'version':'verified-template-reuse-1','case':'matched_template'}})
+            if templates_only and not learned:return {'status':'unmatched'}
+            template_reused=bool(learned)
+            if learned:checked,verdict=learned
+            elif defects:
                 # A known local failure is sufficient to reject a saved reply.
                 # Never spend a model timeout proving a reply already ineligible.
                 checked=answer
                 verdict={'checked':True,'passed':False,'technical_error':False,
                     'fingerprint':fingerprint(rules),'matched':len(rules),'issues':defects,
                     'verification_method':'local_rejection','verification_seconds':0}
-            elif learned:checked,verdict=learned
             else:
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
                 from .generation_control import FastPathUnavailable
@@ -196,7 +206,7 @@ async def inspect_review(job_id,rid,session_factory):
                     draft.edits=[*(draft.edits or []),{'old':answer,'new':candidate,'at':now(),
                         'by':'automation','reason':'automatic_rules_repair'}]
                     draft.text=candidate;draft.revision+=1
-                    draft.model='automatic-rules-repair-1.0'
+                    draft.model='verified-template-1.0' if template_reused else 'automatic-rules-repair-1.0'
                 answer=candidate
                 verdict=repaired_quality['owner_rules']
                 key=verification_key(answer,review,product,fresh_rules,fresh_facts)
@@ -204,6 +214,10 @@ async def inspect_review(job_id,rid,session_factory):
                 verdict={**verdict,'passed':False,'checked':False,'issues':['Проверка предложила изменение; исходный текст сохранён']}
             verdict={**verdict,'input_key':key,'checked_at':now()}
             quality=attach_rule_quality(assess(answer),verdict)
+            if template_reused:
+                quality['template_reuse']={'source':verdict.get('template_source',''),
+                    'context_key':verdict.get('template_key',''),'at':now()}
+                quality['timing']={'total_seconds':0,'web_seconds':0,'model_seconds':0,'route':'template'}
             if automatic and quality.get('passed') and verdict.get('checked') and not verdict.get('technical_error'):
                 quality['automatic_audit']={'checked_at':now(),'input_key':key}
             if replacement:
@@ -227,7 +241,7 @@ async def inspect_review(job_id,rid,session_factory):
             return {'status':('verified_reference' if was_published and replacement else 'verified') if tid else 'retry' if technical_check(quality) else
                 'blocked' if verdict.get('technical_error') else 'attention',
                 'input_key':key,'template_id':tid,'issues':quality.get('issues',[]),
-                'auto_repaired':bool(replacement and not was_published)}
+                'auto_repaired':bool(replacement and not was_published),'template_reused':template_reused}
     return await exclusive_generation(rid,verify,session_factory)
 
 
@@ -357,6 +371,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                         target[field]=target.get(field,0)+1
                         if outcome['status']=='verified_reference':target['corrected_references']=target.get('corrected_references',0)+1
                         if outcome.get('auto_repaired'):target['auto_repaired']=target.get('auto_repaired',0)+1
+                        if outcome.get('template_reused'):target['template_reused']=target.get('template_reused',0)+1
                 state.update(current_review='',detail='')
             db.flush()
             deferred=db.scalar(select(func.count()).select_from(ReviewLibraryAuditRow).where(
@@ -372,9 +387,51 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
         if job.status=='running':job.status='queued';db.commit()
 
 
+async def reuse_pending_templates(job_id,session_factory=Session):
+    """Bounded upgrade pass with worker stopped; never starts a model check."""
+    from .generation_control import GenerationBusy
+    with session_factory() as db:
+        job=db.get(Job,job_id)
+        if not job or job.cancel_requested or job.status not in ('queued','running'):return {'reused':0}
+        state=job.result or {}
+        if state['stage']>=len(state['stages']):return {'reused':0}
+        stage=state['stages'][state['stage']]
+        ids=list(db.scalars(select(ReviewLibraryAuditRow.review_id).join(Review,Review.id==ReviewLibraryAuditRow.review_id)
+            .where(ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')),
+                Review.wb_account_id==stage['account_id'],Review.marketplace==stage['marketplace'])
+            .order_by(ReviewLibraryAuditRow.review_id).limit(500)))
+    reused=0
+    for rid in ids:
+        try:outcome=await inspect_review(job_id,rid,session_factory,templates_only=True)
+        except GenerationBusy:continue
+        if not outcome.get('template_reused') or outcome['status'] not in ('verified','verified_reference'):continue
+        with session_factory() as db:
+            job=db.get(Job,job_id);row=db.get(ReviewLibraryAuditRow,(job_id,rid))
+            if job.cancel_requested:return {'reused':reused}
+            if row.status not in ('retry','blocked'):continue
+            state=dict(job.result or {});stages=[dict(s) for s in state['stages']];stage=stages[state['stage']]
+            row.status=outcome['status'];row.attempts+=1;row.retry_at=0;row.issues=[]
+            row.input_key=outcome['input_key'];row.template_id=outcome['template_id'];row.updated_at=now()
+            for target in (stage,state):
+                for field in ('checked','verified','template_reused'):target[field]=target.get(field,0)+1
+                if outcome['status']=='verified_reference':target['corrected_references']=target.get('corrected_references',0)+1
+                if outcome.get('auto_repaired'):target['auto_repaired']=target.get('auto_repaired',0)+1
+            db.flush()
+            deferred=db.scalar(select(func.count()).select_from(ReviewLibraryAuditRow).where(
+                ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')))) or 0
+            state.update(stages=stages,deferred=deferred,retry_at=0,last_progress_at=now(),
+                message=f"Применены проверенные шаблоны без повторной проверки: {state.get('template_reused',0)}")
+            job.result=state;db.commit();reused+=1
+    return {'reused':reused}
+
+
 if __name__=='__main__':
     import json,sys
     with Session() as db:
         if '--start' in sys.argv:
             job=start(db);db.commit();print(job.id)
+        if '--reuse-templates' in sys.argv:
+            current=report(db)['job']
+            db.rollback()
+            if current:print(json.dumps(asyncio.run(reuse_pending_templates(current['id']))))
         print(json.dumps(report(db),ensure_ascii=False,default=str))
