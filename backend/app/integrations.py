@@ -321,6 +321,9 @@ class WildberriesProvider:
                         row = Review(id=account_id + ':' + rid, wb_account_id=account_id, wb_review_id=rid, product_id=pid, status='unanswered')
                     text = '\n'.join(str(item.get(k) or '') for k in ('text', 'pros', 'cons')).strip()
                     row.text, row.rating = mask_vin(text), item['productValuation']
+                    from .review_sections import review_sections
+                    sections = review_sections(item, 'wb')
+                    if sections: row.sections = sections
                     row.created_at = item.get('createdDate', '')
                     row.is_answered = bool(item.get('answer'))
                     row.existing_answer = mask_vin((item.get('answer') or {}).get('text', ''))
@@ -431,7 +434,7 @@ def store_credentials(db, store_id):
     return store, decrypt_secret(account.encrypted_token)
 
 
-def upsert_market_review(db, store, external_id, product_external_id, product_name, brand, rating, text, created_at, answered=False, answer=''):
+def upsert_market_review(db, store, external_id, product_external_id, product_name, brand, rating, text, created_at, answered=False, answer='', *, sections=None):
     product_id = f'{store.provider}:{store.id}:{product_external_id}'
     if store.provider == 'ozon' and not db.get(Product, product_id):
         product_id = setting(db, f'ozon-product:{store.id}:{product_external_id}', product_id)
@@ -442,6 +445,8 @@ def upsert_market_review(db, store, external_id, product_external_id, product_na
     if not row:
         row = Review(id=f'{store.id}:{external_id}', wb_account_id=store.id, wb_review_id=str(external_id), product_id=product_id, status='unanswered', marketplace=store.provider)
     row.text, row.rating, row.created_at = mask_vin(text or ''), int(rating or 0), str(created_at or now())
+    if sections is not None and sections:
+        row.sections = sections
     row.is_answered, row.existing_answer = bool(answered), mask_vin(answer or '')
     for key, value in classify(row.text, product.category).items():
         setattr(row, key, value)
@@ -682,7 +687,8 @@ class YandexProvider:
                 identifiers = item.get('identifiers') or {}
                 content = '\n'.join(str(description.get(k) or '') for k in ('advantages','disadvantages','comment')).strip()
                 statistics = item.get('statistics') or {}
-                upsert_market_review(db, store, item.get('feedbackId'), identifiers.get('offerId') or 'unknown', identifiers.get('offerId'), '', statistics.get('rating'), content, item.get('createdAt'), bool(statistics.get('commentsCount')))
+                from .review_sections import review_sections
+                upsert_market_review(db, store, item.get('feedbackId'), identifiers.get('offerId') or 'unknown', identifiers.get('offerId'), '', statistics.get('rating'), content, item.get('createdAt'), bool(statistics.get('commentsCount')), sections=review_sections(description, 'yandex'))
                 total += 1
             db.commit()
             if progress: progress(min(95, 5 + total // 50))
