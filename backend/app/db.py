@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 import re
-from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint, Float, Computed
+from sqlalchemy import create_engine, event, String, Text, Integer, Boolean, JSON, ForeignKey, UniqueConstraint, Float, Computed, Index
 from .draft_flags import DraftFlag
+from .catalog_lookup_sql import brand_lookup_key, article_lookup_key
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.dialects.postgresql import JSONB
 from .config import DATABASE, DATABASE_URL
@@ -131,6 +132,11 @@ class Product(Base):
     part_number: Mapped[str] = mapped_column(String, default='')
     facts: Mapped[list] = mapped_column(JSON, default=list)
     marketplace: Mapped[str] = mapped_column(String, default='wb')
+    __table_args__ = (
+        Index('ix_products_brand_article_lookup',brand_lookup_key(brand),article_lookup_key(part_number)),
+        Index('ix_products_legacy_brand_lookup',brand_lookup_key(brand),
+            postgresql_where=part_number=='',sqlite_where=part_number==''),
+    )
 
 
 class Review(Base):

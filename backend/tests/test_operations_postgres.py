@@ -12,6 +12,50 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_catalog_lookup_indexes_migrate_concurrently_and_support_both_paths(self):
+        import importlib.util
+        from pathlib import Path
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        from sqlalchemy import text
+        from app.catalog_lookup_sql import brand_lookup_key, article_lookup_key
+        url = make_url(os.environ['DATABASE_URL'])
+        self.assertEqual(url.database, 'wb_workbench_tests')
+        engine = create_engine(url)
+        schema = 'catalog_migration_' + uuid4().hex
+        spec = importlib.util.spec_from_file_location('catalog_migration', Path(__file__).parents[1] / 'migrations/versions/0020_catalog_lookup_indexes.py')
+        migration = importlib.util.module_from_spec(spec); spec.loader.exec_module(migration)
+        try:
+            with engine.connect() as connection:
+                connection.exec_driver_sql('CREATE SCHEMA ' + schema)
+                connection.exec_driver_sql('SET search_path TO ' + schema)
+                connection.exec_driver_sql("CREATE TABLE products(id text PRIMARY KEY, brand text, part_number text, facts json)")
+                connection.exec_driver_sql("INSERT INTO products VALUES ('direct','NITTO','A-17','[]'),('legacy','NITTO','','[]')")
+                connection.commit()
+                context = MigrationContext.configure(connection)
+                with context.begin_transaction():
+                    with Operations.context(context):
+                        migration.upgrade(); migration.upgrade()
+                connection.commit()
+                self.assertEqual(connection.exec_driver_sql('SELECT count(*) FROM products').scalar(), 2)
+                valid = connection.execute(text("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname LIKE 'ix_products_%'")).scalars().all()
+                self.assertEqual(valid, [True, True])
+                connection.exec_driver_sql('SET enable_seqscan = off')
+                for predicate, name in [
+                    ("lower(trim(brand))='nitto' AND upper(replace(replace(replace(replace(replace(part_number,'-',''),' ',''),'.',''),'/',''),'_',''))='A17'", 'ix_products_brand_article_lookup'),
+                    ("lower(trim(brand))='nitto' AND part_number='' AND cast(facts AS VARCHAR) LIKE '%A-17%'", 'ix_products_legacy_brand_lookup')]:
+                    plan = str(connection.execute(text('EXPLAIN SELECT id FROM products WHERE ' + predicate)).all())
+                    self.assertIn(name, plan)
+                connection.commit()
+                with Operations.context(MigrationContext.configure(connection)):
+                    migration.downgrade()
+                self.assertEqual(connection.exec_driver_sql('SELECT count(*) FROM products').scalar(), 2)
+                connection.commit()
+        finally:
+            with engine.begin() as connection:
+                connection.exec_driver_sql('DROP SCHEMA IF EXISTS ' + schema + ' CASCADE')
+            engine.dispose()
+
     def test_pipeline_counts_use_real_postgres_flags_and_scoped_jobs(self):
         from app.pipeline_overview import _overview
         url=make_url(os.environ['DATABASE_URL']);self.assertEqual(url.database,'wb_workbench_tests')

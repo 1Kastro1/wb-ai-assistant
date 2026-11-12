@@ -386,9 +386,10 @@ def review_items(db, rows):
         item = public(row)
         item['product'] = public(products.get(row.product_id))
         key = (row.product_id, row.marketplace.endswith('_question'))
-        if key not in rule_cache:
+        draft=drafts.get(row.id)
+        if draft and key not in rule_cache:
             rule_cache[key] = matching_owner_rules(db, products[row.product_id], for_questions=key[1], rule_rows=rule_rows)
-        item['draft'] = draft_public(db, drafts.get(row.id), actors, rule_cache[key])
+        item['draft'] = draft_public(db, draft, actors, rule_cache.get(key,[]))
         result.append(item)
     return result
 

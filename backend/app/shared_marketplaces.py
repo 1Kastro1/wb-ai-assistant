@@ -27,14 +27,14 @@ def equivalent_products(db, product):
     if not identity:
         return [product] if product else []
     raw_articles = manufacturer_articles(product)
-    normalized = Product.part_number
-    for separator in ('-', ' ', '.', '/', '_'):
-        normalized = func.replace(normalized, separator, '')
-    predicates = [func.upper(normalized) == identity[1]]
-    for article in {*raw_articles, identity[1]}:
-        predicates.append(and_(Product.part_number == '', Product.facts.cast(String).contains(article)))
-    candidates = db.scalars(select(Product).where(
-        func.lower(func.trim(Product.brand)) == identity[0], or_(*predicates)))
+    from .catalog_lookup_sql import brand_lookup_key,article_lookup_key
+    brand=brand_lookup_key(Product.brand)==identity[0]
+    # Keep the indexed manufacturer-article path separate from legacy JSON
+    # lookup. A single OR forced a full catalog scan for every review card.
+    direct=list(db.scalars(select(Product).where(brand,article_lookup_key(Product.part_number)==identity[1])))
+    legacy=list(db.scalars(select(Product).where(brand,Product.part_number=='',or_(
+        *(Product.facts.cast(String).contains(article) for article in {*raw_articles,identity[1]})))))
+    candidates=[*direct,*legacy]
     matches = [candidate for candidate in candidates if product_identity(candidate) == identity]
     return [product, *(candidate for candidate in matches if candidate.id != product.id)]
 
