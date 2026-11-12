@@ -3,7 +3,7 @@ import fcntl,hashlib,importlib.util,json,os,re,subprocess,sys,time,urllib.reques
 from pathlib import Path
 ROOT=Path('/srv/wb-ai-assistant')
 BASE='7f1ca6d59f2a0cf894ed93565470c9877bd607d5'
-SOURCE='8a88bbec1b64a03118975b2bf191425373c4669d'
+SOURCE='289653df2f6f3e542802795d2f140c44510a58e5'
 IMAGE='wb-ai-assistant-backend:brake-feedback-checked-1112'
 FOLDER=Path('/root/brake-feedback-build-1112')
 PREPARED=Path('/root/brake-feedback-build-1112.json')
@@ -97,7 +97,7 @@ def build():
     run('docker','run','--rm','--entrypoint','python','-e','WB_SECRET_KEY_FILE=/tmp/import.key',IMAGE,'-c',
         "from pathlib import Path;from cryptography.fernet import Fernet;Path('/tmp/import.key').write_bytes(Fernet.generate_key());from app import brake_feedback;from app.main import app;print('UNPRIVILEGED_BRAKE_IMPORTS_OK')")
     override=FOLDER/'candidate.yml';override.write_text('services:\n  backend:\n    image: '+IMAGE+'\n')
-    run('docker','compose','-f','docker-compose.yml','-f',str(override),'run','--rm','--no-deps','--no-build','--entrypoint','python','backend','-c',PREFLIGHT,*targets())
+    run('docker','compose','-f','docker-compose.yml','-f',str(override),'run','--rm','--no-deps','--entrypoint','python','backend','-c',PREFLIGHT,*targets())
     PREPARED.write_text(json.dumps({'base_image':base,'source':SOURCE,'hashes':hashes}))
     print('BRAKE_CANDIDATE_READY',flush=True)
 
