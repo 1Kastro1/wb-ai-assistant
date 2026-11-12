@@ -12,10 +12,14 @@ def case(review, product):
     from .product_guidance import untested_review
     from .vehicle_identifiers import vehicle_identifiers
     if (not review or not product or getattr(review,'rating',0) not in (4,5) or getattr(review,'risk','NORMAL')!='NORMAL'
-        or getattr(review,'manual',False) or getattr(review,'safety_critical',False)
+        or getattr(review,'manual',False)
         or (getattr(review,'marketplace','') or '').endswith('_question')):return None
     name=((getattr(product,'name','') or '')+' '+(getattr(product,'category','') or '')).lower().replace('ё','е')
     if not re.search(r'диск\w*\s+тормозн|тормозн\w*\s+диск',name):return None
+    # safety_critical classifies the component, not a reported failure. Keep the
+    # flag intact; admit only the two exact no-technical-claims replies below.
+    from .safety import classify
+    if classify(review.text,getattr(product,'category','') or '')['risk']!='NORMAL':return None
     text=' '.join((review.text or '').lower().replace('ё','е').split())
     analysis=analyze_customer_message(review.text,review.rating)
     if analysis['is_question'] or analysis['buyer_asks_about_money'] or vehicle_identifiers(text):return None
@@ -95,3 +99,45 @@ def upgrade_policy(db,job_id):
     set_setting(db,'memory-meta:'+rule.id,meta)
     set_setting(db,UPGRADE,{'at':now(),'rule_id':rule.id,'previous_text':OLD_RULE,'text':RULE,'reopened':reopened})
     return {'rule_id':rule.id,'reopened':len(reopened),'previous_attention':sum(s.get('attention',0) for s in stages)}
+
+
+async def recheck_cases(job_id,review_ids,session_factory=None):
+    """Finalize explicitly selected cases with the worker stopped, without clearing risk flags."""
+    from sqlalchemy import select,func
+    from .db import Session,Job,Review,Product,ReviewLibraryAuditRow,now
+    from .review_library_audit import inspect_review
+    from .owner_reply_rules import matching_owner_rules
+    from .services import review_verified_facts
+    from .rule_execution import verification_key
+    from .rule_change_recheck import policy_version
+    session_factory=session_factory or Session;outcomes={}
+    for rid in review_ids:
+        outcome=await inspect_review(job_id,rid,session_factory)
+        if outcome['status'] not in ('verified','verified_reference'):raise ValueError('Case not verified: '+rid)
+        with session_factory() as db:
+            job=db.scalar(select(Job).where(Job.id==job_id).with_for_update())
+            row=db.scalar(select(ReviewLibraryAuditRow).where(ReviewLibraryAuditRow.job_id==job_id,
+                ReviewLibraryAuditRow.review_id==rid).with_for_update())
+            r=db.scalar(select(Review).where(Review.id==rid).with_for_update());p=db.get(Product,r.product_id)
+            rules=matching_owner_rules(db,p);facts=review_verified_facts(db,r,p,rules)
+            answer=template(r,p,rules)
+            if (not answer or job.cancel_requested or job.status not in ('queued','running')
+                or (job.result or {}).get('policy_version')!=policy_version(db)
+                or verification_key(answer,r,p,rules,facts)!=outcome['input_key']):raise ValueError('Case context changed')
+            if row.status in ('verified','verified_reference'):outcomes[rid]=outcome;continue
+            if row.status not in ('retry','blocked'):raise ValueError('Expected reopened case')
+            state=dict(job.result or {});stages=[dict(s) for s in state['stages']]
+            stage=next(s for s in stages if s['account_id']==r.wb_account_id and s['marketplace']==r.marketplace)
+            row.status=outcome['status'];row.input_key=outcome['input_key'];row.template_id=outcome['template_id']
+            row.retry_at=0;row.issues=[];row.attempts+=1;row.updated_at=now()
+            for target in (stage,state):
+                target['checked']=target.get('checked',0)+1;target['verified']=target.get('verified',0)+1
+                if outcome['status']=='verified_reference':target['corrected_references']=target.get('corrected_references',0)+1
+                if outcome.get('auto_repaired'):target['auto_repaired']=target.get('auto_repaired',0)+1
+            db.flush()
+            deferred=db.scalar(select(func.count()).select_from(ReviewLibraryAuditRow).where(
+                ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')))) or 0
+            state.update(stages=stages,deferred=deferred,retry_at=0,current_review='',detail='',
+                message='Отобранные отзывы проверены по уточнённым правилам тормозных дисков')
+            job.result=state;job.status='queued';db.commit();outcomes[rid]=outcome
+    return outcomes
