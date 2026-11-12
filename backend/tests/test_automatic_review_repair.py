@@ -107,11 +107,39 @@ def test_new_unknown_rule_is_not_waived_by_automatic_recipe(monkeypatch):
     monkeypatch.setattr('app.integrations.ollama.structured',judge)
     with Session() as db:
         review=db.get(Review,'r');product=db.get(Product,'p')
+        assert asyncio.run(repair(review,product,['Особое правило: перечисли подтверждённые свойства товара.'],[],
+            lambda text:assess_reply(review,product,text,[]),local_only=True)) is None
+        assert not judge.called
         _,quality=asyncio.run(repair(review,product,['Особое правило: перечисли подтверждённые свойства товара.'],[],
             lambda text:assess_reply(review,product,text,[])))
         assert judge.called and not quality['passed']
         review.risk='HIGH'
         assert asyncio.run(repair(review,product,[],[],lambda text:{})) is None
+
+
+def test_independently_proven_recipe_avoids_waiting_for_old_positive_prose(monkeypatch):
+    from app.generation_control import FastPathUnavailable
+    calls=[]
+    async def old_check(*args,**kwargs):
+        calls.append(kwargs.get('local_only'))
+        assert kwargs.get('local_only') is True
+        raise FastPathUnavailable('old wording needs semantic check')
+    async def fast(*args,**kwargs):
+        assert kwargs.get('local_only') is True
+        _,quality=await replacement()
+        return 'Добрый день! Спасибо за Ваш отзыв. С уважением ГК Юником.',quality
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',old_check)
+    monkeypatch.setattr('app.auto_review_repair.repair',fast)
+    jid=seed('yandex')
+    with Session() as db:
+        r=db.get(Review,'r');r.text='Отлично!';r.rating=5
+        d=db.get(Draft,'d');d.text=d.original='Добрый день! Спасибо за отзыв. Будем рады видеть Вас снова в нашем магазине.'
+        db.commit()
+    asyncio.run(step(jid,limit=1))
+    with Session() as db:
+        assert calls==[True]
+        assert db.get(Draft,'d').text=='Добрый день! Спасибо за Ваш отзыв. С уважением ГК Юником.'
+        assert db.get(ReviewLibraryAuditRow,(jid,'r')).status=='verified'
 
 
 def test_fully_audited_low_rating_leaves_routine_personal_queue_but_outage_does_not():
