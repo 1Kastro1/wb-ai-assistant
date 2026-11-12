@@ -12,7 +12,7 @@ test('a 17.5 second analytics calculation can complete without delaying fast car
  const pending=loader.load([['stats','/analytics?days=30'],['system','/system/status']],(key,value)=>events.push([key,value]));
  await new Promise(resolve=>setImmediate(resolve));
  assert.deepEqual(events,[['system',{ok:true}]]);
- assert.equal(budgets.find(([path])=>path==='/system/status')[1],15000);
+ assert.equal(budgets.find(([path])=>path==='/system/status')[1],60000);
  finish({total:221679,unanswered:183388});
  const results=await pending;
  assert(results.every(result=>result.status==='fulfilled'));

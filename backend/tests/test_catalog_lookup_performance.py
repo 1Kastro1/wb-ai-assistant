@@ -30,6 +30,34 @@ def test_direct_and_legacy_paths_preserve_exact_identity_and_use_indexes():
         assert [p.id for p in equivalent_products(db,db.get(Product,'source'))]==['source']
 
 
+def test_page_equivalence_uses_two_queries_without_widening_legacy_spellings():
+    from app.shared_marketplaces import equivalent_product_groups
+    with Session() as db:
+        products=[
+            Product(id='compact',name='Фильтр',brand='NITTO',part_number='A17'),
+            Product(id='dash',name='Фильтр',brand='nitto',part_number='A-17'),
+            Product(id='underscore',name='Фильтр',brand='NITTO',part_number='A_17'),
+            Product(id='legacy',name='Фильтр',brand='NITTO',part_number='',facts=[fact('A-17')]),
+            Product(id='unverified',name='Фильтр',brand='NITTO',part_number='',facts=[fact('A-17',verified=False)]),
+            Product(id='ambiguous',name='Фильтр',brand='NITTO',part_number='A17',facts=[fact('B19')]),
+            Product(id='kit',name='Комплект фильтров',brand='NITTO',part_number='A17'),
+            Product(id='other',name='Фильтр',brand='OTHER',part_number='A17')]
+        db.add_all(products);db.flush()
+        expected={p.id:{c.id for c in equivalent_products(db,p)} for p in products}
+        queries=[]
+        def record(conn,cursor,statement,parameters,context,many):
+            if statement.lstrip().startswith('SELECT'):queries.append(statement)
+        event.listen(engine,'before_cursor_execute',record)
+        try:groups=equivalent_product_groups(db,products)
+        finally:event.remove(engine,'before_cursor_execute',record)
+        assert len(queries)==2
+        assert {key:{p.id for p in value} for key,value in groups.items()}==expected
+        assert 'legacy' not in expected['compact'] and 'legacy' in expected['dash']
+        db.get(Product,'legacy').facts=[fact('B19')];db.flush()
+        groups=equivalent_product_groups(db,products)
+        assert 'legacy' not in {p.id for p in groups['dash']}
+
+
 def test_page_does_not_resolve_rules_for_reviews_without_drafts(monkeypatch):
     with Session() as db:
         db.add_all(Product(id='p'+str(i),name='Товар',brand='NITTO',part_number='A'+str(i)) for i in range(30))

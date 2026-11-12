@@ -24,7 +24,7 @@ export function createWorkspaceLoader(api,{ttl=15000,now=()=>Date.now()}={}){
    let entry=cache.get(path);
    const previous=snapshots.get(path);
    if(!entry?.promise&&(force||!entry||now()-entry.at>ttl))entry=undefined;
-   if(!entry){entry={promise:null,at:0,value:null};const record=entry;record.promise=api(path,'GET',undefined,path.split('?')[0]==='/analytics'?45000:15000).then(value=>{record.value=value;record.at=now();record.promise=null;return value}).catch(error=>{if(cache.get(path)===record)cache.delete(path);throw error});cache.set(path,record)}
+   if(!entry){entry={promise:null,at:0,value:null};const record=entry;record.promise=api(path,'GET',undefined,workspaceResourceTimeout(path)).then(value=>{record.value=value;record.at=now();record.promise=null;return value}).catch(error=>{if(cache.get(path)===record)cache.delete(path);throw error});cache.set(path,record)}
    let value;
    try{value=entry.promise?await entry.promise:entry.value}catch(error){if(previous&&epoch===generation)onValue(key,previous.value,{at:previous.at,stale:true});throw error}
    if(epoch===generation){snapshots.set(path,{value,at:entry.at});onValue(key,value,{at:entry.at,stale:false})}
@@ -32,6 +32,10 @@ export function createWorkspaceLoader(api,{ttl=15000,now=()=>Date.now()}={}){
   }));
   return results;
  }};
+}
+
+export function workspaceResourceTimeout(path){
+ return ['/analytics','/analytics/marketplaces','/system/status','/quality-report'].includes(path.split('?')[0])?60000:15000;
 }
 
 export function readViewPreferences(storage,key){
