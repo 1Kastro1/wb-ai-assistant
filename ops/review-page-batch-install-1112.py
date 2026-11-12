@@ -10,7 +10,7 @@ PREPARED = Path('/root/review-page-batch-build-1112.json')
 FILES = ['backend/app/services.py','backend/app/shared_marketplaces.py','backend/app/owner_reply_rules.py']
 FRONT_FILES = ['frontend/app/workspace-data.mjs']
 FRONT_IMAGE = 'wb-ai-assistant-frontend:review-page-batch-checked-1112'
-TESTS = ['backend/tests/test_catalog_lookup_performance.py','backend/tests/test_operations_postgres.py','frontend/tests/workbench.test.mjs']
+TESTS = ['backend/tests/test_catalog_lookup_performance.py','backend/tests/test_operations_postgres.py','frontend/tests/workbench.test.mjs','frontend/tests/analytics-loading.test.mjs']
 
 def run(*args, **kw):
     return subprocess.run(args, cwd=ROOT, check=True, text=True, **kw)
