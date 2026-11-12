@@ -17,7 +17,7 @@ BUCKET_LIMIT = 64
 MAX_AGE = 14 * 86400
 
 
-def context_key(review, product, rules, facts, *, praise_group=False, candidate_group=False):
+def context_key(review, product, rules, facts, *, praise_group=False, candidate_group=False, equivalent_group=False):
     from .rule_execution import VERSION
     from .shared_marketplaces import POLICY_VERSION
     if (not review or not product or review.marketplace.endswith('_question') or
@@ -26,6 +26,11 @@ def context_key(review, product, rules, facts, *, praise_group=False, candidate_
     def fields(obj, names):
         return {name: getattr(obj, name, None) for name in names}
     message = re.sub(r'\s+', ' ', review.text).strip()
+    if equivalent_group:
+        from .equivalent_reviews import message_group, VERSION as GROUP_VERSION
+        group = message_group(review.text)
+        if not group:return None
+        message = GROUP_VERSION + ':' + group
     if candidate_group:
         from .reply_policy import analyze_customer_message
         from .vehicle_identifiers import vehicle_identifiers
@@ -48,6 +53,10 @@ def context_key(review, product, rules, facts, *, praise_group=False, candidate_
                                   'buyer_name','customer_name','buyer_name_hidden','topics')),
         'message': message,
         'product': fields(product, ('id','name','brand','category','part_number','facts','marketplace'))}
+    if equivalent_group:
+        # These are derived tags, not additional buyer circumstances. The entire
+        # approved phrase, rating, product, facts, names and rules are still fixed.
+        data['review'].pop('topics', None)
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -55,30 +64,33 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
     from .owner_reply_policy import saved_rule_quality, local_issues
     from .safety import validate_reply
     from .rule_execution import verified_positive_reply
-    for grouped in (False, True):
-        key = context_key(review, product, rules, facts, praise_group=grouped)
+    for kind in ('exact', 'positive', 'equivalent'):
+        grouped = kind == 'positive'
+        key = context_key(review, product, rules, facts, praise_group=grouped, equivalent_group=kind=='equivalent')
         if not key:
             continue
         row = db.get(Setting, 'verified-replies:' + key[0])
         entry = deepcopy((row.value or {}).get(key)) if row else None
         from .verified_reply_library import variants
-        for item in variants(db,key,'positive' if grouped else 'exact') + _variants(entry, db):
+        for item in variants(db,key,kind) + _variants(entry, db):
             if not item.get('durable') and time.time()-float(item.get('at',0)) > MAX_AGE:
                 continue
             answer, verdict = item.get('answer',''), item.get('verdict') or {}
             if exact_answer is not None and answer != exact_answer:
                 continue
             if (same_answer(answer, previous) or not verdict.get('checked') or not verdict.get('passed')
-                    or verdict.get('technical_error')):
+                    or verdict.get('technical_error') or verdict.get('issues')):
                 continue
             try:
+                from .equivalent_reviews import message_group
                 if (grouped and not verified_positive_reply(answer,review,rules,product=product) or
+                    kind=='equivalent' and message_group(review.text)=='untried' and not verified_positive_reply(answer,review,rules,product=product) or
                     validate_reply(answer) != answer or local_issues(answer,rules,review) or
                     not saved_rule_quality(answer,rules,verdict,review=review)['passed'] or not assess(answer)['passed']):
                     continue
             except ValueError:
                 continue
-            verdict.update(verification_method='learned_positive_group' if grouped else 'learned_exact_context',
+            verdict.update(verification_method='learned_positive_group' if grouped else 'learned_equivalent_context' if kind=='equivalent' else 'learned_exact_context',
                            template_source=item.get('source',''),verification_seconds=0, template_key=key)
             return answer, verdict
     return None
@@ -132,6 +144,10 @@ def remember_template(db, review, product, rules, facts, draft):
     keys = [(key,'exact')]
     similar = context_key(review,product,rules,facts,candidate_group=True)
     if similar: keys.append((similar,'candidate'))
+    equivalent = context_key(review,product,rules,facts,equivalent_group=True)
+    from .equivalent_reviews import message_group
+    if equivalent and (message_group(review.text)!='untried' or verified_positive_reply(draft.text,review,rules,product=product)):
+        keys.append((equivalent,'equivalent'))
     if verified_positive_reply(draft.text,review,rules,product=product):
         grouped=context_key(review,product,rules,facts,praise_group=True)
         if grouped: keys.append((grouped,'positive'))
@@ -140,6 +156,49 @@ def remember_template(db, review, product, rules, facts, draft):
     return True
 
 
+def backfill_equivalent_templates(db):
+    """Index only durable exact proofs whose original context still matches."""
+    from types import SimpleNamespace
+    from .db import VerifiedReplyContext,VerifiedReplyText,Review,Product,set_setting
+    from .verified_reply_library import render
+    from .owner_reply_rules import matching_owner_rules
+    from .owner_reply_policy import attach_rule_quality
+    from .services import assess_reply,review_verified_facts
+    from .equivalent_reviews import message_group,VERSION
+    cursor='';indexed=0;seen=0
+    while True:
+        rows=list(db.scalars(select(VerifiedReplyContext).where(VerifiedReplyContext.kind=='exact',
+            VerifiedReplyContext.id>cursor).order_by(VerifiedReplyContext.id).limit(300)))
+        if not rows:break
+        for entry in rows:
+            seen+=1
+            verdict=entry.verdict if isinstance(entry.verdict,dict) else {}
+            if (verdict.get('checked') is not True or verdict.get('passed') is not True
+                or verdict.get('technical_error') or verdict.get('issues')):continue
+            review=db.get(Review,entry.source_review_id)
+            if not review or not message_group(review.text):continue
+            product=db.get(Product,review.product_id)
+            if not product:continue
+            rules=matching_owner_rules(db,product)
+            facts=review_verified_facts(db,review,product,rules)
+            if entry.context_key!=context_key(review,product,rules,facts):continue
+            body=db.get(VerifiedReplyText,entry.template_id)
+            if not body:continue
+            answer=render(body.text,entry.presentation)
+            quality=attach_rule_quality(assess_reply(review,product,answer,facts),verdict)
+            if remember_template(db,review,product,rules,facts,SimpleNamespace(text=answer,quality=quality)):
+                indexed+=1
+        cursor=rows[-1].id
+    set_setting(db,'equivalent_review_templates_version',VERSION)
+    return {'examined':seen,'indexed':indexed,'version':VERSION}
+
+
 def compact_library(db):
     from .verified_reply_library import migrate_legacy
     return migrate_legacy(db)
+
+
+if __name__=='__main__':
+    from .db import Session
+    with Session() as db:
+        result=backfill_equivalent_templates(db);db.commit();print(json.dumps(result))
