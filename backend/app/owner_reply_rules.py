@@ -30,12 +30,12 @@ def apply_review_signature(reply, rules):
     return body + '\n' + signature if body else signature
 
 
-def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None):
+def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None, counterpart_products=None):
     from .shared_marketplaces import equivalent_products
     rule_rows = list(db.scalars(select(Memory).where(Memory.enabled == True).order_by(Memory.id))) if rule_rows is None else rule_rows
     if not rule_rows:
         return []
-    counterparts = equivalent_products(db, product) if any(_scope_key(row.scope).startswith(('product:', 'category:')) for row in rule_rows) else [product]
+    counterparts = (counterpart_products if counterpart_products is not None else equivalent_products(db, product)) if any(_scope_key(row.scope).startswith(('product:', 'category:')) for row in rule_rows) else [product]
     scopes = {'global', 'brand:' + product.brand, 'category:' + product.category}
     scopes.update('product:' + item.id for item in counterparts)
     scopes.update('category:' + item.category for item in counterparts if item.category)
