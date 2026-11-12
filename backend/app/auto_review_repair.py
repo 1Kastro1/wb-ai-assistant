@@ -2,7 +2,7 @@
 VERSION = 'automatic-review-repair-2026-11-12-v1'
 
 
-async def repair(review, product, rules, facts, assess):
+async def repair(review, product, rules, facts, assess, *, local_only=False):
     from .rule_execution import positive_template, untried_template
     from .review_cases import specific_review_case
     from .safety import safe_fallback_reply
@@ -17,8 +17,13 @@ async def repair(review, product, rules, facts, assess):
                  or untried_template(review, rules, product=product)
                  or (case or {}).get('answer')
                  or safe_fallback_reply(review, product, facts=facts))
-    answer, verdict = await enforce_owner_rules(candidate, review, product, rules, facts, assess,
-        allow_fast_positive=True, check_seconds=AUTO_RULE_CHECK_SECONDS)
+    from .generation_control import FastPathUnavailable
+    try:
+        answer, verdict = await enforce_owner_rules(candidate, review, product, rules, facts, assess,
+            allow_fast_positive=True, check_seconds=AUTO_RULE_CHECK_SECONDS, local_only=local_only)
+    except FastPathUnavailable:
+        if local_only:return None
+        raise
     quality = attach_rule_quality(assess(answer), verdict)
     quality['automatic_repair'] = {'version': VERSION, 'case': (case or {}).get('key', 'contextual_reply')}
     return answer, quality
