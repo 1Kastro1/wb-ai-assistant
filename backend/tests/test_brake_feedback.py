@@ -56,7 +56,8 @@ def test_both_cases_are_repaired_and_verified_under_actual_whole_policies_withou
         draft=db.get(Draft,'draft-packaging')
         assert draft.quality['passed'] and draft.quality['owner_rules']['verification_method']=='local_brake_feedback'
         assert draft.revision==3 and draft.edits[-1]['old']
-        assert 'маркировку и артикул' in draft.text and 'Рады, что Вы довольны работой' not in draft.text
+        assert 'чтобы посмотреть маркировку' in draft.text and 'сверьте' not in draft.text
+        assert 'Рады, что Вы довольны работой' not in draft.text
 
 
 @pytest.mark.parametrize('text',[
@@ -88,12 +89,21 @@ def test_unknown_rule_extra_claim_safety_question_and_changed_product_do_not_inh
         with pytest.raises(FastPathUnavailable):
             asyncio.run(enforce_owner_rules(answer+' Товар абсолютно безопасен.',r,p,rules,facts,
                 lambda v:assess_reply(r,p,v,facts),local_only=True))
-        for suffix in (' Диск треснул.',' Как установить?',' Верните деньги.',' Диски кривые.',' Это подделка.'):
+        for suffix in (' Диск треснул.',' Как установить?',' Верните деньги.',' Диски кривые.',' Это подделка.',
+                       ' Сам диск не соответствует фото.',' Размер не совпадает с заказом.'):
             r.text=PACKAGING+suffix;assert template(r,p,rules) is None
         r.text=PACKAGING;r.safety_critical=True;assert template(r,p,rules) is None
         r.safety_critical=False;r.manual=True;assert template(r,p,rules) is None
         r.manual=False;r.rating=2;assert template(r,p,rules) is None
         r.rating=5;assert template(r,db.get(Product,'other'),rules) is None
+
+
+def test_unchecked_marking_can_be_requested_but_already_read_marking_is_not_requested_again():
+    with Session() as db:
+        seed(db);r=db.get(Review,'packaging');p=db.get(Product,'disc');rules=matching_owner_rules(db,p)
+        assert 'сверьте' not in template(r,p,rules)
+        r.text='На вид отличные. Диски еще не проверял. Коробка отличается от фото в карточке.'
+        assert 'сверьте маркировку и артикул' in template(r,p,rules)
 
 
 def test_policy_upgrade_reopens_only_affected_rows_preserves_checkpoint_and_is_idempotent():
