@@ -38,7 +38,7 @@ class PostgresOperations(unittest.TestCase):
                         migration.upgrade(); migration.upgrade()
                 connection.commit()
                 self.assertEqual(connection.exec_driver_sql('SELECT count(*) FROM products').scalar(), 2)
-                valid = connection.exec_driver_sql("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname LIKE 'ix_products_%'").scalars().all()
+                valid = connection.execute(text("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname LIKE 'ix_products_%'")).scalars().all()
                 self.assertEqual(valid, [True, True])
                 connection.exec_driver_sql('SET enable_seqscan = off')
                 for predicate, name in [
