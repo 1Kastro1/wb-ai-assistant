@@ -3,6 +3,7 @@ import {useEffect,useState,useRef} from 'react';
 import ProductThumbnail from './ProductThumbnail';
 import DraftEditor from './DraftEditor';
 import RuleDetails from './RuleDetails';
+import CustomerReview,{hasCustomerText} from './CustomerReview';
 type Row=Record<string,any>;
 
 export function OwnerRuleStatus({quality}:{quality:Row}){
@@ -28,11 +29,12 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   const flusher=useRef<(()=>Promise<any>)|null>(null);
   function register(id:string,flush:(()=>Promise<any>)|null){flusher.current=flush;return onRegister?.(id,flush)}
   async function preparePublication(){try{await flusher.current?.();await publish?.()}catch{/* DraftEditor or the parent shows the saving/publication error. */}}
-  const q=r.draft?.quality||{},hasText=Boolean((r.text||'').trim());
+  const q=r.draft?.quality||{},hasText=hasCustomerText(r);
   const remotePending=r.marketplace==='ozon'&&r.status==='answer_pending';
   const answerSource=r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркета':'Wildberries';
   const remoteUnknown=r.marketplace==='ozon'&&(r.status==='answer_unknown'||(r.is_answered&&!String(r.existing_answer||'').trim()));
-  const needsCheck=r.rating<=3||r.manual||r.risk!=='NORMAL'||!q.passed||(String(r.draft?.model||'').startsWith('safety-fallback')&&!q.repair_audit?.rules_rechecked_at);
+  const automaticVerified=Boolean((q.automatic_repair||q.automatic_audit)&&q.passed&&q.owner_rules?.checked&&q.owner_rules?.passed&&!q.owner_rules?.technical_error&&!q.owner_rules?.issues?.length);
+  const needsCheck=(!automaticVerified&&r.rating<=3)||r.manual||r.risk!=='NORMAL'||!q.passed||(String(r.draft?.model||'').startsWith('safety-fallback')&&!q.repair_audit?.rules_rechecked_at);
   const technical=Boolean(q.owner_rules?.technical_error||q.owner_rules?.status==='error')&&!q.owner_rules?.passed;
   const checking=Boolean(ruleCheckJob&&['queued','running'].includes(ruleCheckJob.status));
   const checkWaiting=checking&&Number(ruleCheckJob?.result?.retry_at||0)*1000>Date.now();
@@ -46,7 +48,7 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
     <div className="review-head"><label className="check"><input type="checkbox" checked={checked} disabled={!canManage||r.is_answered} onChange={toggle}/><span className="review-product"><ProductThumbnail product={r.product}/><span className="review-product-copy"><b>{r.product.name}</b><span className="review-meta"><span>{r.product.brand} · {r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркет':'Wildberries'} {r.product_id}</span><span>{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>{!hasText&&<span>Оценка без текста</span>}</span></span></span></label><div className="review-head-state"><span className="stars" aria-label={r.rating+' из 5'}>{'★'.repeat(r.rating)}<span>{'★'.repeat(5-r.rating)}</span></span><span role="status" title={reason} className={'pill '+(generating?'working':generationError||needsCheck?'amber':'green')}>{status}</span></div></div>
     <details className="review-expand" open={expanded||generating||checking} onToggle={e=>{if(e.currentTarget.open)setOpened(true);if(!generating)setExpanded(e.currentTarget.open)}}><summary><span className="review-preview">{hasText?r.text:r.is_answered?status:'Покупатель поставил оценку без текста'}</span><span className="review-open-label">{expanded||generating?'Свернуть':'Открыть ответ'}</span></summary>
     {(opened||expanded||generating||checking||Boolean(generationError))&&<div className={'review-content '+(hasText?'has-text':'rating-only')}>
-      {hasText&&<div className="customer-review"><small>ОТЗЫВ ПОКУПАТЕЛЯ</small><p className="review-text">{r.text}</p></div>}
+      {hasText&&<CustomerReview review={r}/>}
       {r.is_answered?<div>{(remotePending||remoteUnknown)&&<p className="muted" role="status">{reason}</p>}{String(r.existing_answer||'').trim()?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<p className="generation-notice" role="status">Текст ответа пока не загружен из {answerSource}. Сохранённый черновик остаётся в приложении. Повторная отправка не запускается.</p>}</div>:<div className="draft">
         {r.draft?<DraftEditor draft={r.draft} disabled={generating||!canManage} storageKey={storageKey||'draft-edit:'+r.draft.id} onSave={save} onDirty={value=>{setDirty(value);onPending?.(value)}} onRegister={register}/>:<p className="muted">Подготовьте ответ на этот отзыв.</p>}
         {checking&&<div className="generation-notice" role="status" aria-live="polite"><b>{checkLabel}</b><p>{checkWaiting?"Сервис не успел завершить проверку. Повтор запланирован на "+new Date(Number(ruleCheckJob?.result?.retry_at)*1000).toLocaleTimeString("ru-RU")+". Можно повторить сейчас.":ruleCheckJob?.status==="running"?"Проверяем сохранённый ответ по правилам магазина. Проверка может занять до трёх минут.":"Задание принято и ожидает свободного обработчика."} Текст ответа сохранён.</p></div>}

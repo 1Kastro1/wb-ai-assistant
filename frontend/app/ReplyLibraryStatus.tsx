@@ -18,6 +18,7 @@ export default function ReplyLibraryStatus(){
    <p className="muted">{job.message}</p>
    <progress max={Math.max(1,job.total||0)} value={job.checked||0} aria-label="Проверено отзывов" style={{width:'100%'}}/>
    <div className="button-row"><span className="pill">Уникальных текстов: {data?.library?.unique_templates||0}</span><span className="pill">Прошли проверку: {job.verified||0}</span><span className="pill">Требуют внимания: {job.attention||0}</span></div>
+   {job.automated_repair&&<p className="muted">Замечания к обычным черновикам исправляются автоматически с повторной проверкой. Для опубликованных ответов при необходимости готовится отдельный проверенный образец; опубликованный текст сохраняется. Таких образцов: {job.corrected_references||0}.</p>}
    <table><thead><tr><th>Маркетплейс</th><th>Проверено</th><th>Подтверждено</th><th>Состояние</th></tr></thead><tbody>{stages.map((stage,index)=><tr key={stage.account_id}><td>{markets[stage.marketplace]||stage.marketplace}</td><td>{stage.checked||0} / {stage.total||0}</td><td>{stage.verified||0}</td><td>{stage.completed_at?'Завершено':index===job.stage?'Текущий этап':'Ожидает'}</td></tr>)}</tbody></table>
    {job.detail&&<p role="status">{job.detail}</p>}
    <p className="muted">Проверенные тексты хранятся без дублей. Для похожего отзыва с другими обстоятельствами правила проверяются заново. Обновление и отправка остаются выключены.</p>

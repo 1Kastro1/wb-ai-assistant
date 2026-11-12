@@ -142,6 +142,7 @@ class Review(Base):
     product_id: Mapped[str] = mapped_column(ForeignKey('products.id'))
     rating: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
+    sections: Mapped[dict] = mapped_column(JSON, default=dict, server_default='{}')
     created_at: Mapped[str] = mapped_column(String, default=now)
     is_answered: Mapped[bool] = mapped_column(Boolean, default=False)
     existing_answer: Mapped[str] = mapped_column(Text, default='')

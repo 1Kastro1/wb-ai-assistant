@@ -78,6 +78,25 @@ test('rule verification status distinguishes checked and unverified answers',()=
 });
 exports.Card=Card;
 
+test('customer fields retain their marketplace meaning without duplicating combined text',()=>{
+ const html=render({generationError:'Откройте ответ',review:{text:'СКЛЕЕННЫЙ ТЕКСТ',sections:{advantages:'Крепкие',disadvantages:'Скрипят',comment:'После недели'}}});
+ assert(html.includes('<dt>Достоинства</dt>'));assert(html.includes('<dt>Недостатки</dt>'));assert(html.includes('<dt>Комментарий</dt>'));
+ assert(html.includes('Крепкие'));assert(html.includes('Скрипят'));assert(html.includes('После недели'));
+ assert(!html.includes('<p class="review-text">СКЛЕЕННЫЙ ТЕКСТ</p>'));
+ const legacy=render({generationError:'Откройте ответ',review:{text:'Старый отзыв'}});
+ assert(legacy.includes('Старый отзыв'));assert(legacy.includes('передал отзыв общим текстом'));
+ assert(!legacy.includes('<dt>Недостатки</dt>'));
+ const partial=render({generationError:'Откройте ответ',review:{text:'',sections:{advantages:'Отлично',disadvantages:'',comment:''}}});
+ assert(partial.includes('Отлично'));assert(partial.includes('Не указаны'));assert(!partial.includes('Оценка без текста'));
+});
+
+test('successful automatic audit clears routine low-star warning without concealing unsafe cases',()=>{
+ const quality={passed:true,automatic_audit:{input_key:'fresh'},owner_rules:{checked:true,passed:true,issues:[]}};
+ const html=render({review:{rating:2,text:'Не подошло',draft:{text:'Ответ',quality}}});
+ assert(html.includes('Готов к отправке'));assert(!html.includes('Нужна проверка'));
+ assert(render({review:{rating:2,risk:'HIGH',draft:{text:'Ответ',quality}}}).includes('Нужна проверка'));
+});
+
 test('timeout and pending checks are distinct from text violations',()=>{
  const {OwnerRuleStatus}=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx'));
  function status(rules){return renderToStaticMarkup(React.createElement(OwnerRuleStatus,{quality:{owner_rules:{matched:3,passed:false,...rules}}}))}

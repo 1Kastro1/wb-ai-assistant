@@ -28,6 +28,7 @@ def start(db):
     from .automation_schedule import normalize_schedule
     from .rule_change_recheck import policy_version
     from .verified_reply_library import migrate_legacy
+    from .auto_review_repair import VERSION as REPAIR_VERSION
     active=db.scalar(select(Job).where(Job.kind==KIND,Job.status.in_(('queued','running')),Job.cancel_requested==False))
     if active:return active
     schedule=normalize_schedule(setting(db,'automation_schedule',{}))
@@ -54,6 +55,7 @@ def start(db):
         'stages':stages,'stage':0,'checked':0,'verified':0,'attention':0,
         'total':sum(s['total'] for s in stages),'account_id':stages[0]['account_id'] if stages else '',
         'policy_version':policy_version(db),'schedule_before':before,'library':library,
+        'automated_repair':True,'repair_version':REPAIR_VERSION,
         'message':'Последовательная проверка: Яндекс Маркет → Wildberries → Ozon'})
     db.add(job)
     set_setting(db,MAINTENANCE,True)
@@ -65,6 +67,28 @@ def report(db):
     job=db.scalar(select(Job).where(Job.kind==KIND).order_by(Job.created_at.desc()).limit(1))
     return {'maintenance':setting(db,MAINTENANCE,False),'safe_mode':setting(db,'safe_mode',False),
         'library':statistics(db),'job':{'id':job.id,'status':job.status,**(job.result or {})} if job else None}
+
+
+def enable_automatic_repair(db,job_id):
+    """One-time upgrade with worker stopped; retain verified rows and counters."""
+    from .auto_review_repair import VERSION
+    job=db.get(Job,job_id)
+    if not job or job.cancel_requested or job.status not in ('queued','running'):
+        raise ValueError('Нет активной проверки для продолжения')
+    state=dict(job.result or {})
+    if state.get('repair_version')==VERSION:return
+    stages=[dict(stage) for stage in state['stages']]
+    for stage in stages:
+        rows=list(db.scalars(select(ReviewLibraryAuditRow).join(Review,Review.id==ReviewLibraryAuditRow.review_id)
+            .where(ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status=='attention',
+                Review.wb_account_id==stage['account_id'],Review.marketplace==stage['marketplace'])))
+        for row in rows:row.status='retry';row.retry_at=0
+        for target in (stage,state):
+            target['checked']=target.get('checked',0)-len(rows)
+            target['attention']=target.get('attention',0)-len(rows)
+    state.update(stages=stages,automated_repair=True,repair_version=VERSION,retry_at=0,
+        message='Исправление замечаний и повторная проверка по действующим правилам')
+    job.result=state;job.status='queued'
 
 
 async def inspect_review(job_id,rid,session_factory):
@@ -96,7 +120,9 @@ async def inspect_review(job_id,rid,session_factory):
             was_published=published(review)
             answer=review.existing_answer if was_published else draft.text if draft else ''
             if publication_protected(db,review):return {'status':'attention','issues':['Сохранён статус публикации; требуется личная сверка']} 
-            if not product or not answer.strip():return {'status':'attention','issues':['Нет доступного текста ответа или товара']}
+            automatic=bool((db.get(Job,job_id).result or {}).get('automated_repair'))
+            if not product or (not answer.strip() and not (automatic and was_published)):
+                return {'status':'attention','issues':['Нет доступного текста ответа или товара']}
             rules=matching_owner_rules(db,product)
             facts=review_verified_facts(db,review,product,rules)
             key=verification_key(answer,review,product,rules,facts)
@@ -105,6 +131,9 @@ async def inspect_review(job_id,rid,session_factory):
             local_quality=assess(answer)
             defects=list(dict.fromkeys([*((local_quality.get('issues') or []) if not local_quality.get('passed') else []),*local_issues(answer,rules,review)]))
             learned=None if defects else load_template(db,review,product,rules,facts,assess,exact_answer=answer)
+            replacement=None
+            from .draft_audit import manually_edited
+            can_repair=automatic and (was_published or (draft and not manually_edited(draft)))
             if defects:
                 # A known local failure is sufficient to reject a saved reply.
                 # Never spend a model timeout proving a reply already ineligible.
@@ -115,9 +144,38 @@ async def inspect_review(job_id,rid,session_factory):
             elif learned:checked,verdict=learned
             else:
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
-                checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
-                    protected=review.risk!='NORMAL',check_only=True,allow_fast_positive=True,
-                    check_seconds=AUTO_RULE_CHECK_SECONDS)
+                from .generation_control import FastPathUnavailable
+                options={'protected':review.risk!='NORMAL','check_only':True,'allow_fast_positive':True,
+                    'check_seconds':AUTO_RULE_CHECK_SECONDS}
+                try:
+                    checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
+                        **options,local_only=bool(can_repair))
+                except FastPathUnavailable:
+                    # A separately proven no-claims template can replace an
+                    # unchecked historic variant without waiting for a model.
+                    # This never certifies the old text or an unknown policy.
+                    from .auto_review_repair import repair
+                    fast=await repair(review,product,rules,facts,assess,local_only=True)
+                    proof=(fast[1].get('owner_rules') or {}) if fast else {}
+                    if (fast and fast[1].get('passed') and proof.get('checked') is True
+                        and proof.get('passed') is True and not proof.get('technical_error') and not proof.get('issues')):
+                        replacement=fast;checked=answer;verdict=proof
+                    else:
+                        checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,**options)
+            if (can_repair and replacement is None and not verdict.get('technical_error')
+                and (not answer.strip() or not verdict.get('passed') or not local_quality.get('passed'))
+                ):
+                from .auto_review_repair import repair
+                repaired=await repair(review,product,rules,facts,assess)
+                if repaired:
+                    value,repaired_quality=repaired
+                    proof=repaired_quality.get('owner_rules') or {}
+                    if (repaired_quality.get('passed') and proof.get('checked') is True
+                        and proof.get('passed') is True and not proof.get('technical_error')
+                        and not proof.get('issues')):
+                        replacement=(value,repaired_quality)
+                    elif technical_check(repaired_quality):
+                        return {'status':'retry','issues':repaired_quality.get('issues',[])}
             db.rollback()
             review=db.scalar(select(Review).where(Review.id==rid).with_for_update())
             product=db.get(Product,review.product_id) if review else None
@@ -129,10 +187,28 @@ async def inspect_review(job_id,rid,session_factory):
             fresh_facts=review_verified_facts(db,review,product,fresh_rules)
             if (publication_protected(db,review) or current!=expected or verification_key(current_answer,review,product,fresh_rules,fresh_facts)!=key):
                 return {'status':'retry','issues':['Контекст изменился во время проверки']}
-            if checked!=answer:
+            if replacement:
+                candidate,repaired_quality=replacement
+                if not was_published:
+                    if manually_edited(draft):return {'status':'retry','issues':['Правка сотрудника сохранена']}
+                    # Revision history remains recoverable; commit only a fully
+                    # checked replacement after the original input lock check.
+                    draft.edits=[*(draft.edits or []),{'old':answer,'new':candidate,'at':now(),
+                        'by':'automation','reason':'automatic_rules_repair'}]
+                    draft.text=candidate;draft.revision+=1
+                    draft.model='automatic-rules-repair-1.0'
+                answer=candidate
+                verdict=repaired_quality['owner_rules']
+                key=verification_key(answer,review,product,fresh_rules,fresh_facts)
+            if checked!=answer and not replacement:
                 verdict={**verdict,'passed':False,'checked':False,'issues':['Проверка предложила изменение; исходный текст сохранён']}
             verdict={**verdict,'input_key':key,'checked_at':now()}
             quality=attach_rule_quality(assess(answer),verdict)
+            if automatic and quality.get('passed') and verdict.get('checked') and not verdict.get('technical_error'):
+                quality['automatic_audit']={'checked_at':now(),'input_key':key}
+            if replacement:
+                quality['automatic_repair']={**replacement[1]['automatic_repair'],
+                    'previous_issues':defects,'historical_reference':was_published}
             if not was_published and draft:
                 draft.quality={**(draft.quality or {}),**quality}
                 review.status='manual_review' if review.manual or not quality['passed'] else 'draft_ready'
@@ -148,9 +224,10 @@ async def inspect_review(job_id,rid,session_factory):
                     remember(db,key,'reference',answer,verdict,source=rid,marketplace=review.marketplace)
                 tid=text_id(answer)
             db.commit()
-            return {'status':'verified' if tid else 'retry' if technical_check(quality) else
+            return {'status':('verified_reference' if was_published and replacement else 'verified') if tid else 'retry' if technical_check(quality) else
                 'blocked' if verdict.get('technical_error') else 'attention',
-                'input_key':key,'template_id':tid,'issues':quality.get('issues',[])}
+                'input_key':key,'template_id':tid,'issues':quality.get('issues',[]),
+                'auto_repaired':bool(replacement and not was_published)}
     return await exclusive_generation(rid,verify,session_factory)
 
 
@@ -165,16 +242,24 @@ def selfcheck(db,job_id,stages):
         raise ValueError('Нарушена целостность библиотеки шаблонов')
     results=[]
     for stage in stages:
-        rid=db.scalar(select(ReviewLibraryAuditRow.review_id).join(Review,Review.id==ReviewLibraryAuditRow.review_id)
-            .where(ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status=='verified',
+        audit_row=db.scalar(select(ReviewLibraryAuditRow).join(Review,Review.id==ReviewLibraryAuditRow.review_id)
+            .where(ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('verified','verified_reference')),
                 Review.wb_account_id==stage['account_id'],Review.marketplace==stage['marketplace'])
             .order_by(ReviewLibraryAuditRow.review_id).limit(1))
-        if not rid:
+        if not audit_row:
             results.append({'marketplace':stage['marketplace'],'store':stage['account_id'],'status':'no_approved_replies'})
             continue
+        rid=audit_row.review_id
         review=db.get(Review,rid);product=db.get(Product,review.product_id)
         draft=db.scalar(select(Draft).where(Draft.review_id==rid))
         answer=review.existing_answer if published(review) else draft.text if draft else ''
+        if audit_row.status=='verified_reference':
+            from .db import VerifiedReplyContext
+            from .verified_reply_library import render
+            context=db.scalar(select(VerifiedReplyContext).where(VerifiedReplyContext.template_id==audit_row.template_id,
+                VerifiedReplyContext.source_review_id==rid).order_by(VerifiedReplyContext.verified_at.desc()).limit(1))
+            if not context:raise ValueError('Нет доказательства проверки исправленного образца')
+            answer=render(db.get(VerifiedReplyText,audit_row.template_id).text,context.presentation)
         rules=matching_owner_rules(db,product);facts=review_verified_facts(db,review,product,rules)
         if context_key(review,product,rules,facts):
             loaded=load_template(db,review,product,rules,facts,
@@ -268,8 +353,10 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                 if not final_before:
                     for target in (stage,state):
                         target['checked']=target.get('checked',0)+1
-                        field='verified' if outcome['status']=='verified' else 'attention'
+                        field='verified' if outcome['status'] in ('verified','verified_reference') else 'attention'
                         target[field]=target.get(field,0)+1
+                        if outcome['status']=='verified_reference':target['corrected_references']=target.get('corrected_references',0)+1
+                        if outcome.get('auto_repaired'):target['auto_repaired']=target.get('auto_repaired',0)+1
                 state.update(current_review='',detail='')
             db.flush()
             deferred=db.scalar(select(func.count()).select_from(ReviewLibraryAuditRow).where(

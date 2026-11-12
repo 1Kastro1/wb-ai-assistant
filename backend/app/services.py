@@ -279,11 +279,12 @@ def technical_review_condition():
 
 
 def manual_review_condition():
+    from .attention_queue import automatically_checked
     # Read the small attention set once instead of probing publication history
     # for every review in a full-store count.
     publication_attention = Review.id.in_(select(Publication.review_id).where(
         Publication.status.in_(('uncertain', 'mismatch'))))
-    return (Review.is_answered == False) & or_((Review.rating <= 3) & ~Review.marketplace.like('%_question'), Review.manual == True,
+    return (Review.is_answered == False) & or_((Review.rating <= 3) & ~Review.marketplace.like('%_question') & ~automatically_checked(), Review.manual == True,
         Review.risk != 'NORMAL', Draft.quality_attention == True, publication_attention,
         (~func.coalesce(Draft.quality_pending, False)) & (Review.status == 'manual_review') &
         (func.coalesce(Draft.quality_passed, False) == False))
