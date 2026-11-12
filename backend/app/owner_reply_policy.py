@@ -254,6 +254,13 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     semantic = semantic_rules(context_rules)
     key = None
     if not instruction.strip() and not protected and not result['issues']:
+        from .brake_feedback import template as brake_template
+        expected = brake_template(review, product, rules)
+        if expected and adjusted == expected and assess(adjusted)['passed']:
+            result.update(verification_method='local_brake_feedback', semantic_groups=0, verified_groups=0,
+                          verification_seconds=round(monotonic() - check_started, 4))
+            return adjusted, result
+    if not instruction.strip() and not protected and not result['issues']:
         from .rule_execution import audited_usage_replies
         if adjusted in audited_usage_replies(review, product, rules, facts) and assess(adjusted)['passed']:
             result.update(verification_method='local_verified_usage', semantic_groups=0, verified_groups=0,
