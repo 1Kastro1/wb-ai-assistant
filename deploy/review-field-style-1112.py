@@ -14,7 +14,7 @@ import urllib.request
 ROOT=Path('/srv/wb-ai-assistant')
 BASE='739e36b115fd4d329649373269a4c6bc76fd88d4'
 SOURCE='cbee3f11989d48505b1a4aada7c3952878c78c58'
-CSS_SHA='03e97c73beffb4e881cb1c0edb55d7eaeefd367a14537635fea7a5cf6d34583d'
+CSS_SHA='f5638e930e05372b38c504a7e4bcd698a285f89b4580c538c5b5d75a4b00c7ea'
 IMAGE='wb-ai-assistant-frontend:review-field-style-checked-1112'
 REPORT=Path('/root/review-style-build-1112.json')
 
