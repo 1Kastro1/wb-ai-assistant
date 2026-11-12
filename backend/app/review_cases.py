@@ -9,6 +9,9 @@ DENSO_WIPERS = 'https://www.denso-am.eu/news/wiper-blade-troubleshooting-from-de
 
 
 def specific_review_case(review, product):
+    from .brake_feedback import case as brake_case
+    matched = brake_case(review, product)
+    if matched:return matched
     text = ' '.join((review.text or '').lower().replace('ё', 'е').split())
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
     analysis = analyze_customer_message(review.text, review.rating)

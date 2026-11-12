@@ -5,7 +5,7 @@ from pathlib import Path
 def complaint_text(text):
     """Remove explicit denials of faults, not the buyer's genuine complaints."""
     value = (text or '').lower().replace('ё', 'е')
-    faults = r'(?:протек\w*|потек\w*|вытек\w*|утек\w*|протеч\w*|утеч\w*|трещин\w*|поврежд\w*|дефект\w*|полом\w*|разбит\w*|сломан\w*|сломал\w*|треснул\w*|свист\w*)'
+    faults = r'(?:протек\w*|потек\w*|вытек\w*|утек\w*|протеч\w*|утеч\w*|трещин\w*|поврежд\w*|дефект\w*|полом\w*|разбит\w*|сломан\w*|сломал\w*|треснул\w*|свист\w*|биени\w*|скрип\w*|шум\w*)'
     fault_list = faults + r'\b(?:\s*(?:,|и|ни)\s*' + faults + r'\b)*'
     value = re.sub(r'(?<!\w)без\s+(' + fault_list + r')\s+не\s+обошл\w*', r'\1', value)
     value = re.sub(r'(?<!\w)не\s+без\s+(' + faults + r')\b', r'\1', value)
@@ -153,6 +153,13 @@ COMPLAINT_LABELS = {
 }
 
 
+def packaging_artwork_mismatch(text):
+    """Explicitly attach the image mismatch to the box, not to the part itself."""
+    value=' '.join((text or '').lower().replace('ё','е').split())
+    return bool(re.search(r'(?:упаковк\w*|коробк\w*)(?:\s*\([^)]{0,25}\))?[^.!?]{0,40}'
+        r'(?:не соответств\w*|отлича\w*)[^.!?]{0,120}(?:фото|изображен|заставк|картинк)',value))
+
+
 def analyze_customer_message(text, rating=None):
     """Conservative internal hints; the complete buyer text remains model input."""
     value = ' '.join(complaint_text(strip_other_product_comparisons(text or '')).split())
@@ -202,6 +209,7 @@ def analyze_customer_message(text, rating=None):
             complaints.append('DESCRIPTION_MISMATCH')
     if weak_cleaning_result(text) and 'NO_RESULT' not in complaints: complaints.append('NO_RESULT')
     if authenticity_concern(text) and 'AUTHENTICITY' not in complaints: complaints.append('AUTHENTICITY')
+    if packaging_artwork_mismatch(text) and 'DESCRIPTION_MISMATCH' not in complaints:complaints.append('DESCRIPTION_MISMATCH')
     positive = any(not re.search(r'(?<!\w)не\s*$', value[:match.start()]) for match in re.finditer(r'\b(?:понравил\w*|отличн\w*|рекомендую|хорош\w*|вкусн\w*|приятн\w*|ненавязчив\w*)', value))
     negative = bool(complaints) or (rating is not None and rating <= 3) or any(x in value for x in ('разочар', 'недовол')) or bool(re.search(r'(?<!\w)не\s+понрав', value))
     question = buyer_question(text)
