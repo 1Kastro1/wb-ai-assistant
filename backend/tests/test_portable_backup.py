@@ -65,7 +65,7 @@ def test_current_backup_excludes_enrollment_secrets_and_restore_keeps_local_requ
     encrypted.write_bytes(exported.content);_decrypt_portable(encrypted,decrypted,PASSWORD)
     _check_backup_database(decrypted)
     with sqlite3.connect(decrypted) as check:
-        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0019'
+        assert check.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0020'
         assert check.execute('SELECT count(*) FROM generation_claims').fetchone()[0]==0
         assert check.execute('SELECT count(*) FROM generation_outcomes').fetchone()[0]==1
         for table in ('users','sessions','registration_requests','team_invites'):
