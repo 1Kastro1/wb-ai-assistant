@@ -3,7 +3,7 @@ import fcntl,hashlib,importlib.util,json,os,re,subprocess,sys,time,urllib.reques
 from pathlib import Path
 ROOT=Path('/srv/wb-ai-assistant')
 BASE='7f1ca6d59f2a0cf894ed93565470c9877bd607d5'
-SOURCE='289653df2f6f3e542802795d2f140c44510a58e5'
+SOURCE='52c8152f15fa52896ff5f5ed44adbf381d85632b'
 IMAGE='wb-ai-assistant-backend:brake-feedback-checked-1112'
 FOLDER=Path('/root/brake-feedback-build-1112')
 PREPARED=Path('/root/brake-feedback-build-1112.json')
@@ -52,7 +52,7 @@ print('REAL_CASES_PREFLIGHT_OK',','.join(keys))
 ACTIVATE='''import asyncio,json,sys
 from sqlalchemy import select
 from app.db import Session,Job,Review,ReviewLibraryAuditRow,Draft,setting
-from app.brake_feedback import upgrade_policy
+from app.brake_feedback import upgrade_policy,recheck_cases
 from app.review_library_audit import inspect_review,reuse_pending_templates,KIND,report
 from app.owner_reply_policy import fingerprint
 from app.owner_reply_rules import matching_owner_rules
@@ -63,9 +63,8 @@ with Session() as db:
     assert all(db.get(ReviewLibraryAuditRow,(jid,rid)).status=='attention' for rid in ids)
     before={rid:db.get(Review,rid).existing_answer for rid in ids}
     upgraded=upgrade_policy(db,jid);db.commit()
-outcomes={rid:asyncio.run(inspect_review(jid,rid,Session)) for rid in ids}
+outcomes=asyncio.run(recheck_cases(jid,ids))
 assert sorted(v['status'] for v in outcomes.values())==['verified','verified_reference'],outcomes
-warm=asyncio.run(reuse_pending_templates(jid))
 with Session() as db:
     for rid in ids:
         row=db.get(ReviewLibraryAuditRow,(jid,rid))
@@ -81,7 +80,7 @@ with Session() as db:
     assert setting(db,'safe_mode',False) is True
     schedule=setting(db,'automation_schedule',{})
     assert not any(schedule.get(k) for k in ('enabled','reviews_sync_enabled','questions_sync_enabled','drafts_enabled','question_drafts_enabled','publication_enabled'))
-    print(json.dumps({'upgraded':upgraded,'outcomes':outcomes,'warm':warm,'audit':report(db)},ensure_ascii=False))
+    print(json.dumps({'upgraded':upgraded,'outcomes':outcomes,'audit':report(db)},ensure_ascii=False))
 '''
 
 def build():
