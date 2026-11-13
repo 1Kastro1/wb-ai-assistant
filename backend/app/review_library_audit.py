@@ -402,7 +402,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                 if not final_before:
                     for target in (stage,state):
                         target['checked']=target.get('checked',0)+1
-                        field='verified' if outcome['status'] in ('verified','verified_reference') else 'attention'
+                        field='verified' if outcome['status'] in ('verified','verified_reference') else 'technical' if outcome['status']=='technical_attention' else 'attention'
                         target[field]=target.get(field,0)+1
                         if outcome['status']=='verified_reference':target['corrected_references']=target.get('corrected_references',0)+1
                         if outcome.get('auto_repaired'):target['auto_repaired']=target.get('auto_repaired',0)+1

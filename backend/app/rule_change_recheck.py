@@ -162,8 +162,8 @@ def rebase_library_audits(db, scopes, version=None):
             if not affected(db,review,product,{'rule_scopes':scopes}):continue
             index = indices.get((review.wb_account_id,review.marketplace))
             if index is None:continue
-            if row.status in ('verified','verified_reference','attention'):
-                field = 'verified' if row.status.startswith('verified') else 'attention'
+            if row.status in ('verified','verified_reference','attention','technical_attention'):
+                field = 'verified' if row.status.startswith('verified') else 'technical' if row.status=='technical_attention' else 'attention'
                 for target in (state,stages[index]):
                     target['checked']=max(0,target.get('checked',0)-1)
                     target[field]=max(0,target.get(field,0)-1)

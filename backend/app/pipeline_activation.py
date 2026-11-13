@@ -11,6 +11,34 @@ from .automation_schedule import normalize_schedule,enqueue_due_jobs
 VERSION='live-review-pipeline-v1'
 
 
+def consolidate_checks(db):
+    """Union pending policy scopes, keeping old cursors/results as history."""
+    from .rule_change_recheck import _queue,policy_version
+    groups={}
+    for job in db.scalars(select(Job).where(Job.kind=='draft_recheck',Job.status=='queued',Job.cancel_requested==False)):
+        state=job.result or {}
+        if not (state.get('rule_change') and state.get('policy_scan') and state.get('check_only')) or state.get('manual_check') or state.get('policy_regeneration'):
+            continue
+        groups.setdefault(state.get('account_id') or 'owner',[]).append(job)
+    replaced=0
+    for account,jobs in groups.items():
+        if len(jobs)<2:continue
+        scopes={}
+        for job in jobs:
+            state=job.result or {}
+            items=state.get('rule_scopes') or [{'id':'recovery-audience', 'text':'', 'scope':'global',
+                'kind':'REVIEW_RULE' if state.get('reviews_only') else 'GLOBAL_RULE'}]
+            for item in items:scopes[json.dumps(item,sort_keys=True)]=item
+        target=_queue(db,account,policy_version(db),list(scopes.values()),'',VERSION)
+        for old in jobs:
+            if old.id==target.id:continue
+            old.status,old.cancel_requested='cancelled',True
+            old.result={**(old.result or {}),'superseded_by':target.id,
+                'message':'Проверка продолжится в объединённом проходе по текущим правилам; прежний прогресс сохранён.'}
+            replaced+=1
+    return replaced
+
+
 def activate(db):
     if setting(db,VERSION):return {'already_applied':True}
     schedule=normalize_schedule(setting(db,'automation_schedule',{}))
@@ -29,7 +57,7 @@ def activate(db):
     schedule.update(enabled=True,reviews_sync_enabled=True,drafts_enabled=True,sync_enabled=True)
     enqueue_due_jobs(db,schedule,time.time())
     set_setting(db,'automation_schedule',schedule)
-    result={'at':now(),'converted_archive_jobs':converted}
+    result={'at':now(),'converted_archive_jobs':converted,'consolidated_checks':consolidate_checks(db)}
     set_setting(db,VERSION,result)
     return result
 

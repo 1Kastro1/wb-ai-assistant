@@ -3,6 +3,28 @@ from app.db import Session,Job,Account,StoreProfile,setting,set_setting
 from app.pipeline_activation import activate,VERSION
 
 
+def test_consolidation_retains_scope_union_progress_and_explicit_manual_checks():
+    from app.pipeline_activation import consolidate_checks
+    scopes=[{'id':'a','kind':'REVIEW_RULE','scope':'product:p','text':'A'},
+        {'id':'b','kind':'QUESTION_RULE','scope':'brand:B','text':'B'}]
+    with Session() as db:
+        db.add(StoreProfile(id='owner',provider='wb',name='Shop'))
+        for i in range(2):
+            db.add(Job(id=str(i),kind='draft_recheck',result={'account_id':'owner','rule_change':True,
+                'policy_scan':True,'check_only':True,'cursor_id':'kept-'+str(i),'checked':100,
+                'rule_scopes':[scopes[i]]}))
+        db.add(Job(id='manual',kind='draft_recheck',result={'account_id':'owner','manual_check':True,'retry_draft_id':'d'}))
+        db.commit()
+        assert consolidate_checks(db)==2;db.commit()
+        target=db.get(Job,db.get(Job,'0').result['superseded_by'])
+        assert target.result['rule_scopes']==scopes
+        for i in range(2):
+            old=db.get(Job,str(i))
+            assert old.status=='cancelled' and old.result['cursor_id']=='kept-'+str(i) and old.result['checked']==100
+            assert old.result['superseded_by']==target.id
+        assert db.get(Job,'manual').status=='queued'
+
+
 def test_explicit_activation_preserves_consent_switches_intervals_and_checkpoints():
     with Session() as db:
         db.add(StoreProfile(id='owner',provider='wb',name='Shop'))

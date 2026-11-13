@@ -23,6 +23,19 @@ def seed(db):
     db.commit()
 
 
+def test_exhausted_technical_check_stays_visible_without_content_rule_suggestion():
+    with Session() as db:
+        seed(db)
+        db.add(ReviewLibraryAuditRow(job_id='audit',review_id='a-slow',status='technical_attention',
+            issues=['Проверка временно недоступна после 5 попыток. Текст сохранён.']))
+        db.commit()
+        result=counts(db,'audit')
+        assert result['technical_stopped']==1 and result['attention']==0 and result['checked']==1
+        rows=cases(db,'retry')['items']
+        assert len(rows)==1 and rows[0]['category']=='technical' and rows[0]['suggestion'] is None
+        assert cases(db,'attention')['total']==0
+
+
 def test_suggestions_are_inactive_idempotent_and_never_copy_buyer_instructions():
     with Session() as db:
         seed(db)
@@ -57,7 +70,7 @@ def test_counts_keep_attempted_content_separate_from_technical_retries():
             db.add(ReviewLibraryAuditRow(job_id='audit',review_id=rid,status=status))
         db.commit()
         result=counts(db,'audit')
-        assert result=={'verified':1,'attention':1,'retry':1,'blocked':0,'checked':2}
+        assert result=={'verified':1,'attention':1,'retry':1,'blocked':0,'technical_stopped':0,'checked':2}
         result=cases(db,'attention',0,1)
         assert result['total']==1 and result['items'][0]['review_id']=='b-fast'
         assert cases(db,'history',2,1)['total']==3
