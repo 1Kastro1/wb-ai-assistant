@@ -413,6 +413,7 @@ class ReviewLibraryAuditRow(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     retry_at: Mapped[float] = mapped_column(Float, default=0, index=True)
     issues: Mapped[list] = mapped_column(JSON, default=list)
+    verification_progress: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[str] = mapped_column(String, default=now)
 
 

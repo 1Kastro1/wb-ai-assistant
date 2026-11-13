@@ -162,7 +162,7 @@ def rebase_library_audits(db, scopes, version=None):
                     target['checked']=max(0,target.get('checked',0)-1)
                     target[field]=max(0,target.get(field,0)-1)
             if row.status=='removed':continue
-            row.status='retry';row.retry_at=0;row.input_key='';row.template_id=''
+            row.status='retry';row.retry_at=0;row.input_key='';row.template_id='';row.verification_progress=None
             touched.append(index)
         if touched:
             state['policy_rewind_stage']=min([state.get('stage',0),*touched,

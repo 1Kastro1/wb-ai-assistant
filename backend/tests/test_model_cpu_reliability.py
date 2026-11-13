@@ -26,7 +26,7 @@ def test_real_provider_keeps_runner_options_stable_between_different_prompts(mon
     monkeypatch.setattr(guard,'request',call)
     for text in ('Короткий вопрос.', 'Характеристика товара. '*200):
         asyncio.run(OllamaProvider().chat([{'role':'user','content':text}],task='OWNER_RULES'))
-    assert {args.kwargs['body']['options']['num_ctx'] for args in call.await_args_list}=={8192}
+    assert {args.kwargs['body']['options']['num_ctx'] for args in call.await_args_list}=={16384}
     assert all(args.kwargs['timeout_seconds']==120 for args in call.await_args_list)
 
 
