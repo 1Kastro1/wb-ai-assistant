@@ -1,4 +1,5 @@
 import {ruleTitle} from '../app/presentation.mjs';
+import {duplicateRule} from '../app/rule-duplicates.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
@@ -8,7 +9,7 @@ const file=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../app/Mem
 function loadComponent(file){
  const module={exports:{}};
  const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
- const localRequire=name=>name==='./presentation.mjs'?{ruleTitle}:name==='./client'?{api(){throw new Error('SSR must not send requests')}}:name.startsWith('.')?loadComponent(path.resolve(path.dirname(file),name+'.tsx')):require(name);
+ const localRequire=name=>name==='./presentation.mjs'?{ruleTitle}:name==='./rule-duplicates.mjs'?{duplicateRule}:name==='./client'?{api(){throw new Error('SSR must not send requests')}}:name.startsWith('.')?loadComponent(path.resolve(path.dirname(file),name+'.tsx')):require(name);
  new Function('require','module','exports',code)(localRequire,module,module.exports);
  return module.exports;
 }

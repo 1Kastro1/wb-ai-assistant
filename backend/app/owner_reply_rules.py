@@ -32,6 +32,7 @@ def apply_review_signature(reply, rules):
 
 def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None, counterpart_products=None):
     from .shared_marketplaces import equivalent_products
+    from .rule_duplicates import normalized_text
     rule_rows = list(db.scalars(select(Memory).where(Memory.enabled == True).order_by(Memory.id))) if rule_rows is None else rule_rows
     if not rule_rows:
         return []
@@ -54,7 +55,7 @@ def matching_owner_rules(db, product, for_questions=False, *, rule_rows=None, co
     # Only identical whole policies are duplicates; do not merge similar clauses.
     seen, unique = set(), []
     for row in reversed(ordered):
-        key = row.text.replace('\r\n', '\n').strip()
+        key = normalized_text(row.text)
         if key not in seen:
             unique.append(row.text)
             seen.add(key)

@@ -2591,50 +2591,66 @@ class CreateMemoryInput(MemoryInput):
 
 @app.post('/memory')
 def create_memory(body: CreateMemoryInput, request: Request, auth: OWNER, db: DB):
-    value, scope = body.text.strip(), body.scope.strip()
-    if len(value) < 2 or not re.fullmatch(r'global|(?:brand|product|category):\S[^\r\n]*', scope):
-        raise HTTPException(422, 'Введите текст правила и область применения')
-    mid = str(uuid5(NAMESPACE_URL, 'memory:' + auth['user_id'] + ':' + body.operation_id))
-    item = db.get(Memory, mid)
-    if item and (item.text, item.kind, item.scope) != (value, body.kind, scope):
-        raise HTTPException(409, 'Этот запрос уже использован для другого правила')
-    if not item:
-        item = Memory(id=mid, text=value, kind=body.kind, scope=scope, enabled=True)
-        db.add(item)
-        actor = db.get(User, auth['user_id'])
-        set_setting(db, 'memory-meta:' + mid, {'created_at': now(),
-                    'created_by_name': actor.display_name if actor else auth.get('username', '')})
-        try:
-            from .rule_change_recheck import rule_changed, snapshot
-            rule_changed(db, None, snapshot(item), auth['user_id'])
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            item = db.get(Memory, mid)
-            if not item or (item.text, item.kind, item.scope) != (value, body.kind, scope):
-                raise HTTPException(409, 'Правило изменилось; обновите страницу') from None
-    request.state.activity_details = rule_details(public(item), 'rule_added')
-    return {**public(item), **setting(db, 'memory-meta:' + mid, {})}
+    from .rule_duplicates import rule_write
+    with rule_write(db):
+        value, scope = body.text.strip(), body.scope.strip()
+        if len(value) < 2 or not re.fullmatch(r'global|(?:brand|product|category):\S[^\r\n]*', scope):
+            raise HTTPException(422, 'Введите текст правила и область применения')
+        from .rule_duplicates import require_unique
+        mid = str(uuid5(NAMESPACE_URL, 'memory:' + auth['user_id'] + ':' + body.operation_id))
+        item = db.get(Memory, mid)
+        if item and (item.text, item.kind, item.scope) != (value, body.kind, scope):
+            raise HTTPException(409, 'Этот запрос уже использован для другого правила')
+        if not item:
+            item = Memory(id=mid, text=value, kind=body.kind, scope=scope, enabled=True)
+            require_unique(db, item)
+            db.add(item)
+            actor = db.get(User, auth['user_id'])
+            set_setting(db, 'memory-meta:' + mid, {'created_at': now(),
+                        'created_by_name': actor.display_name if actor else auth.get('username', '')})
+            try:
+                from .rule_change_recheck import rule_changed, snapshot
+                rule_changed(db, None, snapshot(item), auth['user_id'])
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                item = db.get(Memory, mid)
+                if not item or (item.text, item.kind, item.scope) != (value, body.kind, scope):
+                    raise HTTPException(409, 'Правило изменилось; обновите страницу') from None
+        request.state.activity_details = rule_details(public(item), 'rule_added')
+        return {**public(item), **setting(db, 'memory-meta:' + mid, {})}
 
 
 @app.post('/memory/propose')
 def memory_propose(body: MemoryInput, request: Request, auth: AUTH, db: DB):
-    action = Action(id=str(uuid4()), kind='memory', payload=body.model_dump())
-    db.add(action)
-    db.commit()
-    request.state.activity_details = rule_details(action.payload,'rule_proposed')
-    return public(action)
+    from .rule_duplicates import rule_write
+    with rule_write(db):
+        from .rule_duplicates import require_unique, identity
+        candidate = Memory(**body.model_dump())
+        require_unique(db, candidate)
+        for pending in db.scalars(select(Action).where(Action.kind == 'memory', Action.status == 'pending')):
+            if identity(Memory(**pending.payload)) == identity(candidate):
+                return public(pending)
+        action = Action(id=str(uuid4()), kind='memory', payload=body.model_dump())
+        db.add(action)
+        db.commit()
+        request.state.activity_details = rule_details(action.payload,'rule_proposed')
+        return public(action)
 
 
 @app.patch('/actions/{aid}/memory')
 def memory_scope(aid: str, body: MemoryInput, request: Request, auth: OWNER, db: DB):
-    action = db.get(Action, aid)
-    if not action or action.status != 'pending' or action.kind != 'memory':
-        raise ValueError('Нет ожидающего предложения памяти')
-    action.payload = body.model_dump()
-    db.commit()
-    request.state.activity_details = rule_details(action.payload,'rule_updated')
-    return public(action)
+    from .rule_duplicates import rule_write
+    with rule_write(db):
+        from .rule_duplicates import require_unique
+        action = db.get(Action, aid)
+        if not action or action.status != 'pending' or action.kind != 'memory':
+            raise ValueError('Нет ожидающего предложения памяти')
+        require_unique(db, Memory(**body.model_dump()))
+        action.payload = body.model_dump()
+        db.commit()
+        request.state.activity_details = rule_details(action.payload,'rule_updated')
+        return public(action)
 
 
 @app.get('/memory')
@@ -2652,36 +2668,45 @@ class MemoryKind(Payload):
 
 @app.patch('/memory/{mid}/kind')
 def memory_kind(mid: str, body: MemoryKind, request: Request, auth: OWNER, db: DB):
-    item = db.get(Memory, mid)
-    if not item:
-        raise HTTPException(404, 'Правило не найдено')
-    from .rule_change_recheck import rule_changed, snapshot
-    before = snapshot(item)
-    item.kind = body.kind
-    meta = setting(db, 'memory-meta:' + mid, {})
-    actor = db.get(User, auth['user_id'])
-    set_setting(db, 'memory-meta:' + mid, {**meta, 'updated_at': now(),
-                'updated_by_name': actor.display_name if actor else auth.get('username', '')})
-    rule_changed(db, before, snapshot(item), auth['user_id'])
-    db.commit()
-    request.state.activity_details = rule_details(public(item), 'rule_updated')
-    return {**public(item), **setting(db, 'memory-meta:' + mid, {})}
+    from .rule_duplicates import rule_write
+    with rule_write(db):
+        from .rule_duplicates import require_unique
+        item = db.get(Memory, mid)
+        if not item:
+            raise HTTPException(404, 'Правило не найдено')
+        from .rule_change_recheck import rule_changed, snapshot
+        before = snapshot(item)
+        require_unique(db, Memory(text=item.text, scope=item.scope, kind=body.kind), exclude=mid)
+        item.kind = body.kind
+        meta = setting(db, 'memory-meta:' + mid, {})
+        actor = db.get(User, auth['user_id'])
+        set_setting(db, 'memory-meta:' + mid, {**meta, 'updated_at': now(),
+                    'updated_by_name': actor.display_name if actor else auth.get('username', '')})
+        rule_changed(db, before, snapshot(item), auth['user_id'])
+        db.commit()
+        request.state.activity_details = rule_details(public(item), 'rule_updated')
+        return {**public(item), **setting(db, 'memory-meta:' + mid, {})}
 
 
 @app.patch('/memory/{mid}/enabled')
 def memory_enabled(mid: str, body: MemoryEnabled, request: Request, auth: OWNER, db: DB):
-    item=db.get(Memory,mid)
-    if not item:raise HTTPException(404,'Правило не найдено')
-    from .rule_change_recheck import rule_changed, snapshot
-    before = snapshot(item)
-    item.enabled=body.enabled
-    meta=setting(db,'memory-meta:'+mid,{})
-    actor=db.get(User,auth['user_id'])
-    set_setting(db,'memory-meta:'+mid,{**meta,'updated_at':now(),'updated_by_name':actor.display_name if actor else auth.get('username','')})
-    rule_changed(db, before, snapshot(item), auth['user_id'])
-    db.commit()
-    request.state.activity_details={**rule_details(public(item),'rule_updated'),'event':'rule_enabled' if item.enabled else 'rule_disabled'}
-    return {**public(item),**setting(db,'memory-meta:'+mid,{})}
+    from .rule_duplicates import rule_write
+    with rule_write(db):
+        from .rule_duplicates import require_unique
+        item=db.get(Memory,mid)
+        if not item:raise HTTPException(404,'Правило не найдено')
+        from .rule_change_recheck import rule_changed, snapshot
+        before = snapshot(item)
+        if body.enabled:
+            require_unique(db, item, exclude=mid)
+        item.enabled=body.enabled
+        meta=setting(db,'memory-meta:'+mid,{})
+        actor=db.get(User,auth['user_id'])
+        set_setting(db,'memory-meta:'+mid,{**meta,'updated_at':now(),'updated_by_name':actor.display_name if actor else auth.get('username','')})
+        rule_changed(db, before, snapshot(item), auth['user_id'])
+        db.commit()
+        request.state.activity_details={**rule_details(public(item),'rule_updated'),'event':'rule_enabled' if item.enabled else 'rule_disabled'}
+        return {**public(item),**setting(db,'memory-meta:'+mid,{})}
 
 
 class RulePreviewInput(Payload):
@@ -2741,18 +2766,20 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
 
 @app.delete('/memory/{mid}')
 def memory_delete(mid: str, request: Request, auth: OWNER, db: DB):
-    existing = db.get(Memory,mid)
-    from .rule_change_recheck import rule_changed, snapshot
-    before = snapshot(existing)
-    details = rule_details(public(existing),'rule_deleted') if existing else {}
-    result = db.execute(delete(Memory).where(Memory.id == mid))
-    if result.rowcount != 1:
-        db.rollback()
-        raise HTTPException(404, 'Правило уже удалено или не найдено')
-    rule_changed(db, before, None, auth['user_id'])
-    db.commit()
-    request.state.activity_details = details
-    return {'ok': True, 'id': mid}
+    from .rule_duplicates import rule_write
+    with rule_write(db):
+        existing = db.get(Memory,mid)
+        from .rule_change_recheck import rule_changed, snapshot
+        before = snapshot(existing)
+        details = rule_details(public(existing),'rule_deleted') if existing else {}
+        result = db.execute(delete(Memory).where(Memory.id == mid))
+        if result.rowcount != 1:
+            db.rollback()
+            raise HTTPException(404, 'Правило уже удалено или не найдено')
+        rule_changed(db, before, None, auth['user_id'])
+        db.commit()
+        request.state.activity_details = details
+        return {'ok': True, 'id': mid}
 
 
 class Chat(Payload):
