@@ -91,7 +91,9 @@ def test_product_facts_are_not_crowded_out_by_long_writing_rules():
 
 def test_dry_verifier_rewrite_is_repaired_without_reusing_its_approval(client,monkeypatch):
     from app import services
-    from app.db import Session, Product, Review, Memory
+    from app.db import Session, Product, Review, Memory, Job
+    from app.generation_control import batch_context
+    from sqlalchemy import select
     async def dry(*args,**kwargs):
         return 'Здравствуйте! Не будем утверждать значение. С уважением ГК Юником.', {'passed':True,'checked':True,'issues':[]}
     monkeypatch.setattr(services,'enforce_owner_rules',dry)
@@ -100,8 +102,13 @@ def test_dry_verifier_rewrite_is_repaired_without_reusing_its_approval(client,mo
         p=Product(id='human-lamp',name=product().name,brand='Avantech')
         r=Review(id='human-review',wb_review_id='human-remote',product_id=p.id,wb_account_id='owner',
                  rating=4,text='Работают. Разницу не заметил, может кто нагрузку мерял?',marketplace='yandex',risk='NORMAL')
-        db.add_all([p,r,Memory(id='human-sign',kind='REVIEW_RULE',scope='global',text='В конце ответа добавляй подпись «С уважением ГК Юником.».')])
+        db.add_all([p,r,Job(id='human-single',kind='single_draft',result={'requested_by':'owner'}),
+            Memory(id='human-sign',kind='REVIEW_RULE',scope='global',text='В конце ответа добавляй подпись «С уважением ГК Юником.».')])
         db.commit()
-        draft=asyncio.run(services.generate_draft(db,r.id))
+        token=batch_context.set({'job_id':'human-single','interactive':True,'requested_by':'owner'})
+        try:draft=asyncio.run(services.generate_draft(db,r.id))
+        finally:batch_context.reset(token)
         assert '55 Вт' in draft['text'] and not conversational_issues(draft['text'])
         assert not draft['quality']['owner_rules']['checked']
+        retry=db.scalar(select(Job).where(Job.kind=='draft_recheck'))
+        assert retry.result['manual_check'] is True and retry.result['retry_draft_id']==draft['id']

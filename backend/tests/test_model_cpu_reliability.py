@@ -41,3 +41,23 @@ def test_cancelled_network_request_is_not_reported_as_a_policy_block():
     with Session() as db:
         row=db.scalar(select(Audit).order_by(Audit.id.desc()))
         assert row.status=='CANCELLED' and row.provider=='ollama'
+
+
+def test_archive_does_not_starve_direct_draft_and_recheck_but_keeps_sending_paused():
+    from app.db import Job,set_setting
+    from app.queue_policy import next_job
+    with Session() as db:
+        set_setting(db,'review_library_maintenance',True)
+        db.add_all([Job(id='audit',kind='review_library_audit',priority=1),
+            Job(id='single',kind='single_draft',priority=40,result={'requested_by':'owner'}),
+            Job(id='manual-check',kind='draft_recheck',priority=60,
+                result={'manual_check':True,'retry_draft_id':'draft'}),
+            Job(id='publish',kind='wb_publish_send',priority=0),
+            Job(id='auto-check',kind='draft_recheck',priority=0,result={'technical_scan':True}),
+            Job(id='import',kind='reviews',priority=0)])
+        db.commit()
+        for expected in ('single','manual-check','audit'):
+            job=next_job(db)
+            assert job.id==expected
+            job.status='completed';db.commit()
+        assert next_job(db) is None

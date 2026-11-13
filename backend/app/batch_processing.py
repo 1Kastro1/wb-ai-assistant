@@ -159,7 +159,7 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
                     'started_at': now(), 'lane': lane}
 
     async def generate_one(info):
-        token = batch_context.set({'job_id': job_id, 'requested_by': initial.get('requested_by', '')})
+        token = batch_context.set({'job_id': job_id, 'requested_by': initial.get('requested_by', ''), 'interactive':single})
         try:
             return await generate_one_scoped(info)
         finally:

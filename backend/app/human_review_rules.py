@@ -43,6 +43,10 @@ async def repair_lamp_example(db):
             'revision':draft.revision,'quality':draft.quality,'at':now()},ensure_ascii=False),encoding='utf-8')
         backup.chmod(0o600)
     result=await generate_draft(db,review.id,instruction='Ответь тепло и по существу, используя характеристики точного артикула. Не пиши служебные отговорки.')
+    if not result['quality'].get('passed') and not result['quality'].get('owner_rules',{}).get('checked'):
+        from .rule_retry import enqueue
+        enqueue(db,db.get(Draft,result['id']),review,manual=True)
+        db.commit()
     return {'repaired':True,'text':result['text'],'quality_passed':result['quality'].get('passed'),
             'rules_checked':result['quality'].get('owner_rules',{}).get('checked')}
 

@@ -1212,7 +1212,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     from .generation_control import batch_context
     if (technical_check(quality) or (repaired_empty_reply and not quality['owner_rules'].get('checked'))) and not (batch_context.get() or {}).get('suppress_rule_retry'):
         db.flush()
-        enqueue(db, draft, review)
+        context=batch_context.get() or {}
+        enqueue(db,draft,review,context.get('requested_by',''),manual=bool(context.get('interactive')))
     if not requested_instruction.strip():
         remember_template(db, review, product, memories, verified_facts, draft)
     record_outcome(db, review, draft)
