@@ -716,5 +716,110 @@
     "local_brake_feedback": true,
     "local_positive": true,
     "local_untried": true
+  },
+  "b75d01b7a0518c0d984ba8c8c09d54f123a82361f50d6ae271847c6197e3cdb8": {
+    "local_brake_feedback": true,
+    "label": "Тёплый и человечный ответ (редакция 13 ноября 2026)",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "d20a5be1306ee804a2ec99ffd6f71ed4e9cdcb4de20b5accc2b5768b024e53d7": {
+    "local_brake_feedback": true,
+    "label": "Смысл отзыва и полезный ответ (редакция 13 ноября 2026)",
+    "local_cases": [
+      "replaced_sprayer",
+      "lotion_cleaning"
+    ],
+    "local_positive": true,
+    "local_untried": true
+  },
+  "2d3d8ef469110c0885f227939880d22522e33416fed63a9938539090cd7e55ec": {
+    "empty_inapplicable": true,
+    "family": "electrical",
+    "label": "Лампы и автомобильная электрика (редакция 13 ноября 2026)",
+    "local_cases": [
+      "replaced_sprayer"
+    ],
+    "local_positive": true
+  },
+  "95d0308fb9ffb3e8111141f6c2b71f97f6cd7803ca8430b47e54d3f7527c0ac0": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "7291a42c02b26a4bfa6ca016e77ca3ae9cf13bdb669a6f0814627dfd4436c0f0": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "65dbe032e5a9b9a7e611fc91a21cc1385e9e81180833bf7a53bf3630053c29d5": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "78a74890d642608cc0fbe496b6246348182cd55da27e86dd122f66fa57aa1021": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "b5a03971781517f9ac497e4ea4a4221bdbff5695c805f63f80f8117b31c1160f": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "d18e4581dd1d443a1d4790c7a4f956e4e3f8dc646cb4cf59503c24c40bba781f": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "66e213976e6ebed9dc4c7108e97d5a30b2631cda9198ad4829c6e91c960beee8": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "ef206a2054a812e02e8374b624d486272bb6d4407df7a5696fa07433227ea204": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "1d64e6730581b1fb82badf1fab36ba9bb3abd3761582aefe312e1f327e3b8551": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "270efb644827319daef681cfd0cea4b4728ffa8752d8beb70e80f754535a9b7e": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "51d5ccdb0a577b07cf92b6d34267013f9064c873bf1cb60f3b32cc84a5b91061": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "fa2e8c2ce0ee47dbcb44db2160fba0f3c3c291617025c9476b210287d2e32329": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "2d09358d1eaf7c6615b564f343e1210f560acb8e40e1f463e8d3dff59f7fa909": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "46b40dce9acdd3ded7517e0f2d740fdab5576a102c36a95890feea0de58718af": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "f0ac2cae709008fe18a70fec5c9c596d51449073741e410cd8e10c341db4c0f5": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
+  },
+  "8b8445247374fbdbe042e299c6d4a12828f0b0847157627ca77cd043e0289d84": {
+    "label": "Проверенный разбор сложного отзыва",
+    "local_positive": true,
+    "local_untried": true
   }
 }

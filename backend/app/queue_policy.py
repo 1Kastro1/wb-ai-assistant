@@ -13,7 +13,12 @@ def next_job(db, kinds=None):
     statement = select(Job).where(Job.status == 'queued', Job.cancel_requested == False,
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
     if setting(db,'review_library_maintenance',False):
-        statement=statement.where(Job.kind=='review_library_audit')
+        # Archive maintenance pauses automation, not an employee's explicit
+        # request for one draft/check. Publication/import batches stay paused.
+        manual_check=(Job.kind=='draft_recheck') & (Job.result['manual_check'].as_boolean()==True) & Job.result['retry_draft_id'].as_string().is_not(None)
+        direct=Job.kind.in_(('single_draft','single_question_draft')) & Job.result['requested_by'].as_string().is_not(None) & (Job.result['requested_by'].as_string()!='')
+        statement=statement.where(or_(Job.kind=='review_library_audit',
+            direct,manual_check))
     if kinds is not None:
         statement = statement.where(Job.kind.in_(kinds))
     return db.scalar(statement.order_by(*queue_ordering()).limit(1))

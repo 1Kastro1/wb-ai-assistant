@@ -31,11 +31,11 @@ class OllamaProvider:
         body = {**ModelRouter().choose(task or ('FAST' if schema else 'STANDARD')), 'messages': messages, 'stream': False, 'think': False}
         # Cyrillic policy lists need substantially more tokens than English text.
         # Never silently truncate the beginning (system instructions / conditions).
-        from .model_context import request_tokens, MAX_CONTEXT
+        from .model_context import request_tokens, MAX_CONTEXT, context_window
         needed = request_tokens(messages, schema, body['options']['num_predict'])
         if needed > MAX_CONTEXT:
             raise ValueError('Правила слишком длинные для контекста модели; сократите повторы или область применения')
-        body['options']['num_ctx'] = max(body['options']['num_ctx'], ((needed + 1023) // 1024) * 1024)
+        body['options']['num_ctx'] = context_window(needed, body['options']['num_ctx'])
         if schema:
             body['format'] = schema
         from .generation_budget import OWNER_RULE_CHECK_SECONDS

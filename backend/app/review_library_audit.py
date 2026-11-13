@@ -67,6 +67,7 @@ def report(db):
     job=db.scalar(select(Job).where(Job.kind==KIND).order_by(Job.created_at.desc()).limit(1))
     from .library_workspace import counts
     return {'maintenance':setting(db,MAINTENANCE,False),'safe_mode':setting(db,'safe_mode',False),
+        'auto_case_rules_enabled':setting(db,'auto_case_rules_enabled',False),
         'library':statistics(db),'counts':counts(db,job.id) if job else {},
         'job':{'id':job.id,'status':job.status,**(job.result or {})} if job else None}
 
@@ -158,7 +159,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
                 from .generation_control import FastPathUnavailable
                 options={'protected':review.risk!='NORMAL','check_only':True,'allow_fast_positive':True,
-                    'check_seconds':AUTO_RULE_CHECK_SECONDS}
+                    'check_seconds':AUTO_RULE_CHECK_SECONDS, 'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else None}
                 try:
                     checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
                         **options,local_only=bool(can_repair))
@@ -304,6 +305,9 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             job=db.get(Job,job_id)
             if job.cancel_requested:job.status='cancelled';db.commit();return
             state=dict(job.result or {})
+            if 'policy_rewind_stage' in state:
+                state['stage']=min(state.get('stage',0),state.pop('policy_rewind_stage'))
+                job.result=state;db.commit()
             if state['policy_version']!=policy_version(db):
                 job.status='failed';job.result={**state,'message':'Правила изменены. Нужен новый полный проход; старые шаблоны не одобряют новые правила.'};db.commit();return
             stages=[dict(s) for s in state['stages']];index=state['stage']
@@ -360,9 +364,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             row.status=outcome['status'];row.attempts=(row.attempts or 0)+1
             row.input_key=outcome.get('input_key','');row.template_id=outcome.get('template_id','')
             row.issues=outcome.get('issues',[]);row.updated_at=now()
-            if row.status=='attention':
-                from .library_workspace import suggest_case_rule
-                suggest_case_rule(db,row,db.get(Review,rid))
+            learn_case = row.status=='attention'
             if not from_retry:stage['cursor']=rid
             if outcome['status'] in ('retry','blocked'):
                 delay=retry_delay(row.attempts) if outcome['status']=='retry' else 3600
@@ -387,6 +389,14 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             job.progress=min(99,round(state['checked']*100/max(1,state['total'])))
             yielding=time.monotonic()-started>=seconds or iteration==limit-1
             job.result=state;job.status='queued' if yielding else 'running';db.commit()
+        if learn_case:
+            # Keep policy learning after the result commit: its scoped audit
+            # invalidation must not be overwritten by the older in-memory state.
+            with session_factory() as db:
+                from .library_workspace import suggest_case_rule
+                row=db.get(ReviewLibraryAuditRow,(job_id,rid))
+                suggest_case_rule(db,row,db.get(Review,rid))
+                db.commit()
         if yielding:return
     with session_factory() as db:
         job=db.get(Job,job_id)

@@ -62,7 +62,7 @@ def test_generation_uses_local_guidance_and_normal_independent_rule_deadline(cli
         assert result['quality']['timing']['model_seconds']==0
     writer.assert_not_awaited();assert checker.await_count
     from app.generation_budget import OWNER_RULE_CHECK_SECONDS
-    assert OWNER_RULE_CHECK_SECONDS == 45
+    assert OWNER_RULE_CHECK_SECONDS == 120
     assert all(call.kwargs.get('timeout_seconds', OWNER_RULE_CHECK_SECONDS)==OWNER_RULE_CHECK_SECONDS for call in checker.await_args_list)
 
 

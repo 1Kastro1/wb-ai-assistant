@@ -240,7 +240,7 @@ def test_wrong_item_intent_and_reply(text):
     review = SimpleNamespace(text=text, rating=1, risk='NORMAL')
     product = SimpleNamespace(brand='EIKOSHA', name='Ароматизатор', category='Автотовары')
     reply = rule_reply(review, product)
-    assert 'извинения' in reply
+    assert 'извин' in reply.lower()
     assert 'отказаться' in reply
     assert 'ПВЗ' in reply
     assert 'оформить возврат' not in reply

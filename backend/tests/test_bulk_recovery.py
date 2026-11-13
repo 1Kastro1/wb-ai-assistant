@@ -207,5 +207,5 @@ def test_provider_honors_background_budget_without_changing_interactive_default(
     asyncio.run(provider.structured([{'role': 'user', 'content': 'check'}], {'type': 'object'}, task='OWNER_RULES', timeout_seconds=120))
     assert request.call_args.kwargs['timeout_seconds'] == 120
     asyncio.run(provider.structured([{'role': 'user', 'content': 'check'}], {'type': 'object'}, task='OWNER_RULES'))
-    assert request.call_args.kwargs['timeout_seconds'] == 45
+    assert request.call_args.kwargs['timeout_seconds'] == 120
 

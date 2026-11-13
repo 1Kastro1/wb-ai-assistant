@@ -1,5 +1,6 @@
 """No arbitrary destinations or credentials are exposed to the assistant."""
 import base64
+import asyncio
 import ctypes
 import hashlib
 import os
@@ -155,12 +156,10 @@ class EgressGuard:
                     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as error:
                         if attempt + 1 >= attempts:
                             raise
-                        import asyncio
                         await asyncio.sleep(min(8, 2 ** (attempt + 1)))
                         continue
                     status = str(response.status_code)
                     if response.status_code in (429, 500, 502, 503, 504) and attempt + 1 < attempts:
-                        import asyncio
                         retry_after = response.headers.get('Retry-After', '')
                         await asyncio.sleep(min(60, max(1, int(retry_after))) if retry_after.isdigit() else min(8, 2 ** (attempt + 1)))
                         continue
@@ -185,6 +184,11 @@ class EgressGuard:
                     if writing:
                         raise PublicationError('Ответ маркетплейса не распознан. Выполняется сверка отправки.') from None
                     raise ValueError('Ответ внешнего сервиса не распознан.') from None
+        except asyncio.CancelledError:
+            # A caller's deadline is not an egress-policy rejection. Preserve
+            # cancellation and the ordinary uncertain-publication safeguards.
+            status = 'CANCELLED'
+            raise
         except httpx.HTTPError as error:
             status = 'NETWORK_ERROR'
             service = 'сервер Wildberries' if provider == 'wb' else 'внешний сервис'

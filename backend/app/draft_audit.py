@@ -237,7 +237,7 @@ async def _recheck_one(job_id, session_factory=Session):
                     assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
                     check_seconds=MANUAL_RULE_CHECK_SECONDS if state.get('manual_check') else
                         AUTO_RULE_CHECK_SECONDS if check_only else OWNER_RULE_CHECK_SECONDS,
-                    check_only=check_only,
+                    check_only=check_only, previous_check=previous,
                     allow_fast_positive=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
@@ -276,6 +276,12 @@ async def _recheck_one(job_id, session_factory=Session):
                 from .learned_reply_templates import remember_template
                 remember_template(db, review, product, rules, facts, draft)
             db.commit()
+            from .db import setting
+            if not question and not quality['passed'] and not technical_check(quality) and setting(db,'auto_case_rules_enabled',False):
+                from types import SimpleNamespace
+                from .library_workspace import suggest_case_rule
+                suggest_case_rule(db,SimpleNamespace(status='attention',issues=quality.get('issues',[])),review)
+                db.commit()
             return quality['passed']
     passed = await exclusive_generation(rid, operation, session_factory) if rid else False
     with session_factory() as db:

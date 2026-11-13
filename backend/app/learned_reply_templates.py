@@ -19,6 +19,7 @@ MAX_AGE = 14 * 86400
 
 def context_key(review, product, rules, facts, *, praise_group=False, candidate_group=False, equivalent_group=False):
     from .rule_execution import VERSION
+    from .reply_policy import TONE_VERSION
     from .shared_marketplaces import POLICY_VERSION
     if (not review or not product or review.marketplace.endswith('_question') or
         review.manual or review.safety_critical or review.risk != 'NORMAL'):
@@ -48,7 +49,7 @@ def context_key(review, product, rules, facts, *, praise_group=False, candidate_
         group = ('empty-rating' if not review.text.strip() else 'scent-praise' if praise_text(review) in
             {'приятный запах','приятный аромат','аромат приятный','запах приятный','запах пробивается как оригинал'} else 'general-praise')
         message = 'audited-positive:' + group
-    data = {'version': VERSION, 'policy_version': POLICY_VERSION, 'rules': list(rules), 'facts': facts,
+    data = {'version': VERSION, 'tone_version': TONE_VERSION, 'policy_version': POLICY_VERSION, 'rules': list(rules), 'facts': facts,
         'review': fields(review, ('wb_account_id','marketplace','rating','risk','manual','safety_critical',
                                   'buyer_name','customer_name','buyer_name_hidden','topics')),
         'message': message,

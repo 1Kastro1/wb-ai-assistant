@@ -229,7 +229,7 @@ def test_default_checker_deadline_is_bounded_even_during_model_repair(models, mo
         SimpleNamespace(text='Доставка вовремя', rating=5, marketplace='wb'),
         SimpleNamespace(name='Товар'), [SEMANTIC], [], lambda value: {'passed': True}))
     assert quality['passed']
-    assert budgets == [45]
+    assert budgets == [120]
 
 
 @pytest.mark.parametrize('candidate', [
