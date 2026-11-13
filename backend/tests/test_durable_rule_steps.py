@@ -176,3 +176,19 @@ def test_power_questions_keep_receipt_conditions_separate_from_product_facts(tex
     assert payload['verified_facts']==args['facts']
     assert payload['buyer_context']['is_question']
     if not missing:assert payload['buyer_context']['recognized_case']=='lamp_power_question'
+
+
+def test_changed_derived_buyer_context_cannot_reuse_a_partial_check(monkeypatch):
+    from app.integrations import ollama
+    from app import reply_policy
+    monkeypatch.setattr('app.owner_reply_policy.rule_groups',lambda rules:[[r] for r in rules])
+    model=AsyncMock(return_value=PASS);monkeypatch.setattr(ollama,'structured',model)
+    args=inputs();_,first=asyncio.run(enforce_owner_rules(**args))
+    original=reply_policy.analyze_customer_message
+    def changed(*params,**kwargs):
+        result=original(*params,**kwargs)
+        return {**result,'resolved':not result['resolved']}
+    monkeypatch.setattr(reply_policy,'analyze_customer_message',changed)
+    _,second=asyncio.run(enforce_owner_rules(**args,previous_check=first))
+    assert second['resumed_groups']==0 and second['verified_groups']==1
+    assert not second['passed'] and model.await_count==2

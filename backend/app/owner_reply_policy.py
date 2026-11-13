@@ -328,7 +328,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 from .model_router import ModelRouter
                 progress_key = verification_key(adjusted, review, product, rules, facts, instruction,
                     ModelRouter().choose('OWNER_RULES'))
-                partition = hashlib.sha256(json.dumps([groups, messages[0], schema], ensure_ascii=False).encode()).hexdigest()
+                partition = hashlib.sha256(json.dumps([groups, messages[0], schema, payload], ensure_ascii=False).encode()).hexdigest()
                 prior = (previous_check or {}).get('group_progress') or {}
                 resume = (attempt == 0 and prior.get('version') == 1
                     and prior.get('input') == progress_key and prior.get('partition') == partition
