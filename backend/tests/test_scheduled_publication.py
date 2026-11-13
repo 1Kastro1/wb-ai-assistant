@@ -46,7 +46,7 @@ def jobs():
 
 
 def test_recent_approval_bypasses_archive_cursor_without_rewinding_it(client,ready,monkeypatch):
-    from app.db import now
+    from app.owner_reply_policy import attach_rule_quality
     enable(client,publication_questions=False)
     monkeypatch.setattr(automatic,'BATCH_SIZE',1)
     with Session() as db:
@@ -54,7 +54,7 @@ def test_recent_approval_bypasses_archive_cursor_without_rewinding_it(client,rea
         jid=job.id;cursor=['1999-01-01','already-scanned']
         job.result={**job.result,'cursor':cursor}
         draft=db.get(Draft,'ownerreview')
-        draft.quality={**draft.quality,'owner_rules':{'checked':True,'passed':True,'checked_at':now()}}
+        draft.quality=attach_rule_quality(dict(draft.quality),{'checked':True,'passed':True,'issues':[]})
         db.commit()
     asyncio.run(automatic.run_step(jid))
     assert [item[1] for item in ready]==['ownerreview']
