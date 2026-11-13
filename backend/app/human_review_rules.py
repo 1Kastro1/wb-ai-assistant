@@ -20,3 +20,49 @@ def apply(db,actor_id,backup_dir=None):
     set_setting(db,key,{'at':now(),'actor_id':actor_id,'result':result})
     db.commit()
     return {**result,'auto_case_rules_enabled':True}
+
+
+async def repair_lamp_example(db):
+    """Regenerate only the owner's known, unpublished automatic example."""
+    from sqlalchemy import select
+    from .db import Review,Product,Draft,now
+    from .draft_audit import manually_edited
+    from .review_library_audit import publication_protected
+    from .services import generate_draft
+    from .config import DATA
+    pairs=db.execute(select(Review,Draft).join(Product,Product.id==Review.product_id)
+        .join(Draft,Draft.review_id==Review.id).where(Review.is_answered==False,
+            Product.name.ilike('%AB5001%'),Review.text.ilike('%нагрузку мерял%'))).all()
+    eligible=[(r,d) for r,d in pairs if not manually_edited(d) and not publication_protected(db,r)]
+    if len(eligible)!=1:return {'repaired':False,'reason':'Нет единственного доступного автоматического черновика'}
+    review,draft=eligible[0]
+    backup=Path(DATA)/'backups'/('lamp-reply-before-human-'+str(draft.revision)+'.json')
+    backup.parent.mkdir(parents=True,exist_ok=True)
+    if not backup.exists():
+        backup.write_text(json.dumps({'review_id':review.id,'draft_id':draft.id,'text':draft.text,
+            'revision':draft.revision,'quality':draft.quality,'at':now()},ensure_ascii=False),encoding='utf-8')
+        backup.chmod(0o600)
+    result=await generate_draft(db,review.id,instruction='Ответь тепло и по существу, используя характеристики точного артикула. Не пиши служебные отговорки.')
+    return {'repaired':True,'text':result['text'],'quality_passed':result['quality'].get('passed'),
+            'rules_checked':result['quality'].get('owner_rules',{}).get('checked')}
+
+
+if __name__=='__main__':
+    import argparse,asyncio
+    from sqlalchemy import select
+    from .db import Session,User
+    from .owner_policy_cleanup import plan
+    parser=argparse.ArgumentParser();parser.add_argument('--apply',action='store_true')
+    parser.add_argument('--repair-lamp',action='store_true');args=parser.parse_args()
+    with Session() as db:
+        if args.apply or args.repair_lamp:
+            if not setting(db,'safe_mode',False):raise ValueError('Перед обслуживанием отправка должна быть заблокирована')
+        if args.apply:
+            actor=db.scalar(select(User).where(User.role=='owner',User.enabled==True).order_by(User.id))
+            if not actor:raise ValueError('Нет действующего владельца')
+            print(json.dumps(apply(db,actor.id),ensure_ascii=False),flush=True)
+        elif not args.repair_lamp:
+            changes=plan(db,policy=POLICY)
+            print(json.dumps({'replacements':len(changes),'archive':sum(len(rows) for _,rows in changes)},ensure_ascii=False),flush=True)
+        if args.repair_lamp:
+            print(json.dumps(asyncio.run(repair_lamp_example(db)),ensure_ascii=False),flush=True)
