@@ -1,40 +1,58 @@
-"""One-time follow-up: preserve texts, requeue content cases, never publish."""
+"""Requeue context failures and check one saved answer without publishing."""
+import asyncio
 from sqlalchemy import select
-from app.db import Session, Job, Review, ReviewLibraryAuditRow
-from app.library_workspace import latest_job, backfill_suggestions, category, counts
-from app.rule_change_recheck import policy_version
+from app.db import Session, ReviewLibraryAuditRow, Review, Product, Draft
+from app.library_workspace import latest_job
 
 with Session() as db:
-    before_policy = policy_version(db)
-    suggestions = backfill_suggestions(db)
     job = latest_job(db)
-    if not job or job.cancel_requested or job.status not in ('queued', 'running'):
-        raise RuntimeError('No active audit')
-    state = dict(job.result)
-    stages = [dict(item) for item in state['stages']]
-    rows = db.execute(select(ReviewLibraryAuditRow, Review).join(Review, Review.id == ReviewLibraryAuditRow.review_id).where(
-        ReviewLibraryAuditRow.job_id == job.id, ReviewLibraryAuditRow.status == 'attention')).all()
-    retried = 0
-    for row, review in rows:
-        if category(row.issues) != 'content':
-            continue
-        stage = next((item for item in stages if item['account_id'] == review.wb_account_id and item['marketplace'] == review.marketplace), None)
-        if stage is None:
-            continue
-        for target in (stage, state):
-            if target.get('checked', 0) < 1 or target.get('attention', 0) < 1:
-                raise RuntimeError('Unexpected audit counts')
-            target['checked'] -= 1
-            target['attention'] -= 1
+    assert job and job.status in ('queued', 'running') and not job.cancel_requested
+    rows = list(db.scalars(select(ReviewLibraryAuditRow).where(
+        ReviewLibraryAuditRow.job_id == job.id, ReviewLibraryAuditRow.status == 'blocked')))
+    selected = [row for row in rows if any('контекст' in str(issue).lower() for issue in (row.issues or []))]
+    sample = None
+    for row in selected:
         row.status, row.retry_at = 'retry', 0
-        retried += 1
-    db.flush()
-    summary = counts(db, job.id)
-    state.update(stages=stages, deferred=summary['retry'] + summary['blocked'], retry_at=0,
-        contextual_followup='2026-11-13', message='Повторный разбор содержательных замечаний; тексты сохранены')
-    job.result, job.status = state, 'queued'
-    assert policy_version(db) == before_policy
+        review = db.get(Review, row.review_id)
+        product = db.get(Product, review.product_id) if review else None
+        if product and (sample is None or 'hl-19' in product.name.lower()):
+            sample = row.review_id
+    job.result = {**job.result, 'retry_at': 0, 'context_budget_fix': '2026-11-13'}
+    job.status = 'queued'
     db.commit()
-    print({'suggested_cases': suggestions, 'requeued_content_cases': retried, 'audit_counts': summary})
+    print({'requeued_context_cases': len(selected)}, flush=True)
 
+async def check_sample():
+    if sample is None:
+        return
+    from app.services import assess_reply, review_verified_facts
+    from app.owner_reply_rules import matching_owner_rules
+    from app.owner_reply_policy import enforce_owner_rules
+    from app.integrations import ollama
+    from app.model_context import request_tokens
+    original = ollama.structured
+    sizes = []
+    async def measured(messages, schema, **options):
+        sizes.append(request_tokens([*messages[:-1], {**messages[-1],
+            'content': messages[-1]['content'] + '\n/no_think'}], schema))
+        return await original(messages, schema, **options)
+    ollama.structured = measured
+    try:
+        with Session() as db:
+            review = db.get(Review, sample)
+            product = db.get(Product, review.product_id)
+            draft = db.scalar(select(Draft).where(Draft.review_id == sample))
+            answer = review.existing_answer if review.is_answered else draft.text if draft else ''
+            rules = matching_owner_rules(db, product)
+            facts = review_verified_facts(db, review, product, rules)
+            _, verdict = await enforce_owner_rules(answer, review, product, rules, facts,
+                lambda text: assess_reply(review, product, text, facts), protected=review.risk != 'NORMAL',
+                check_only=True, allow_fast_positive=True, check_seconds=120)
+            print({'sample_is_requested_product': 'hl-19' in product.name.lower(),
+                'checked': verdict.get('checked'), 'passed': verdict.get('passed'),
+                'failure_code': verdict.get('failure_code'), 'groups': verdict.get('semantic_groups'),
+                'verified_groups': verdict.get('verified_groups'), 'request_token_estimates': sizes}, flush=True)
+    finally:
+        ollama.structured = original
 
+asyncio.run(check_sample())
