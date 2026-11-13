@@ -109,7 +109,7 @@ def enqueue(db, draft, review, actor_id='', *, manual=False):
             if manual:
                 # A direct click resumes a delayed retry without duplicating a
                 # running check or changing the saved reply/approval state.
-                existing.result = {**state, 'manual_check': True, 'requested_by': actor_id,
+                existing.result = {**state, 'manual_check': True, 'check_retries':0, 'requested_by': actor_id,
                     'requested_check_at': now(),
                     **({'retry_at': 0, 'message': 'Повторная проверка поставлена в очередь'}
                        if existing.status == 'queued' else {})}

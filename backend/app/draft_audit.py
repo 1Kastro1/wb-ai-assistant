@@ -265,7 +265,9 @@ async def _recheck_one(job_id, session_factory=Session):
             # context, regardless of which automatic scan encounters it next.
             from .rule_retry import technical_check, retry_delay
             from .rule_retry import checkpoint_verdict
-            verdict = checkpoint_verdict(verdict, previous, input_key, now(), manual=bool(state.get('manual_check')))
+            final_key=verification_key(answer,review,product,rules,facts)
+            verdict = checkpoint_verdict(verdict, previous, final_key, now(),
+                manual=bool(state.get('manual_check') and not state.get('check_retries')))
             quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality

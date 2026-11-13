@@ -1150,7 +1150,7 @@ sync_schedule_lock = asyncio.Lock()
 async def run_sync_job(job_id):
     async with sync_lock, maintenance_lock:
         from .pipeline_dispatch import run_slice
-        await run_slice(job_id, execute_job)
+        await run_slice(job_id, execute_job, session_factory=Session)
 
 
 async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft')):
