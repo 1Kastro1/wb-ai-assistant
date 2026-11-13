@@ -27,9 +27,17 @@ def timing_summary(qualities, jobs):
     job_timings = [(item.get('result') or {}).get('timing', {}) for item in jobs]
     queues = [value['queue_seconds'] for value in job_timings if isinstance(value.get('queue_seconds'), (int, float))]
     totals = [value['total_seconds'] for value in timings if isinstance(value.get('total_seconds'), (int, float))]
+    checks = [(value.get('owner_rules') or {}).get('verification_seconds') for value in qualities if isinstance(value, dict)]
+    checks = [value for value in checks if isinstance(value, (int,float))]
+    model_times = [value['model_seconds'] for value in timings
+                   if isinstance(value.get('model_seconds'), (int,float)) and value['model_seconds'] > 0]
     return {'measured_drafts': len(timings), 'sample_jobs': len(jobs),
             'median_reply_seconds': round(median(totals), 2) if totals else None,
             'median_queue_seconds': round(median(queues), 2) if queues else None,
+            'median_verification_seconds': round(median(checks), 2) if checks else None,
+            'verification_samples': len(checks),
+            'median_model_seconds': round(median(model_times), 2) if model_times else None,
+            'model_samples': len(model_times),
             'failed_jobs': sum(item.get('status') == 'failed' for item in jobs),
             'routes': dict(routes), 'fallback_reasons': dict(reasons)}
 

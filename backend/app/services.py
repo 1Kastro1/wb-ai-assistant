@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '4.4'
+QUALITY_EVALUATOR_VERSION = '4.5-warm-body'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -444,6 +444,9 @@ def assess_reply(review, product, reply, verified_facts=None):
     review_words = set(WORDS.findall(review.text.lower()))
     reply_words = set(WORDS.findall(lowered))
     issues, score = [], 40
+    from .reply_policy import has_reply_body
+    if not has_reply_body(reply):
+        issues.append('ответ пустой: нужны благодарность и ответ по существу, а не только приветствие и подпись')
     breakdown = {
         'safety': {'label': 'Безопасность', 'score': 40, 'max': 40},
         'substance': {'label': 'Содержательность', 'score': 0, 'max': 15},
@@ -1054,9 +1057,16 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             except (ValueError, TimeoutError):
                 web_sources = []
                 web_search_failed = True
-        messages = [
-            {'role': 'system', 'content': (Path(__file__).parent / 'prompts/review_reply.md').read_text(encoding='utf-8') + '\n' + customer_reply_policy() + '\nПравила владельца: ' + json.dumps(context_memories, ensure_ascii=False)},
-            {'role': 'user', 'content': json.dumps({'review_data': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating), 'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name, 'verified_facts': facts, 'verified_usage_instruction': usage_excerpt(facts), 'owner_style_profile': style, 'similar_previous_answers': examples, 'previous_draft': initial_draft.text if initial_draft else '', 'previous_quality_issues': (previous_quality or {}).get('issues', []), 'owner_edit_instruction': instruction}, ensure_ascii=False)}]
+        from .model_context import draft_messages
+        from .reply_policy import generation_policy
+        from .owner_reply_policy import context_constraints
+        messages = draft_messages(generation_policy(), {
+            'buyer_message': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating),
+            'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name,
+            'required_style': {key: context_constraints(memories, review)[key] for key in ('greeting','greetings','signature')},
+            'previous_draft': initial_draft.text if initial_draft else '',
+            'previous_quality_issues': (previous_quality or {}).get('issues', []),
+            'owner_edit_instruction': instruction}, context_memories, facts)
         best_reply, best_quality = None, {'score': -1, 'issues': []}
         valid_candidates = []
         attempt_messages = messages
@@ -1151,6 +1161,15 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
     # requires a current, successful owner-rule verdict.
+    from .reply_policy import has_reply_body
+    if not has_reply_body(reply):
+        # A failed/destructive style rewrite must not replace a saved answer
+        # with a greeting and signature. Prepare content, but never inherit the
+        # verdict for a different text or publish an unchecked replacement.
+        from .owner_reply_rules import apply_review_signature
+        reply = apply_review_signature(safe_fallback_reply(review, product, facts=verified_facts), memories)
+        rule_quality = saved_rule_quality(reply, memories, changed=True, review=review)
+        model = 'safety-fallback-1.2'
     quality = attach_rule_quality(assess_reply(review, product, reply, verified_facts), rule_quality)
     if initial_draft and review.risk == 'NORMAL' and not specific_case and same_answer(formatted(reply), previous_text):
         # An unchanged fallback or verifier rewrite is not a new variant. Keep

@@ -2,6 +2,7 @@
 import {useEffect,useState} from 'react';
 import {api} from './client';
 import './reply-library.css';
+import ReviewPolicyCampaign from './ReviewPolicyCampaign';
 type Row=Record<string,any>;
 const markets:Record<string,string>={yandex:'Яндекс Маркет',wb:'Wildberries',ozon:'Ozon'};
 const statuses:Record<string,string>={verified:'Подтверждён',verified_reference:'Проверенный образец',attention:'Нужно решение',retry:'Запланирован повтор',blocked:'Нужна настройка сервиса'};
@@ -48,5 +49,6 @@ export default function ReplyLibraryStatus({onRule,onOpen}:{onRule?:(rule:Row)=>
     {total>20&&<div className="button-row"><button disabled={loading||offset===0} onClick={()=>setOffset(Math.max(0,offset-20))}>Назад</button><span>{offset+1}–{Math.min(offset+20,total)} из {number(total)}</span><button disabled={loading||offset+20>=total} onClick={()=>setOffset(offset+20)}>Далее</button></div>}
    </>}
   </div>
+  <details className="library-help card"><summary>Обновление сохранённых ответов по правилам</summary><ReviewPolicyCampaign/></details>
  </section>;
 }

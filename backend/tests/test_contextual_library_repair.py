@@ -36,3 +36,29 @@ def test_local_template_probe_never_starts_generation(monkeypatch):
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',no_local)
     assert asyncio.run(repair(review,product,[],[],lambda value:{'passed':False,'issues':['bad']},local_only=True)) is None
     assert model.await_count==0
+
+
+def test_candidate_context_is_bounded_but_all_rules_and_facts_reach_verifier(monkeypatch):
+    import json
+    from app.model_context import request_tokens
+    review, product = sample()
+    rules = ['Если есть замечание: ' + 'Проверяй сведения. ' * 1000 for _ in range(6)]
+    facts = [{'text': 'Подтверждённый факт. ' * 1000, 'source': 'card'} for _ in range(6)]
+    monkeypatch.setattr('app.rule_execution.positive_template', lambda *a,**k: None)
+    monkeypatch.setattr('app.rule_execution.untried_template', lambda *a,**k: None)
+    monkeypatch.setattr('app.review_cases.specific_review_case', lambda *a,**k: None)
+    monkeypatch.setattr('app.safety.safe_fallback_reply', lambda *a,**k: 'Общий ответ')
+    async def generate(messages, count):
+        assert count == 1 and request_tokens(messages, predict=768) < 6000
+        payload = json.loads(messages[-1]['content'])
+        assert payload['buyer_message'] == review.text
+        assert all(rule in rules for rule in payload['owner_rules'])
+        return ['Кандидат ответа']
+    monkeypatch.setattr('app.integrations.ollama.reply_variants', generate)
+    async def verify(answer, row, item, all_rules, all_facts, assess, **kwargs):
+        assert all_rules == rules and all_facts == facts
+        return answer, {'passed': False, 'checked': False, 'issues': ['Не проверено']}
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules', verify)
+    _, quality = asyncio.run(repair(review, product, rules, facts,
+        lambda text: {'passed': text == 'Кандидат ответа', 'issues': []}))
+    assert not quality['passed']

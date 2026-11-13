@@ -2718,7 +2718,11 @@ async def memory_preview(body: RulePreviewInput, auth: AUTH, db: DB):
     note='Предварительный ответ. Правило и ответ не сохраняются.'
     if review.risk=='NORMAL' and not local_positive:
         try:
-            reply=await asyncio.wait_for(ollama.chat([{'role':'system','content':customer_reply_policy()+'\nПравила владельца: '+json.dumps(context_rules,ensure_ascii=False)},{'role':'user','content':json.dumps({'review_data':body.example,'rating':body.rating,'product':product.name,'verified_facts':facts},ensure_ascii=False)}]),timeout=12)
+            from .model_context import draft_messages
+            from .reply_policy import generation_policy
+            messages=draft_messages(generation_policy(), {'buyer_message':body.example,'rating':body.rating,
+                'product':product.name},context_rules,facts)
+            reply=await asyncio.wait_for(ollama.chat(messages),timeout=12)
         except Exception:
             reply=reply or safe_fallback_reply(review,product,facts=facts)
             note='Показан ответ по проверенным сценариям. Свободную формулировку правила сейчас не удалось проверить; ограничения на слова применены.'

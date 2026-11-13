@@ -5,13 +5,13 @@ export function workspaceResources({page='shell',settingsTab='connections',owner
  const sections={
   'Ассистент':[['conversations','/conversations'],['voice','/voice/status'],['ai','/ollama'],['stats','/analytics'],['questionStats','/questions/stats']],
   'Главная':[['stats','/analytics'],['system','/system/status'],['quality','/quality-report'],['sync','/sync/status']],
-  'Аналитика':[['stats','/analytics'],['quality','/quality-report'],['overview','/analytics/marketplaces?days='+days]],
+  'Аналитика':[['stats','/analytics'],['quality','/quality-report'],['overview','/analytics/marketplaces?days='+days],...(owner?[['metrics','/generation/metrics'],['teamDashboard','/team/dashboard']]:[])],
   'Отзывы':[['jobs','/jobs'],['auto','/auto-replies/status']],
   'Вопросы':[['jobs','/jobs'],['questionStats','/questions/stats']],
   'Товары':[['products','/products/page?limit=60&knowledge='+encodeURIComponent(productKnowledge)+'&q='+encodeURIComponent(productQuery)]],
   'Память':[['memory','/memory'],['products','/products/page?limit=60&q=']],
   'Уведомления':[],
-  'Настройки':({connections:[['sync','/sync/status'],['jobs','/jobs'],['performance','/settings/performance']],answers:[['search','/settings/search'],['brands','/brands'],['memory','/memory'],['metrics','/generation/metrics']],voice:[['voice','/voice/status']],security:[],automation:[['schedule','/settings/schedule'],['auto','/auto-replies/status']],data:[['portable','/settings/portable-sync'],['system','/system/status']],team:owner?[['users','/users'],['teamDashboard','/team/dashboard'],['telegram','/settings/telegram']]:[]})[settingsTab]||[]
+  'Настройки':({connections:[['sync','/sync/status'],['jobs','/jobs']],answers:[['search','/settings/search'],['performance','/settings/performance'],['ai','/ollama'],['voice','/voice/status']],security:[['portable','/settings/portable-sync'],['system','/system/status']],automation:[['schedule','/settings/schedule'],['auto','/auto-replies/status'],...(owner?[['library','/review-library/status']]:[])],notifications:owner?[['telegram','/settings/telegram']]:[],team:owner?[['users','/users'],['teamDashboard','/team/dashboard']]:[]})[settingsTab]||[]
  };
  return [...common,...(sections[page]||[])].filter(([key])=>owner||!['metrics','portable','search'].includes(key));
 }
