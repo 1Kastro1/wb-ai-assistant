@@ -20,7 +20,7 @@ class SpecificReviewDetailsTests(unittest.TestCase):
         app_path = Path(importlib.util.find_spec('app').submodule_search_locations[0])
         tree = ast.parse((app_path / 'services.py').read_text(encoding='utf-8'))
         nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('assess_reply', '_addresses_review_topic')]
-        namespace = dict(simple_positive=simple_positive, specific_review_case=specific_review_case, is_cleaner=is_cleaner, semantic_reply_issues=semantic_reply_issues, re=re, WORDS=re.compile(r'[а-яё0-9]{4,}', re.I), analyze_customer_message=analyze_customer_message,
+        namespace = dict(__name__='app.services', simple_positive=simple_positive, specific_review_case=specific_review_case, is_cleaner=is_cleaner, semantic_reply_issues=semantic_reply_issues, re=re, WORDS=re.compile(r'[а-яё0-9]{4,}', re.I), analyze_customer_message=analyze_customer_message,
                          missing_complaints=missing_complaints, has_redundant_clarification=has_redundant_clarification, review_intent=review_intent, usage_excerpt=usage_excerpt,
                          cleaner_effectiveness_complaint=cleaner_effectiveness_complaint, INTENT_LABELS={'GENERAL':'Общий'},
                          MIN_DRAFT_QUALITY=96, QUALITY_EVALUATOR_VERSION='test', now=lambda:'test')
