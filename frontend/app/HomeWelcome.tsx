@@ -3,7 +3,7 @@ import {AnimatedNumber} from './WorkspaceMotion';
 import AppIcon from './AppIcon';
 import ActionButton from './ActionButton';
 
-export default function HomeWelcome({store,busy,onReviews,onQueue,onApproval,onRefresh}:{store:string;busy:boolean;onReviews:()=>void;onQueue:()=>void;onApproval:()=>void;onRefresh:()=>Promise<boolean>}){
+export default function HomeWelcome({store,busy,onReviews,onRefresh}:{store:string;busy:boolean;onReviews:()=>void;onRefresh:()=>Promise<boolean>}){
  return <div className="home-welcome ops-welcome"><div className="home-welcome-copy"><span className="home-kicker"><span/>ОБЗОР РАБОЧЕГО ПРОСТРАНСТВА</span><h1>Рабочий день магазина</h1><p>Новые обращения, ответы на проверку и текущие задания.</p><span className="home-store-caption">Выбран магазин: <b>{store||'Магазин не выбран'}</b></span></div><div className="home-welcome-actions"><button className="primary" disabled={busy} onClick={onReviews}><AppIcon name="Отзывы"/>Открыть отзывы<span aria-hidden="true">→</span></button><ActionButton label="Обновить данные" pendingLabel="Обновляем…" successLabel="Обновлено" disabled={busy} onAction={onRefresh}/></div></div>;
 }
 
