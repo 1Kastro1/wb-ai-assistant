@@ -1400,7 +1400,6 @@ def queue_scheduled_jobs(current=None):
     # the API cannot be overwritten later by a stale scheduler snapshot.
     with Session() as db:
         row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update())
-        if setting(db,'review_library_maintenance',False):return
         value = normalize_schedule(row.value if row else {})
         enqueue_due_jobs(db, value, time.time() if current is None else current)
         from .publication_reconciliation import enqueue_due

@@ -297,10 +297,12 @@ def selfcheck(db,job_id,stages):
                 raise ValueError('Нарушена изоляция правил шаблона')
         results.append({'marketplace':stage['marketplace'],'store':stage['account_id'],'status':'passed' if context_key(review,product,rules,facts) else 'reference_only','sample':rid})
     schedule=setting(db,'automation_schedule',{})
-    if not setting(db,'safe_mode',False) or any(schedule.get(key) for key in (
-            'enabled','reviews_sync_enabled','questions_sync_enabled','drafts_enabled','question_drafts_enabled','publication_enabled')):
-        raise ValueError('Автоматическое обновление, генерация и отправка должны оставаться выключенными')
-    return {'markets':results,'library':statistics(db),'checked_at':now(),'publication_disabled':True}
+    # Audit validates the library, not the owner's subsequent automation choices.
+    # Starting an audit pauses sending; the owner can explicitly authorize it later.
+    from .scheduled_publication import blocked_reason
+    publication_disabled = not (schedule.get('enabled') and schedule.get('publication_enabled')
+                                and not blocked_reason(db, schedule))
+    return {'markets':results,'library':statistics(db),'checked_at':now(),'publication_disabled':publication_disabled}
 
 
 async def step(job_id,session_factory=Session,limit=40,seconds=25):
@@ -323,7 +325,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             if index>=len(stages):
                 from .verified_reply_library import statistics
                 checks=selfcheck(db,job_id,stages)
-                state.update(selfcheck=checks,library=statistics(db),completed_at=now(),message='Все площадки проверены. Автообновление и отправка остаются выключены.')
+                state.update(selfcheck=checks,library=statistics(db),completed_at=now(),message='Все площадки проверены. Действуют текущие настройки автоматизации владельца.')
                 job.status,job.progress,job.result='completed',100,state
                 set_setting(db,MAINTENANCE,False)
                 db.commit();return

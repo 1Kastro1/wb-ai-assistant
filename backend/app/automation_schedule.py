@@ -77,9 +77,10 @@ def enqueue_generation(db, schedule, store, kind, current):
 def enqueue_due_jobs(db, schedule, current):
     if not schedule.get('enabled'):
         return
+    maintenance = setting(db, 'review_library_maintenance', False)
     stores = list(db.scalars(select(StoreProfile).join(Account, Account.id == StoreProfile.id).order_by(StoreProfile.created_at)))
     for store in stores:
-        if schedule.get('sync_enabled', True):
+        if not maintenance and schedule.get('sync_enabled', True):
             for kind in ('products', 'reviews', 'questions'):
                 if kind != 'products' and not schedule.get(kind + '_sync_enabled', schedule.get('sync_enabled', True)):
                     continue
@@ -89,8 +90,9 @@ def enqueue_due_jobs(db, schedule, current):
                 if current - last >= max(1, int(hours)) * 3600 and not pending(db, kind, store.id):
                     db.add(Job(id=str(uuid4()), kind=kind, priority=200, result={'account_id': store.id, 'scheduled': True}))
                     schedule[key] = current
-        for kind in ('drafts', 'question_drafts'):
-            enqueue_generation(db, schedule, store, kind, current)
+        if not maintenance:
+            for kind in ('drafts', 'question_drafts'):
+                enqueue_generation(db, schedule, store, kind, current)
         if store.provider in ('wb', 'ozon', 'yandex'):
             from .scheduled_publication import enqueue
             enqueue(db, schedule, store, current)

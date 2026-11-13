@@ -45,6 +45,31 @@ def jobs():
     with Session() as db: return list(db.scalars(select(Job.id).where(Job.kind == automatic.KIND)))
 
 
+def test_owner_can_publish_verified_positive_reviews_during_archive_audit(client, ready):
+    from app.queue_policy import next_job
+    from app.review_library_audit import selfcheck
+    with Session() as db:
+        set_setting(db, 'review_library_maintenance', True)
+        db.get(Review, 'ownerreview').rating = 2
+        db.get(Draft, 'yareview').quality = {'passed': True, 'owner_rules': {'checked': False, 'passed': False}}
+        db.commit()
+    enable(client, publication_questions=False, publication_low_ratings=False,
+           reviews_sync_enabled=True, questions_sync_enabled=True,
+           drafts_enabled=True, question_drafts_enabled=True)
+    main.queue_scheduled_jobs()
+    with Session() as db:
+        assert {job.kind for job in db.scalars(select(Job))} == {automatic.KIND}
+        assert next_job(db).kind == automatic.KIND
+        assert selfcheck(db, 'audit', [])['publication_disabled'] is False
+    for jid in jobs():
+        asyncio.run(automatic.run_step(jid))
+    assert {row[1] for row in ready} == {'ozreview'}
+    client.patch('/settings/schedule', json={'publication_enabled': False})
+    with Session() as db:
+        assert selfcheck(db, 'audit', [])['publication_disabled'] is True
+        assert setting(db, 'review_library_maintenance') is True
+
+
 def test_disabled_by_default_and_enabling_enqueues_every_connected_market_once(client, ready):
     assert not client.get('/settings/schedule').json()['publication_enabled']
     result = enable(client)
