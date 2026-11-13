@@ -1,0 +1,38 @@
+[
+  {
+    "source": {
+      "kind": "REVIEW_RULE",
+      "scope": "product:yandex:store-e711321c3cc1:15518",
+      "sha256": "8b8445247374fbdbe042e299c6d4a12828f0b0847157627ca77cd043e0289d84"
+    },
+    "target": {
+      "kind": "REVIEW_RULE",
+      "scope": "global",
+      "sha256": "d20a5be1306ee804a2ec99ffd6f71ed4e9cdcb4de20b5accc2b5768b024e53d7"
+    }
+  },
+  {
+    "source": {
+      "kind": "REVIEW_RULE",
+      "scope": "product:yandex:store-e711321c3cc1:163785",
+      "sha256": "95d0308fb9ffb3e8111141f6c2b71f97f6cd7803ca8430b47e54d3f7527c0ac0"
+    },
+    "target": {
+      "kind": "REVIEW_RULE",
+      "scope": "global",
+      "sha256": "d20a5be1306ee804a2ec99ffd6f71ed4e9cdcb4de20b5accc2b5768b024e53d7"
+    }
+  },
+  {
+    "source": {
+      "kind": "REVIEW_RULE",
+      "scope": "product:yandex:store-e711321c3cc1:170281",
+      "sha256": "95d0308fb9ffb3e8111141f6c2b71f97f6cd7803ca8430b47e54d3f7527c0ac0"
+    },
+    "target": {
+      "kind": "REVIEW_RULE",
+      "scope": "global",
+      "sha256": "d20a5be1306ee804a2ec99ffd6f71ed4e9cdcb4de20b5accc2b5768b024e53d7"
+    }
+  }
+]

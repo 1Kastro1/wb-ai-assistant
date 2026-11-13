@@ -12,6 +12,44 @@ from app.queue_policy import next_job
 
 @unittest.skipUnless(os.environ.get('WB_POSTGRES_TEST') == '1', 'Disposable PostgreSQL required')
 class PostgresOperations(unittest.TestCase):
+    def test_rule_saves_serialize_across_postgres_connections(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        from fastapi import HTTPException
+        from app.db import Memory
+        from app.rule_duplicates import rule_write, require_unique
+        url = make_url(os.environ['DATABASE_URL']); self.assertEqual(url.database, 'wb_workbench_tests')
+        engine = create_engine(url); Base.metadata.create_all(engine); factory = sessionmaker(engine)
+        prefix = 'rule-race-' + uuid4().hex
+        started, finished = Event(), Event()
+        def second_save():
+            started.set()
+            try:
+                with factory() as db, rule_write(db):
+                    row = Memory(id=prefix+'b', text=prefix+'  НЕ обещай результат.', kind='REVIEW_RULE', scope='global')
+                    require_unique(db,row); db.add(row); db.commit()
+                    return 'created'
+            except HTTPException as error:
+                return error.status_code
+            finally:
+                finished.set()
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with factory() as db, rule_write(db):
+                    row = Memory(id=prefix+'a',text=prefix+' Не обещай результат.',kind='REVIEW_RULE',scope='global')
+                    require_unique(db,row)
+                    future = pool.submit(second_save)
+                    self.assertTrue(started.wait(5))
+                    self.assertFalse(finished.wait(.15))
+                    db.add(row);db.commit()
+                self.assertEqual(future.result(timeout=10),409)
+            with factory() as db:
+                self.assertEqual(list(db.scalars(select(Memory.id).where(Memory.id.like(prefix+'%')))),[prefix+'a'])
+        finally:
+            with engine.begin() as connection:
+                connection.execute(delete(Memory).where(Memory.id.like(prefix+'%')))
+            engine.dispose()
+
     def test_page_equivalence_keeps_source_spellings_on_postgres(self):
         from app.shared_marketplaces import equivalent_products, equivalent_product_groups
         url=make_url(os.environ['DATABASE_URL']);self.assertEqual(url.database,'wb_workbench_tests')

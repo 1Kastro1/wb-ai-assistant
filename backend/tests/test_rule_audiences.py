@@ -19,7 +19,11 @@ def test_proposal_confirmation_and_move_preserve_kind_scope_and_audit(client):
         assert confirmed.status_code == 200, confirmed.text
     rules = client.get('/memory').json()
     assert {rule['kind'] for rule in rules} == {'REVIEW_RULE', 'QUESTION_RULE'}
-    moved = client.patch('/memory/' + rules[0]['id'] + '/kind', json={'kind': 'QUESTION_RULE'})
+    review = next(rule for rule in rules if rule['kind'] == 'REVIEW_RULE')
+    question = next(rule for rule in rules if rule['kind'] == 'QUESTION_RULE')
+    assert client.patch('/memory/' + review['id'] + '/kind', json={'kind': 'QUESTION_RULE'}).status_code == 409
+    assert client.delete('/memory/' + question['id']).status_code == 200
+    moved = client.patch('/memory/' + review['id'] + '/kind', json={'kind': 'QUESTION_RULE'})
     assert moved.status_code == 200
     assert moved.json()['kind'] == 'QUESTION_RULE' and moved.json()['scope'] == 'brand:EIKOSHA'
     assert client.patch('/memory/' + rules[0]['id'] + '/kind', json={'kind': 'invalid'}).status_code == 422

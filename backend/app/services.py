@@ -1316,6 +1316,11 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
     # Reserve the action and unique per-review publication slots atomically.
     db.rollback()
     db.execute(sql_text('BEGIN IMMEDIATE' if IS_SQLITE else 'BEGIN'))
+    if db.scalar(select(Action.kind).where(Action.id == action_id)) == 'memory':
+        # Match scope editing's lock order: rules first, action row second.
+        # Otherwise confirmation and a concurrent scope edit can deadlock.
+        from .rule_duplicates import lock_rules
+        lock_rules(db)
     action = db.scalar(select(Action).where(Action.id == action_id).with_for_update().execution_options(populate_existing=True))
     if not action:
         raise ValueError('Действие не найдено')
@@ -1324,15 +1329,19 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
     if datetime.now(timezone.utc) - datetime.fromisoformat(action.created_at) > timedelta(minutes=30):
         raise ValueError('Подтверждение устарело. Создайте новое действие')
     if action.kind == 'memory':
-        memory=Memory(id=str(uuid4()), **action.payload)
-        db.add(memory)
-        actor=db.get(User,actor_id) if actor_id else None
-        set_setting(db,'memory-meta:'+memory.id,{'created_at':now(),'created_by_name':actor.display_name if actor else 'Автоматизация'})
-        action.status, action.result = 'completed', {'saved': True, 'confirmed_by': actor_id, 'confirmed_at': now()}
-        from .rule_change_recheck import rule_changed, snapshot
-        rule_changed(db, None, snapshot(memory), actor_id or '')
-        db.commit()
-        return public(action)
+        from .rule_duplicates import rule_write
+        with rule_write(db, begin=False):
+            from .rule_duplicates import require_unique
+            memory=Memory(id=str(uuid4()), **action.payload)
+            require_unique(db, memory)
+            db.add(memory)
+            actor=db.get(User,actor_id) if actor_id else None
+            set_setting(db,'memory-meta:'+memory.id,{'created_at':now(),'created_by_name':actor.display_name if actor else 'Автоматизация'})
+            action.status, action.result = 'completed', {'saved': True, 'confirmed_by': actor_id, 'confirmed_at': now()}
+            from .rule_change_recheck import rule_changed, snapshot
+            rule_changed(db, None, snapshot(memory), actor_id or '')
+            db.commit()
+            return public(action)
     if setting(db, 'safe_mode', False):
         raise ValueError('SAFE MODE блокирует публикацию')
     test = setting(db, 'test_mode', True)

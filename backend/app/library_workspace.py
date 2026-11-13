@@ -1,5 +1,7 @@
 """Library views and bounded case rules; activation requires owner opt-in."""
 import hashlib
+import json
+from pathlib import Path
 from sqlalchemy import select, func
 from .db import Job, Review, Draft, Product, Memory, Setting, ReviewLibraryAuditRow, now, set_setting, setting
 
@@ -9,6 +11,28 @@ GUIDANCE = (
     ('не трактовать положительный', 'Не трактуй положительный опыт как жалобу. Благодари за отзыв и отмечай только названное достоинство без диагностики и возвратов.'),
     ('не приписывать опыт', 'Если покупатель ещё не использовал товар, не утверждай, что товар подошёл, работает или оправдал ожидания; поблагодари за оценку без выдуманного опыта.'),
 )
+DEFAULT_GUIDANCE = 'Перед ответом выдели существенные замечания и вопрос покупателя. Учитывай каждое из них по действующим правилам и подтверждённым данным; если сведений недостаточно, укажи, чего именно не хватает, без выдуманных причин и обещаний.'
+CASE_COVERAGE = json.loads(Path(__file__).with_name('rule_case_coverage173.json').read_text(encoding='utf-8'))
+
+
+def covered_case_rule(db, instructions):
+    """Only explicitly audited whole policies prove coverage of case guidance.
+
+    A changed/disabled policy or another audience never suppresses suggestions.
+    No similarity score, buyer wording or model verdict can expand this list.
+    """
+    covered, policies = set(), []
+    from .rule_duplicates import normalized_scope
+    for rule in db.scalars(select(Memory).where(Memory.enabled == True)):
+        if rule.kind not in ('REVIEW_RULE', 'GLOBAL_RULE') or normalized_scope(rule.scope) != 'global':
+            continue
+        accepted = CASE_COVERAGE.get(hashlib.sha256(rule.text.encode('utf-8')).hexdigest(), [])
+        if accepted:
+            covered.update(accepted)
+            policies.append((rule, set(accepted)))
+    if instructions and set(instructions) <= covered:
+        return max(policies, key=lambda pair: (len(pair[1] & set(instructions)), pair[0].id))[0]
+    return None
 
 
 def latest_job(db):
@@ -30,7 +54,7 @@ def guidance(issues):
     if category(issues)!='content':
         return []
     instructions=[value for marker,value in GUIDANCE if marker in ' '.join(issues or []).lower()]
-    return instructions or ['Перед ответом выдели существенные замечания и вопрос покупателя. Учитывай каждое из них по действующим правилам и подтверждённым данным; если сведений недостаточно, укажи, чего именно не хватает, без выдуманных причин и обещаний.']
+    return instructions or [DEFAULT_GUIDANCE]
 
 
 def suggest_case_rule(db, row, review):
@@ -40,10 +64,25 @@ def suggest_case_rule(db, row, review):
     instructions = guidance(row.issues)
     if not instructions:
         return None
+    covered = covered_case_rule(db, instructions)
+    if covered:
+        return covered
+    from .rule_duplicates import try_rules_lock, duplicate_rule
+    if not try_rules_lock(db):
+        return None
+    # A UI writer may have committed new coverage just before the lock.
+    covered = covered_case_rule(db, instructions)
+    if covered:
+        return covered
     identity = hashlib.sha256((review.product_id + ':' + '\n'.join(instructions)).encode()).hexdigest()[:28]
     mid = 'case-rule-' + identity
     rule = db.get(Memory, mid)
     if rule is None:
+        candidate = Memory(text='Разбор сложного отзыва. ' + ' '.join(instructions),
+                           kind='REVIEW_RULE', scope='product:' + review.product_id)
+        duplicate = duplicate_rule(db, candidate)
+        if duplicate:
+            return duplicate
         # A bounded set of editorial instructions, never raw buyer/model prose.
         # Do not grow a product policy indefinitely when retries cannot resolve it.
         if (db.scalar(select(func.count()).select_from(Memory).where(
@@ -57,6 +96,8 @@ def suggest_case_rule(db, row, review):
             'automatic_suggestion': True, 'source_review_id': review.id})
     meta = db.get(Setting, 'memory-meta:' + mid)
     info = dict(meta.value or {}) if meta else {}
+    if info.get('duplicate_of'):
+        return db.get(Memory, info['duplicate_of'])
     if (setting(db, 'auto_case_rules_enabled', False) and not rule.enabled
             and info.get('automatic_suggestion') and not info.get('updated_at')
             and not info.get('auto_activated_at')):
@@ -108,7 +149,12 @@ def cases(db, view='attention', offset=0, limit=20):
     for row, review, product, draft in rows:
         instructions = guidance(row.issues)
         mid = 'case-rule-' + hashlib.sha256((review.product_id + ':' + '\n'.join(instructions)).encode()).hexdigest()[:28]
-        rule = db.get(Memory, mid) if instructions and row.status=='attention' and category(row.issues)=='content' else None
+        rule = None
+        if instructions and row.status=='attention' and category(row.issues)=='content':
+            rule = covered_case_rule(db, instructions) or db.get(Memory, mid)
+            info = setting(db, 'memory-meta:' + rule.id, {}) if rule else {}
+            if info.get('duplicate_of'):
+                rule = db.get(Memory, info['duplicate_of'])
         items.append({'review_id': review.id, 'store_id': review.wb_account_id, 'marketplace': review.marketplace,
             'product': product.name if product else 'Товар не найден', 'review_text': review.text, 'rating': review.rating,
             'answer': review.existing_answer if review.is_answered else draft.text if draft else '',
