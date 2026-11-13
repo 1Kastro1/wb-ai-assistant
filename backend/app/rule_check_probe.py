@@ -20,7 +20,8 @@ def main():
     parser.add_argument('review_id')
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--group', type=int, default=0)
-    parser.add_argument('--seconds', type=int, default=300)
+    parser.add_argument('--seconds', type=int, default=600)
+    parser.add_argument('--threads', type=int, choices=range(1,65))
     args = parser.parse_args()
     with Session() as db:
         review = db.get(Review, args.review_id)
@@ -43,9 +44,11 @@ def main():
     original = guard.request
     async def measured(*params, **kwargs):
         body = kwargs.get('body') or {}
+        if args.threads:
+            body['options']['num_thread'] = args.threads
         started = time.monotonic()
         print(json.dumps({'request_started':True,'context':body.get('options',{}).get('num_ctx'),
-            'timeout':kwargs.get('timeout_seconds')}),flush=True)
+            'timeout':kwargs.get('timeout_seconds'),'threads':body.get('options',{}).get('num_thread')}),flush=True)
         response = await original(*params, **kwargs)
         print(json.dumps({'response_seconds':round(time.monotonic()-started,3),
             **{key:response.get(key) for key in ('prompt_eval_count','eval_count','prompt_eval_duration','eval_duration','load_duration','done_reason')}}),flush=True)
