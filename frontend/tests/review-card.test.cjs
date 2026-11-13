@@ -247,7 +247,7 @@ test('saved-text verification displays queued, running and delayed retry states 
   assert(html.includes('Сохранённый ответ'));assert(html.includes(' open='));
   assert(html.includes('aria-live="polite"'));
   assert(!html.includes('Готов к отправке'));
-  if(status==='running')assert(html.includes('до трёх минут'));
+  if(status==='running')assert(html.includes('Пройденные этапы сохраняются'));
  }
 });
 
@@ -295,4 +295,17 @@ test('switching stores safely renders the cleared marketplace overview while a n
  }
  const loaded=renderToStaticMarkup(React.createElement(Overview,{overview:{days:0,stores:[],totals:{reviews:15,reviews_unanswered:3,questions:2,questions_unanswered:1,reviews_drafts:4,questions_drafts:0}},busy:false,onPeriod(){},onSelect(){}}));
  assert(loaded.includes('15'));assert(loaded.includes('3'));
+});
+
+
+test('healthy continuation shows completed steps without claiming an outage or approval',()=>{
+ const quality={passed:false,owner_rules:{matched:5,status:'pending',technical_error:false,checked:false,passed:false,
+  continuation:true,verified_groups:2,semantic_groups:5,violations:[],issues:['Проверка продолжается.']}};
+ const html=render({recheck:async()=>{},ruleCheckJob:{status:'queued',result:{retry_at:0}},
+  review:{rating:4,text:'Есть вопрос по характеристикам',draft:{text:'Сохранённый ответ',quality,revision:7}}});
+ assert(html.includes('Проверено этапов: 2 из 5'));
+ assert(html.includes('Пройденные этапы и текст ответа сохранены'));
+ assert(!html.includes('Сервис не успел'));
+ assert(!html.includes('Замечания к тексту'));
+ assert(!html.includes('Готов к отправке'));
 });
