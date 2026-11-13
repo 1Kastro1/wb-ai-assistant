@@ -31,7 +31,7 @@ def queue_ordering():
     # Its next checkpoint refreshes last_served_at, so other work still runs.
     overdue_send = Job.kind.in_(('wb_publish_send', 'scheduled_publication', 'publication_reconcile')) & (served < cutoff)
     generation_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts')),
+    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts','review_library_audit')),
         (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
             Job.result['policy_regeneration'].as_boolean() == True,
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))
@@ -50,7 +50,9 @@ def queue_ordering():
     fresh_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
     fresh_due = (Job.kind.in_(('drafts','question_drafts')) &
         (Job.result['fresh_reviews'].as_boolean()==True) & (served < fresh_cutoff) & ~direct_waiting)
-    interactive = case((fresh_due, -3), (or_(overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
+    # Fresh work ages sooner, but shares the oldest-served band: three long
+    # fresh batches must never permanently exclude checks, archive or sends.
+    interactive = case((or_(fresh_due, overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (manual_check, 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)

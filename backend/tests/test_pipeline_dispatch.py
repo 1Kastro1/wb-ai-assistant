@@ -55,3 +55,21 @@ def test_verification_retry_budget_is_shared_by_exact_input():
     assert checkpoint_verdict(failure,previous,'same','now',manual=True)['check_failures']==1
     continued=checkpoint_verdict({**failure,'continuation':True},previous,'same','now')
     assert continued['check_failures']==0 and continued['retryable'] is True
+
+
+def test_continuous_fresh_batches_cannot_starve_archive_or_confirmed_sends():
+    from datetime import datetime,timezone,timedelta
+    from app.queue_policy import next_job
+    current=datetime.now(timezone.utc)
+    old=(current-timedelta(minutes=10)).isoformat()
+    fresh=(current-timedelta(seconds=40)).isoformat()
+    with Session() as db:
+        db.add_all([Job(id='archive',kind='review_library_audit',result={'last_served_at':old}),
+            Job(id='send',kind='scheduled_publication',result={'last_served_at':old}),
+            Job(id='fresh',kind='drafts',result={'fresh_reviews':True,'last_served_at':fresh})]);db.commit()
+        picked=set()
+        for _ in range(2):
+            job=next_job(db);picked.add(job.id)
+            job.result={**job.result,'last_served_at':current.isoformat()};db.commit()
+        assert picked=={'archive','send'}
+        assert next_job(db).id=='fresh'

@@ -1153,7 +1153,8 @@ async def run_sync_job(job_id):
         await run_slice(job_id, execute_job, session_factory=Session)
 
 
-async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft')):
+async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft',
+        'scheduled_publication','publication_reconcile','wb_publish_send')):
     from .pipeline_dispatch import parallel_slice
     if parallel_slice.get():
         # The outer check/audit owns one explicit I/O lane. Do not recursively
