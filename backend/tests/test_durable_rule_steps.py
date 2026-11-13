@@ -161,3 +161,18 @@ def test_semantic_group_keeps_greeting_and_signature_from_full_policy(monkeypatc
     payload=json.loads(model.await_args.args[0][-1]['content'])
     assert payload['required_style']['greeting']=='Добрый день!'
     assert payload['required_style']['signature']=='С уважением ГК Юником.'
+
+
+@pytest.mark.parametrize('text,missing',[
+    ('Работают, упаковано было хорошо. Разницу не заметил, может кто нагрузку мерял? Может там и нет 55?',False),
+    ('Вместо двух ламп пришла одна. Какая у неё мощность?',True),
+])
+def test_power_questions_keep_receipt_conditions_separate_from_product_facts(text,missing):
+    args=inputs();args['review'].text=text
+    rule='При недостаче предложи сверить комплектность. Не обещай компенсацию.'
+    messages,payload,schema,groups=prepare(args['review'],args['product'],[rule],args['facts'],args['reply'],check_only=True)
+    assert ('MISSING_PARTS' in payload['buyer_context']['complaints']) is missing
+    assert [r for group in groups for r in group]==[rule]
+    assert payload['verified_facts']==args['facts']
+    assert payload['buyer_context']['is_question']
+    if not missing:assert payload['buyer_context']['recognized_case']=='lamp_power_question'
