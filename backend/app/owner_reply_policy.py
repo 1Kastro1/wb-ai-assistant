@@ -336,14 +336,17 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             from .generation_budget import OWNER_RULE_CHECK_SECONDS
             budget = GenerationBudget(OWNER_RULE_CHECK_SECONDS if check_seconds is None else check_seconds)
             for attempt in range(2):
+                payload = {'buyer_message': review.text, 'rating': review.rating,
+                    'reply_kind': 'question' if (getattr(review, 'marketplace', '') or '').endswith('_question') else 'review',
+                    'product': product.name, 'verified_facts': facts, 'answer': adjusted,
+                    'required_style': {key: context_constraints(rules, review)[key] for key in ('greeting', 'greetings', 'signature')},
+                    'protected_answer': protected}
+                from .model_context import fitting_rule_groups
+                groups = fitting_rule_groups(rule_groups(semantic), messages[0], payload, CHECK_SCHEMA)
+                result['semantic_groups'] = len(groups)
                 result['verified_groups'] = 0
                 for group in groups:
-                    messages[-1]['content'] = json.dumps({'owner_rules': group,
-                        'buyer_message': review.text, 'rating': review.rating,
-                        'reply_kind': 'question' if (getattr(review, 'marketplace', '') or '').endswith('_question') else 'review',
-                        'product': product.name, 'verified_facts': facts, 'answer': adjusted,
-                        'required_style': {key: context_constraints(rules, review)[key] for key in ('greeting', 'greetings', 'signature')},
-                        'protected_answer': protected}, ensure_ascii=False)
+                    messages[-1]['content'] = json.dumps({**payload, 'owner_rules': group}, ensure_ascii=False)
                     check = await budget.run(lambda: ollama.structured(messages, CHECK_SCHEMA, task='OWNER_RULES',
                         **({'timeout_seconds': check_seconds} if check_seconds is not None else {})))
                     if (not isinstance(check, dict) or type(check.get('compliant')) is not bool

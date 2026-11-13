@@ -31,18 +31,28 @@ class OllamaProvider:
         body = {**ModelRouter().choose(task or ('FAST' if schema else 'STANDARD')), 'messages': messages, 'stream': False, 'think': False}
         # Cyrillic policy lists need substantially more tokens than English text.
         # Never silently truncate the beginning (system instructions / conditions).
-        estimated = sum(len(message.get('content', '').encode('utf-8')) for message in messages) // 3
-        needed = estimated + body['options']['num_predict'] + 512
-        if needed > 16384:
+        from .model_context import request_tokens, MAX_CONTEXT
+        needed = request_tokens(messages, schema, body['options']['num_predict'])
+        if needed > MAX_CONTEXT:
             raise ValueError('Правила слишком длинные для контекста модели; сократите повторы или область применения')
         body['options']['num_ctx'] = max(body['options']['num_ctx'], ((needed + 1023) // 1024) * 1024)
         if schema:
             body['format'] = schema
         from .generation_budget import OWNER_RULE_CHECK_SECONDS
         request_options = {'timeout_seconds': timeout_seconds if timeout_seconds is not None else OWNER_RULE_CHECK_SECONDS} if task == 'OWNER_RULES' else {}
-        result = await guard.request('ollama', 'chat', body=body, **request_options)
-        if result.get('prompt_eval_count', 0) >= body['options']['num_ctx'] - 8:
-            raise ValueError('Контекст модели переполнен; сократите повторяющиеся правила или их область применения')
+        from .generation_budget import GenerationBudget
+        budget = GenerationBudget(request_options['timeout_seconds']) if task == 'OWNER_RULES' else None
+        while True:
+            operation = lambda: guard.request('ollama', 'chat', body=body, **request_options)
+            result = await budget.run(operation) if budget else await operation()
+            if result.get('prompt_eval_count', 0) < body['options']['num_ctx'] - 8:
+                break
+            if task != 'OWNER_RULES' or body['options']['num_ctx'] >= MAX_CONTEXT:
+                raise ValueError('Контекст модели переполнен; сократите повторяющиеся правила или их область применения')
+            # Discard the possibly truncated verdict. Resend the complete input
+            # in a larger window under the same deadline, at most up to 16K.
+            body = {**body, 'options': {**body['options'],
+                'num_ctx': min(MAX_CONTEXT, body['options']['num_ctx'] * 2)}}
         content = result['message']['content']
         # Some installed Qwen templates include reasoning in content despite think=false.
         if '</think>' in content:
