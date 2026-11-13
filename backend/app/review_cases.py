@@ -34,6 +34,14 @@ def specific_review_case(review, product):
 
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
+    if ('ламп' in name and re.search(r'мощност|нагрузк|(?:там|есть)\s+и?\s*55', text)
+            and re.search(r'\?|разниц\w*\s+не\s+замет', text)
+            and not re.search(r'перестал\w*\s+работ|не\s+работ|дым|плав|сгор', text)):
+        detail = 'Приятно, что Вы отметили хорошую упаковку. ' if re.search(r'упакован\w*\s+(?:было\s+)?хорош|хорош\w*\s+упаков', text) else ''
+        return result('lamp_power_question', 'Ценим, что Вы подробно поделились опытом замены ламп. '+detail+
+            'Понимаем Ваш вопрос: после замены Вы не заметили ожидаемой разницы. '
+            'Подтвердить фактическую мощность по отзыву нельзя — для этого нужны проверенные данные измерений. '
+            'Не будем утверждать значение, которое не можем подтвердить.')
     if analysis.get('sprayer_replaced') and set(analysis['complaints']) & {'LEAKAGE','DAMAGED_ITEM','QUALITY_ISSUE'}:
         praise = 'Рады, что Вы отметили хороший результат очистки. ' if re.search(r'очища\w*\s+хорош|моет\s+хорош|отмыва\w*\s+хорош', text) else ''
         problems = ['поломку распылителя']

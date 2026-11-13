@@ -1,7 +1,7 @@
 'use client';
 import {useEffect,useState} from 'react';
 import AppIcon from './AppIcon';
-import ReviewPolicyCampaign from './ReviewPolicyCampaign';
+import {settingsDirty} from './SettingsEditor';
 import PublicationAutomation from './PublicationAutomation';
 import {scheduleValues,schedulePayload} from './automation-settings.mjs';
 import './automation-settings.css';
@@ -10,10 +10,12 @@ export default function AutomationSettings({schedule,onSave,busy=false,assistant
  const saved=scheduleValues(schedule),signature=JSON.stringify(saved);
  const [values,setValues]=useState<Row>(saved),[dirty,setDirty]=useState(false),[saving,setSaving]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
  useEffect(()=>{if(!dirty)setValues(JSON.parse(signature));},[signature,dirty]);
+ useEffect(()=>{settingsDirty('automation',dirty);return()=>settingsDirty('automation',false)},[dirty]);
+ useEffect(()=>{const reset=()=>{setValues(JSON.parse(signature));setDirty(false)};window.addEventListener('settings-discard',reset);return()=>window.removeEventListener('settings-discard',reset)},[signature]);
  const update=(change:Row)=>{setValues(current=>({...current,...change}));setDirty(true);setError('');setMessage('');};
- const enabled=saved.reviews_sync_enabled||saved.questions_sync_enabled||saved.drafts_enabled||saved.question_drafts_enabled||saved.publication_enabled;
+ const enabled=Boolean(schedule.enabled&&(saved.reviews_sync_enabled||saved.questions_sync_enabled||saved.drafts_enabled||saved.question_drafts_enabled||saved.publication_enabled));
  return <form className="automation-settings" onSubmit={async event=>{event.preventDefault();setError('');setMessage('');setSaving(true);try{await onSave(schedulePayload(values));setDirty(false);setMessage('Расписание сохранено на сервере.');}catch(error){setError(error instanceof Error?error.message:'Не удалось сохранить расписание. Повторите попытку.');}finally{setSaving(false);}}}>
-  <div className="automation-heading"><div><span className="automation-eyebrow">ВАШЕ РАСПИСАНИЕ</span><h2>Автоматизация</h2><p>Обновление данных и подготовка ответов без вашего участия.</p></div><span className={'automation-status '+(enabled?'is-on':'')}><i/>{enabled?'Работает в фоне':'На паузе'}</span></div>
+  <div className="automation-heading"><div><span className="automation-eyebrow">ВАШЕ РАСПИСАНИЕ</span><h2>Автоматизация</h2><p>Для всех подключённых магазинов. Обновление → подготовка → проверка → отправка.</p></div><span className={'automation-status '+(enabled?'is-on':'')}><i/>{enabled?'Расписание включено':'На паузе'}</span></div>
   <div className="automation-cards">{[
    {key:'reviews',title:'Отзывы',description:'Обновление отзывов и подготовка ответов покупателям.',icon:'Отзывы',sync:'reviews_sync_enabled',generation:'drafts_enabled',syncHours:'reviews_hours',generationHours:'drafts_hours'},
    {key:'questions',title:'Вопросы',description:'Обновление вопросов и подготовка ответов перед покупкой.',icon:'Вопросы',sync:'questions_sync_enabled',generation:'question_drafts_enabled',syncHours:'questions_hours',generationHours:'question_drafts_hours'},
@@ -33,7 +35,7 @@ export default function AutomationSettings({schedule,onSave,busy=false,assistant
   </section>)}</div>
   <label className="automation-history-scope"><input type="checkbox" checked={Boolean(values.drafts_all_history)} disabled={saving||busy} onChange={e=>update({drafts_all_history:e.target.checked})}/><span><b>Все отзывы без ответа</b><small>Генерация за всё время на подключённых маркетах, включая оценки 1–3★. Существующие ответы и ручные правки сохраняются.</small></span></label>
   <PublicationAutomation values={values} schedule={schedule} update={update} busy={saving||busy} dirty={dirty} assistantEnabled={assistantEnabled}/>
-  <ReviewPolicyCampaign/>
+
   <div className="automation-background"><span className="automation-background-icon"><AppIcon name="История действий"/></span><div><b>Продолжит работу, даже если закрыть сайт</b><p>Обновление данных, подготовка и включённая выгрузка выполняются на сервере. Если автоматическая выгрузка выключена, ответы сохраняются как черновики — отправка после вашего подтверждения.</p></div></div>
   <footer className="automation-footer"><span>{dirty?'Есть несохранённые изменения':'Отзывы и вопросы — каждое по своему расписанию'}</span><button className="primary" type="submit" disabled={saving||busy||!dirty}>{saving?'Сохраняем…':'Сохранить расписание'}</button></footer>
   {error&&<p className="automation-feedback error" role="alert">{error}</p>}{message&&<p className="automation-feedback" role="status">{message}</p>}

@@ -2,6 +2,7 @@
 import {useEffect,useState} from 'react';
 import {api} from './client';
 import './reply-library.css';
+import ReviewPolicyCampaign from './ReviewPolicyCampaign';
 type Row=Record<string,any>;
 const markets:Record<string,string>={yandex:'Яндекс Маркет',wb:'Wildberries',ozon:'Ozon'};
 const statuses:Record<string,string>={verified:'Подтверждён',verified_reference:'Проверенный образец',attention:'Нужно решение',retry:'Запланирован повтор',blocked:'Нужна настройка сервиса'};
@@ -39,7 +40,7 @@ export default function ReplyLibraryStatus({onRule,onOpen}:{onRule?:(rule:Row)=>
     {!loading&&!listError&&!rows.length&&<div className="empty">В этом разделе пока нет случаев.</div>}
     {!listError&&rows.map(item=><article className="card library-case" key={item.review_id}>
      <div className="card-heading"><small>{markets[item.marketplace]} · {item.rating} ★</small><span className="pill">{statuses[item.status]||item.status}</span></div><h3>{item.product}</h3><blockquote>{item.review_text||'Оценка без текста'}</blockquote>
-     {item.issues?.length>0&&<ul className="library-issues">{item.issues.map((issue:string,index:number)=><li key={index}>{issue}</li>)}</ul>}
+     {item.issues?.length>0&&<><small className="muted">{item.status==='retry'?'Причина предыдущей попытки — повтор запланирован':'Результат последней проверки'}</small><ul className="library-issues">{item.issues.map((issue:string,index:number)=><li key={index}>{issue}</li>)}</ul></>}
      {item.category==='publication'&&<p>Нужно сверить результат с маркетплейсом. Новое правило текста здесь не требуется.</p>}
      {item.suggestion&&<div className="library-suggestion"><b>{item.suggestion.enabled?'Правило включено':'Создан проект правила'}</b><p>{item.suggestion.text}</p>{onRule&&<button onClick={()=>onRule(item.suggestion)}>Открыть в правилах</button>}</div>}
      <details><summary>Ответ и история проверки</summary><p className="library-answer">{item.answer||'Текст ответа отсутствует'}</p><small>Попыток: {item.attempts} · {new Date(item.updated_at).toLocaleString('ru-RU')}{item.retry_at>0?' · повтор не раньше '+new Date(item.retry_at*1000).toLocaleString('ru-RU'):''}</small></details>
@@ -48,5 +49,6 @@ export default function ReplyLibraryStatus({onRule,onOpen}:{onRule?:(rule:Row)=>
     {total>20&&<div className="button-row"><button disabled={loading||offset===0} onClick={()=>setOffset(Math.max(0,offset-20))}>Назад</button><span>{offset+1}–{Math.min(offset+20,total)} из {number(total)}</span><button disabled={loading||offset+20>=total} onClick={()=>setOffset(offset+20)}>Далее</button></div>}
    </>}
   </div>
+  <details className="library-help card"><summary>Обновление сохранённых ответов по правилам</summary><ReviewPolicyCampaign/></details>
  </section>;
 }

@@ -9,16 +9,16 @@ export default function MarketplaceConnection({store,stores,name,connected,owner
   const items=[{kind:"products",label:"Товары",icon:"Товары",info:productSync},{kind:"reviews",label:"Отзывы",icon:"Отзывы",info:reviewSync},{kind:"questions",label:"Вопросы",icon:"Вопросы",info:questionSync}];
   return <div className="card marketplace-connection">
     <div className="card-heading"><div><h3>{name}</h3><p className="muted">Подключение активного магазина и обмен с маркетплейсом</p></div><span className={'pill '+(connected?'green':'amber')}>{connected?'Подключён':'Не подключён'}</span></div>
-    <label>Магазин<select value={stores.active||''} disabled={busy} onChange={e=>onSelect(e.target.value)}><option value="" disabled>Выберите магазин</option>{stores.items?.map((item:Row)=><option key={item.id} value={item.id}>{item.name} · {item.provider==='wb'?'Wildberries':item.provider==='ozon'?'Ozon':'Яндекс Маркет'}{item.can_operate===false?' · просмотр':''}</option>)}</select></label>
+    <p className="settings-scope">Для магазина «{store.name}». Другой магазин выбирается в боковом меню.</p>
     {owner&&<>
       {store.provider==='ozon'&&<label>Client-Id Ozon<input value={config.client_id??store.config?.client_id??''} onChange={e=>setConfig({...config,client_id:e.target.value})} placeholder="Client-Id кабинета"/></label>}
       {store.provider==='yandex'&&<label>Business ID Яндекс Маркета<input value={config.business_id??store.config?.business_id??''} onChange={e=>setConfig({...config,business_id:e.target.value})} placeholder="Числовой ID кабинета"/></label>}
       <label>API-ключ {name}<input type="password" autoComplete="off" value={token} onChange={e=>setToken(e.target.value)} placeholder={connected?'Ключ сохранён; введите новый для замены':'Вставьте API-ключ'}/></label>
-      <div className="connection-actions"><button className="primary" disabled={busy||!store.id||token.length<10||(store.provider==='ozon'&&!(config.client_id??store.config?.client_id))||(store.provider==='yandex'&&!(config.business_id??store.config?.business_id))} onClick={onSave}>{status.state==='working'&&status.kind==='token'?'Сохраняю…':'Сохранить подключение'}</button></div>
+      <div className="connection-actions"><button className="primary" disabled={busy||!store.id||token.length<10||(store.provider==='ozon'&&!(config.client_id??store.config?.client_id))||(store.provider==='yandex'&&!(config.business_id??store.config?.business_id))} onClick={onSave}>{status.state==='working'&&status.kind==='token'?'Сохраняю…':'Сохранить изменения'}</button></div>
     </>}
-    <div className="button-row"><button disabled={busy||!canManage||!connected} onClick={onTest}>{status.state==='working'&&status.kind==='test'?'Проверяю…':'Проверить соединение'}</button></div>
+    <p className="muted">Для сохранения подключения нужен ключ от 10 символов и идентификатор кабинета. Проверка связи доступна после подключения.</p><div className="button-row"><button disabled={busy||!canManage||!connected} onClick={onTest}>{status.state==='working'&&status.kind==='test'?'Проверяю…':'Проверить соединение'}</button></div>
     <section className="marketplace-sync" aria-label="Синхронизация магазина">
-      <div className="marketplace-sync-heading"><div><h3>Синхронизация</h3><p className="muted">Данные магазина в одном месте</p></div><span className="sync-live-label"><i/> Обновляется автоматически</span></div>
+      <div className="marketplace-sync-heading"><div><h3>Синхронизация</h3><p className="muted">Данные магазина в одном месте</p></div><span className="sync-live-label"><i/> Статус обновляется автоматически</span></div>
       <div className="marketplace-sync-grid">{items.map(({kind,label,icon,info}:Row)=>{
         const local=status.state==='working'&&status.kind===kind;
         const working=local||info.tone==='working';

@@ -63,7 +63,8 @@ def test_preview_generation_keeps_unknown_rules_but_omits_reviewed_other_categor
         db.add(Memory(id='conditional',kind='REVIEW_RULE',text=conditional));db.commit()
     result=client.post('/memory/preview',json={'text':custom,'example':'Приятный аромат','rating':5,'product_id':'p2','kind':'REVIEW_RULE'})
     assert result.status_code==200,result.text
-    prompt=writer.call_args.args[0][0]['content']
+    # Policies are structured user data in the bounded preparation request.
+    prompt='\n'.join(message['content'] for message in writer.call_args.args[0])
     assert custom in prompt and conditional not in prompt
 
 
