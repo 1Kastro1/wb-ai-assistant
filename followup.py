@@ -1,13 +1,15 @@
 """Requeue context errors, measure real examples, repair one untouched empty draft."""
 import asyncio
+import ast
+import inspect
 import json
 from sqlalchemy import select
 from app.db import Session, ReviewLibraryAuditRow, Review, Product, Draft
 from app.library_workspace import latest_job
 from app.reply_policy import generation_policy, has_reply_body
-from app.model_context import draft_messages, request_tokens
+from app.model_context import draft_messages, request_tokens, fitting_rule_groups
 from app.owner_reply_rules import matching_owner_rules
-from app.owner_reply_policy import context_constraints
+from app.owner_reply_policy import context_constraints, semantic_rules, rule_groups, CHECK_SCHEMA, enforce_owner_rules
 from app.services import review_verified_facts, generate_draft
 from app.rule_execution import select_rules
 from app.draft_audit import manually_edited
@@ -40,8 +42,18 @@ with Session() as db:
         row=db.get(ReviewLibraryAuditRow,(job.id,review.id))
         if row and row.status in ('retry','blocked'):
             row.status,row.retry_at='retry',-100+index
+        source=ast.parse(inspect.getsource(enforce_owner_rules))
+        system=next(ast.literal_eval(node.value.elts[0]) for node in ast.walk(source)
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='messages' for t in node.targets))
+        draft=db.scalar(select(Draft).where(Draft.review_id==review.id))
+        payload={'buyer_message':review.text,'rating':review.rating,'product':product.name,
+            'verified_facts':facts,'answer':review.existing_answer or (draft.text if draft else ''),
+            'reply_kind':'review','required_style':{key:context_constraints(rules,review)[key]
+                for key in ('greeting','greetings','signature')},'protected_answer':review.risk!='NORMAL'}
+        groups=fitting_rule_groups(rule_groups(semantic_rules(select_rules(rules,review,product)[0])),system,payload,CHECK_SCHEMA)
+        check_sizes=[request_tokens([system,{'role':'user','content':json.dumps({**payload,'owner_rules':group},ensure_ascii=False)+'\n/no_think'}],CHECK_SCHEMA) for group in groups]
         print({'case':label,'found':True,'preparation_tokens':request_tokens(messages,predict=768),
-               'full_rule_count':len(rules)},flush=True)
+               'full_rule_count':len(rules),'verification_groups':len(groups),'verification_tokens':check_sizes},flush=True)
     candidates=db.execute(select(Review,Draft).join(Product,Product.id==Review.product_id)
         .join(Draft,Draft.review_id==Review.id).where(Product.name.ilike('%AB5001%'),
             Review.is_answered==False)).all()
