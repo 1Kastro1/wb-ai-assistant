@@ -3186,3 +3186,12 @@ def export_reviews(auth: AUTH, db: DB):
 def review_library_status(auth: OWNER, db: DB):
     from .review_library_audit import report
     return report(db)
+
+
+@app.get('/review-library/cases')
+def review_library_cases(auth: OWNER, db: DB, view: str = 'attention',
+                         offset: int = Query(default=0, ge=0), limit: int = Query(default=20, ge=1, le=50)):
+    if view not in ('attention','retry','verified','history'):
+        raise HTTPException(422, 'Неизвестный раздел библиотеки')
+    from .library_workspace import cases
+    return cases(db,view,offset,limit)

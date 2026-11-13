@@ -1,7 +1,6 @@
 'use client';
 import {useState,useRef} from 'react';
 import {api} from './client';
-import ReplyLibraryStatus from './ReplyLibraryStatus';
 import {ruleTitle} from './presentation.mjs';
 
 type Row=Record<string,any>;
@@ -10,9 +9,9 @@ const scopes:Record<string,string>={global:'Все товары',brand:'Брен
 const kindLabels:Record<string,string>={REVIEW_RULE:'Для отзывов',QUESTION_RULE:'Для вопросов',GLOBAL_RULE:'Отзывы и вопросы (старое правило)'};
 const matchesKind=(item:Row,kind:RuleKind)=>!['REVIEW_RULE','QUESTION_RULE'].includes(item.kind)||item.kind===kind;
 
-export default function MemoryRules({items,products,owner,onRefresh,onPropose,onDelete,initialKind='REVIEW_RULE'}:{items:Row[];products:Row[];owner:boolean;onRefresh:()=>Promise<void>;onPropose:(text:string,scope:string,kind:RuleKind)=>Promise<void>;onDelete:(id:string)=>void;initialKind?:RuleKind}){
+export default function MemoryRules({items,products,owner,onRefresh,onPropose,onDelete,initialKind='REVIEW_RULE',initialSearch=''}:{items:Row[];products:Row[];owner:boolean;onRefresh:()=>Promise<void>;onPropose:(text:string,scope:string,kind:RuleKind)=>Promise<void>;onDelete:(id:string)=>void;initialKind?:RuleKind;initialSearch?:string}){
  const [audience,setAudience]=useState<RuleKind>(initialKind);
- const [ruleState,setRuleState]=useState('active'),[filter,setFilter]=useState('all'),[search,setSearch]=useState(''),[rule,setRule]=useState(''),[scopeKind,setScopeKind]=useState('global'),[target,setTarget]=useState('');
+ const [ruleState,setRuleState]=useState(initialSearch?'all':'active'),[filter,setFilter]=useState('all'),[search,setSearch]=useState(initialSearch),[rule,setRule]=useState(''),[scopeKind,setScopeKind]=useState('global'),[target,setTarget]=useState('');
  const [example,setExample]=useState(''),[rating,setRating]=useState(3),[product,setProduct]=useState(''),[result,setResult]=useState<Row|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const questions=audience==='QUESTION_RULE';
  const [success,setSuccess]=useState('');
@@ -37,7 +36,6 @@ export default function MemoryRules({items,products,owner,onRefresh,onPropose,on
  }
  return <section className="rules-workspace">
   <div className="section-title"><div><p className="eyebrow">ПРАВИЛА ВАШЕГО МАГАЗИНА</p><h1>Правила ответов</h1><p className="muted">Создавайте правила отдельно для отзывов и вопросов. Каждый раздел действует на Wildberries, Ozon и Яндекс Маркете. Область товара, бренда или категории выбирается независимо от типа ответа.</p></div><span className="pill">{sectionItems.filter(m=>m.enabled).length} действуют</span></div>
-  {owner&&!questions&&<ReplyLibraryStatus/>}
   <div className="segmented rule-kind-tabs" role="tablist" aria-label="Тип правил">
    {(['REVIEW_RULE','QUESTION_RULE'] as RuleKind[]).map(value=><button key={value} id={'rules-'+value} role="tab" aria-selected={audience===value} aria-pressed={audience===value} aria-controls="rule-kind-panel" disabled={busy} onClick={()=>changeAudience(value)}>{kindLabels[value]} <span className="pill">{items.filter(m=>matchesKind(m,value)&&m.enabled).length}</span></button>)}
   </div>
