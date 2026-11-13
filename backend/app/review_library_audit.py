@@ -159,7 +159,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
                 from .generation_control import FastPathUnavailable
                 options={'protected':review.risk!='NORMAL','check_only':True,'allow_fast_positive':True,
-                    'check_seconds':AUTO_RULE_CHECK_SECONDS}
+                    'check_seconds':AUTO_RULE_CHECK_SECONDS, 'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else None}
                 try:
                     checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
                         **options,local_only=bool(can_repair))

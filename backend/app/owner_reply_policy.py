@@ -5,7 +5,7 @@ import json
 import re
 from copy import deepcopy
 from functools import lru_cache
-from time import monotonic
+from time import monotonic, time
 
 from .plain_text import plain_text
 from .safety import mask_vin, validate_reply
@@ -230,7 +230,7 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
 
 async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=None,
                               allow_fast_positive=False, instruction='', local_only=False, check_only=False,
-                              defer_semantic=False):
+                              defer_semantic=False, previous_check=None):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
@@ -347,8 +347,26 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 from .model_context import fitting_rule_groups
                 groups = fitting_rule_groups(rule_groups(semantic), messages[0], payload, CHECK_SCHEMA)
                 result['semantic_groups'] = len(groups)
-                result['verified_groups'] = 0
-                for group in groups:
+                # Persist successful groups bound to every input and partition.
+                # Partial progress is never approval; all groups must pass.
+                progress_key = verification_key(adjusted, review, product, rules, facts, instruction,
+                    ModelRouter().choose('OWNER_RULES'))
+                partition = hashlib.sha256(json.dumps(groups, ensure_ascii=False).encode()).hexdigest()
+                prior = (previous_check or {}).get('group_progress') or {}
+                resume = (attempt == 0 and prior.get('version') == 1
+                    and prior.get('input') == progress_key and prior.get('partition') == partition
+                    and isinstance(prior.get('expires_at'), (int, float)) and prior['expires_at'] > time())
+                completed = set(prior.get('completed', [])) if resume else set()
+                completed = {i for i in completed if type(i) is int and 0 <= i < len(groups)}
+                progress = {'version': 1, 'input': progress_key, 'partition': partition,
+                    'expires_at': prior['expires_at'] if resume else time() + 86400,
+                    'completed': sorted(completed)}
+                result['group_progress'] = progress
+                result['verified_groups'] = len(completed)
+                result['resumed_groups'] = len(completed)
+                for index, group in enumerate(groups):
+                    if index in completed:
+                        continue
                     messages[-1]['content'] = json.dumps({**payload, 'owner_rules': group}, ensure_ascii=False)
                     check = await budget.run(lambda: ollama.structured(messages, CHECK_SCHEMA, task='OWNER_RULES',
                         **({'timeout_seconds': check_seconds} if check_seconds is not None else {})))
@@ -361,7 +379,9 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                         raise ValueError('Проверка не указала нарушенное правило')
                     if not check['compliant'] or check['violations']:
                         break
-                    result['verified_groups'] += 1
+                    completed.add(index)
+                    progress['completed'] = sorted(completed)
+                    result['verified_groups'] = len(completed)
                 if result['verified_groups'] == len(groups):
                     break
                 candidate = check['revised_answer'].strip()
