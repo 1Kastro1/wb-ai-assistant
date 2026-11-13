@@ -159,7 +159,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
                 from .generation_control import FastPathUnavailable
                 options={'protected':review.risk!='NORMAL','check_only':True,'allow_fast_positive':True,
-                    'check_seconds':AUTO_RULE_CHECK_SECONDS, 'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else None}
+                    'check_seconds':AUTO_RULE_CHECK_SECONDS, 'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else None, 'group_limit':1 if draft and not was_published else None}
                 try:
                     checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
                         **options,local_only=bool(can_repair))
@@ -243,7 +243,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
             db.commit()
             return {'status':('verified_reference' if was_published and replacement else 'verified') if tid else 'retry' if technical_check(quality) else
                 'blocked' if verdict.get('technical_error') else 'attention',
-                'input_key':key,'template_id':tid,'issues':quality.get('issues',[]),
+                'input_key':key,'template_id':tid,'issues':quality.get('issues',[]),'continuation':bool(verdict.get('continuation')),
                 'auto_repaired':bool(replacement and not was_published),'template_reused':template_reused}
     return await exclusive_generation(rid,verify,session_factory)
 
@@ -367,7 +367,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             learn_case = row.status=='attention'
             if not from_retry:stage['cursor']=rid
             if outcome['status'] in ('retry','blocked'):
-                delay=retry_delay(row.attempts) if outcome['status']=='retry' else 3600
+                delay=0 if outcome.get('continuation') else retry_delay(row.attempts) if outcome['status']=='retry' else 3600
                 row.retry_at=time.time()+delay
                 state.update(current_review=rid,detail='; '.join(row.issues)[:500])
             else:

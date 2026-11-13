@@ -28,7 +28,7 @@ def automatic_queue(db, account):
 def technical_check(quality):
     rules = (quality or {}).get('owner_rules') or {}
     return (rules.get('retryable') is not False and not rules.get('passed')
-            and bool(rules.get('technical_error') or rules.get('status') == 'error'))
+            and bool(rules.get('continuation') or rules.get('technical_error') or rules.get('status') == 'error'))
 
 
 def verification_failure(error):

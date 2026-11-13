@@ -237,7 +237,7 @@ async def _recheck_one(job_id, session_factory=Session):
                     assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
                     check_seconds=MANUAL_RULE_CHECK_SECONDS if state.get('manual_check') else
                         AUTO_RULE_CHECK_SECONDS if check_only else OWNER_RULE_CHECK_SECONDS,
-                    check_only=check_only, previous_check=previous,
+                    check_only=check_only, previous_check=previous, group_limit=1 if check_only else None,
                     allow_fast_positive=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
@@ -266,8 +266,8 @@ async def _recheck_one(job_id, session_factory=Session):
             from .rule_retry import technical_check, retry_delay
             failures = int(previous.get('check_failures',0)) + 1 if previous.get('input_key')==input_key else 1
             verdict = {**verdict, 'input_key': input_key, 'checked_at': now(),
-                'check_failures': failures if technical_check({'owner_rules':verdict}) else 0,
-                'retry_at': time.time()+retry_delay(failures) if technical_check({'owner_rules':verdict}) else 0}
+                'check_failures': failures if technical_check({'owner_rules':verdict}) and not verdict.get('continuation') else 0,
+                'retry_at': time.time() if verdict.get('continuation') else time.time()+retry_delay(failures) if technical_check({'owner_rules':verdict}) else 0}
             quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
@@ -302,9 +302,10 @@ async def _recheck_one(job_id, session_factory=Session):
             state['deferred'] = state.get('deferred',0) + 1
         elif retry:
             from .rule_retry import retry_delay
-            count = state.get('check_retries', 0) + 1
-            state.update(check_retries=count, retry_at=time.time() + retry_delay(count), last_served_at=now(),
-                         updated_at=now(), message='Сервис проверки не ответил; сохранённый текст ожидает повтора')
+            continuation = bool((draft.quality or {}).get('owner_rules', {}).get('continuation'))
+            count = 0 if continuation else state.get('check_retries', 0) + 1
+            state.update(check_retries=count, retry_at=time.time() + (0 if continuation else retry_delay(count)), last_served_at=now(),
+                         updated_at=now(), message='Проверка продолжается с сохранённого этапа' if continuation else 'Сервис проверки не ответил; сохранённый текст ожидает повтора')
             job.result, job.status = state, 'queued'
             db.commit()
             return
