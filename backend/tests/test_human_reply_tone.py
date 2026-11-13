@@ -76,6 +76,19 @@ def test_useful_uncertainty_and_safety_warning_are_preserved():
     assert not conversational_issues('По описанию нельзя определить причину. При дыме прекратите использование и обратитесь в сервис.')
 
 
+def test_product_facts_are_not_crowded_out_by_long_writing_rules():
+    import json
+    from app.model_context import draft_messages,request_tokens
+    from app.reply_policy import generation_policy
+    facts=[{'text':'Номинальная мощность AB5001: 55 Вт при 12 В.', 'source':'Карточка товара'}]
+    messages=draft_messages(generation_policy(),{'buyer_message':'Может там и нет 55?',
+        'required_style':{'signature':'С уважением ГК Юником.'}},['Пиши внимательно. '*30]*30,facts)
+    value=json.loads(messages[-1]['content'])
+    assert value['verified_facts']==facts
+    assert value['required_style']['signature']=='С уважением ГК Юником.'
+    assert len(value['owner_rules'])<30 and request_tokens(messages,predict=768)<6000
+
+
 def test_dry_verifier_rewrite_is_repaired_without_reusing_its_approval(client,monkeypatch):
     from app import services
     from app.db import Session, Product, Review, Memory

@@ -1,8 +1,10 @@
 import asyncio
 
 
-MODEL_GENERATION_SECONDS = 30
-OWNER_RULE_CHECK_SECONDS = 45
+# Observed CPU responses take ~68 seconds, with ~12 seconds for a cold load.
+# Keep a finite shared deadline; ordinary no-claims templates use no model.
+MODEL_GENERATION_SECONDS = 90
+OWNER_RULE_CHECK_SECONDS = 120
 AUTO_RULE_CHECK_SECONDS = 120
 MANUAL_RULE_CHECK_SECONDS = 180
 
