@@ -34,4 +34,6 @@ def prepare(review, product, rules, facts, answer, *, protected=False, check_onl
 def step_deadline(messages, schema, minimum):
     # Full evidence and whole rules remain present. Longer CPU prefill gets a
     # finite per-unit allowance, independent of the number of remaining groups.
-    return min(300, max(minimum, math.ceil(60 + request_tokens(messages, schema) / 40)))
+    # Measured on this CPU: 2605 actual prompt tokens took 209 seconds,
+    # plus 24 seconds for a short verdict. Include prefill and a safety margin.
+    return min(600, max(minimum, math.ceil(90 + request_tokens(messages, schema) / 25)))

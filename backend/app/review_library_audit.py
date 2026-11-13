@@ -122,6 +122,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
             product=db.get(Product,review.product_id)
             draft=db.scalar(select(Draft).where(Draft.review_id==rid))
             was_published=published(review)
+            audit_previous=db.get(ReviewLibraryAuditRow,(job_id,rid))
             answer=review.existing_answer if was_published else draft.text if draft else ''
             if publication_protected(db,review):return {'status':'attention','issues':['Сохранён статус публикации; требуется личная сверка']} 
             automatic=bool((db.get(Job,job_id).result or {}).get('automated_repair'))
@@ -159,7 +160,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                 from .generation_budget import AUTO_RULE_CHECK_SECONDS
                 from .generation_control import FastPathUnavailable
                 options={'protected':review.risk!='NORMAL','check_only':True,'allow_fast_positive':True,
-                    'check_seconds':AUTO_RULE_CHECK_SECONDS, 'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else None, 'group_limit':1 if draft and not was_published else None}
+                    'check_seconds':AUTO_RULE_CHECK_SECONDS, 'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else audit_previous.verification_progress if audit_previous else None, 'group_limit':1}
                 try:
                     checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
                         **options,local_only=bool(can_repair))
@@ -175,7 +176,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                         replacement=fast;checked=answer;verdict=proof
                     else:
                         checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,**options)
-            if (can_repair and replacement is None and not verdict.get('technical_error')
+            if (can_repair and replacement is None and not verdict.get('technical_error') and not verdict.get('continuation')
                 and (not answer.strip() or not verdict.get('passed') or not local_quality.get('passed'))
                 ):
                 from .auto_review_repair import repair
@@ -240,6 +241,14 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                     # never confer approval on another customer automatically.
                     remember(db,key,'reference',answer,verdict,source=rid,marketplace=review.marketplace)
                 tid=text_id(answer)
+            audit_record=db.get(ReviewLibraryAuditRow,(job_id,rid))
+            if verdict.get('group_progress') and not verdict.get('passed'):
+                if audit_record is None:
+                    audit_record=ReviewLibraryAuditRow(job_id=job_id,review_id=rid,status='retry')
+                    db.add(audit_record)
+                audit_record.verification_progress=verdict
+            elif audit_record is not None:
+                audit_record.verification_progress=None
             db.commit()
             return {'status':('verified_reference' if was_published and replacement else 'verified') if tid else 'retry' if technical_check(quality) else
                 'blocked' if verdict.get('technical_error') else 'attention',

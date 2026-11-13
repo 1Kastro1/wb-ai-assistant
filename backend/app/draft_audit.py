@@ -295,6 +295,13 @@ async def _recheck_one(job_id, session_factory=Session):
         retry = bool(check_only and draft and review and not review.is_answered and review.status != 'publishing'
                      and (not state.get('rule_change') or attempted)
                      and technical_check(draft.quality))
+        continuation=bool(retry and (draft.quality or {}).get('owner_rules',{}).get('continuation'))
+        if continuation:
+            state.update(check_retries=0,retry_at=0,last_served_at=now(),updated_at=now(),
+                message='Проверка продолжается с сохранённого этапа')
+            job.result,job.status=state,'queued'
+            db.commit()
+            return
         if retry and scan:
             if not state.get('technical_scan'):
                 from .rule_retry import enqueue
