@@ -14,10 +14,11 @@ def next_job(db, kinds=None):
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
     if setting(db,'review_library_maintenance',False):
         # Archive maintenance pauses automation, not an employee's explicit
-        # request for one draft/check. Publication/import batches stay paused.
+        # request for one draft/check. Explicitly authorized scheduled replies
+        # keep their own live consent and verification gates; imports stay paused.
         manual_check=(Job.kind=='draft_recheck') & (Job.result['manual_check'].as_boolean()==True) & Job.result['retry_draft_id'].as_string().is_not(None)
         direct=Job.kind.in_(('single_draft','single_question_draft')) & Job.result['requested_by'].as_string().is_not(None) & (Job.result['requested_by'].as_string()!='')
-        statement=statement.where(or_(Job.kind=='review_library_audit',
+        statement=statement.where(or_(Job.kind.in_(('review_library_audit','scheduled_publication','publication_reconcile')),
             direct,manual_check))
     if kinds is not None:
         statement = statement.where(Job.kind.in_(kinds))
