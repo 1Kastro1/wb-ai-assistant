@@ -327,6 +327,9 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 'If all applicable rules pass: compliant=true, violations=[], revised_answer="". '
                 'Otherwise: compliant=false, name specific violations in Russian and optionally return a corrected '
                 'Russian answer preserving verified facts, required style and safety warnings. '
+                'Preserve a warm conversational tone. Answer from supplied product specifications; '
+                'distinguish declared ratings from measurements. Do not replace facts with bureaucratic disclaimers '
+                'such as «не будем утверждать значение» or «нужны проверенные данные». '
                 'If safe repair is impossible leave revised_answer empty.')},
             {'role': 'user', 'content': ''},
         ]

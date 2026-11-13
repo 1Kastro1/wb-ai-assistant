@@ -13,7 +13,7 @@ class WarmReviewStyleTests(unittest.TestCase):
         for market in ('wb','ozon','yandex'):
             answer=positive_review_reply(self.review('Спасибо,очень довольна,долго его ждала и успела за 126р взять,чудесное качество.',market=market),p)
             self.assertIn('качеств',answer)
-            self.assertTrue('Желаем' in answer or 'Пусть' in answer)
+            self.assertTrue(any(word in answer for word in ('Желаем','Пусть','Пользуйтесь с удовольствием')))
             self.assertLess(len(answer.split()),85)
             for invented in ('быстрая доставка','выгодной','низкой цене','126','Татьяна','по инструкции'):
                 self.assertNotIn(invented,answer)

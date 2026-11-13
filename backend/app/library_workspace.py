@@ -1,7 +1,7 @@
-"""Read-only library views and deduplicated, inactive case-rule suggestions."""
+"""Library views and bounded case rules; activation requires owner opt-in."""
 import hashlib
 from sqlalchemy import select, func
-from .db import Job, Review, Draft, Product, Memory, Setting, ReviewLibraryAuditRow, now, set_setting
+from .db import Job, Review, Draft, Product, Memory, Setting, ReviewLibraryAuditRow, now, set_setting, setting
 
 GUIDANCE = (
     ('ответить именно на содержание', 'Отвечай на конкретные достоинства и каждое существенное замечание покупателя; общая благодарность не заменяет ответ по существу.'),
@@ -17,6 +17,8 @@ def latest_job(db):
 
 def category(issues):
     text = ' '.join(issues or []).lower()
+    if any(marker in text for marker in ('тайм-аут','timeout','контекст модели','сервис недоступен')):
+        return 'technical'
     if 'публикаци' in text or 'сверк' in text:
         return 'publication'
     if 'нет доступного' in text:
@@ -42,12 +44,29 @@ def suggest_case_rule(db, row, review):
     mid = 'case-rule-' + identity
     rule = db.get(Memory, mid)
     if rule is None:
+        # A bounded set of editorial instructions, never raw buyer/model prose.
+        # Do not grow a product policy indefinitely when retries cannot resolve it.
+        if (db.scalar(select(func.count()).select_from(Memory).where(
+                Memory.id.startswith('case-rule-'), Memory.scope=='product:'+review.product_id)) or 0) >= 5:
+            return None
         rule = Memory(id=mid, text='Разбор сложного отзыва. ' + ' '.join(instructions),
                       kind='REVIEW_RULE', scope='product:' + review.product_id, enabled=False)
         db.add(rule)
         db.flush()
         set_setting(db, 'memory-meta:' + mid, {'created_at': now(), 'created_by_name': 'Автоматический разбор',
             'automatic_suggestion': True, 'source_review_id': review.id})
+    meta = db.get(Setting, 'memory-meta:' + mid)
+    info = dict(meta.value or {}) if meta else {}
+    if (setting(db, 'auto_case_rules_enabled', False) and not rule.enabled
+            and info.get('automatic_suggestion') and not info.get('updated_at')
+            and not info.get('auto_activated_at')):
+        from .rule_change_recheck import snapshot, rule_changed
+        before = snapshot(rule)
+        rule.enabled = True
+        db.flush()
+        rule_changed(db, before, snapshot(rule))
+        set_setting(db, 'memory-meta:' + mid, {**info, 'auto_activated_at':now(),
+            'reason':'owner_authorized_case_learning', 'requires_fresh_verification':True})
     return rule
 
 

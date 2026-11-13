@@ -77,7 +77,8 @@ class SpecificReviewDetailsTests(unittest.TestCase):
         self.product.name = 'Масляный фильтр'
         self.review.text = 'Подошёл на ниссан ноут 2 поколения'
         answer = rule_reply(self.review, self.product)
-        self.assertIn('по Вашему опыту', answer)
+        self.assertIn('установка прошла удачно', answer)
+        self.assertNotIn('подойдёт', answer)
         self.assertNotIn('точно', answer)
 
     def test_five_star_positive_details_without_cleaning_instruction(self):

@@ -276,6 +276,12 @@ async def _recheck_one(job_id, session_factory=Session):
                 from .learned_reply_templates import remember_template
                 remember_template(db, review, product, rules, facts, draft)
             db.commit()
+            from .db import setting
+            if not question and not quality['passed'] and not technical_check(quality) and setting(db,'auto_case_rules_enabled',False):
+                from types import SimpleNamespace
+                from .library_workspace import suggest_case_rule
+                suggest_case_rule(db,SimpleNamespace(status='attention',issues=quality.get('issues',[])),review)
+                db.commit()
             return quality['passed']
     passed = await exclusive_generation(rid, operation, session_factory) if rid else False
     with session_factory() as db:

@@ -124,10 +124,54 @@ def rule_changed(db, before, after, actor_id=''):
             product = db.get(Product, pid)
             item['product_ids'] = [p.id for p in equivalent_products(db, product)] if product else [pid]
     version = policy_version(db)
+    rebase_library_audits(db, scopes, version)
     state = {'rule_scopes': scopes}
     accounts = db.scalars(select(Review.wb_account_id).join(Draft, Draft.review_id == Review.id).where(
         Review.is_answered == False, *scope_conditions(state)).distinct()).all()
     return [_queue(db, account, version, scopes, actor_id, 'memory') for account in accounts]
+
+
+def rebase_library_audits(db, scopes, version=None):
+    """Invalidate only affected checked rows; preserve cursors and other results.
+
+    Called in the policy transaction. A running inspection sees a changed input
+    key and retries; stage rewinding happens at the next selection boundary.
+    """
+    from .db import ReviewLibraryAuditRow
+    version = version or policy_version(db)
+    for job in db.scalars(select(Job).where(Job.kind=='review_library_audit',
+            Job.status.in_(('queued','running')), Job.cancel_requested==False).with_for_update()):
+        state = dict(job.result or {})
+        stages = [dict(s) for s in state.get('stages',[])]
+        indices = {(s['account_id'],s['marketplace']):i for i,s in enumerate(stages)}
+        # The audit includes published reference answers too; omit only the
+        # generic draft-publication filter, retaining SQL audience/scope filters.
+        candidates = db.execute(select(ReviewLibraryAuditRow,Review,Product)
+            .join(Review,Review.id==ReviewLibraryAuditRow.review_id)
+            .join(Product,Product.id==Review.product_id)
+            .where(ReviewLibraryAuditRow.job_id==job.id,
+                   *scope_conditions({'rule_scopes':scopes})[1:])).all()
+        touched = []
+        for row,review,product in candidates:
+            if not affected(db,review,product,{'rule_scopes':scopes}):continue
+            index = indices.get((review.wb_account_id,review.marketplace))
+            if index is None:continue
+            if row.status in ('verified','verified_reference','attention'):
+                field = 'verified' if row.status.startswith('verified') else 'attention'
+                for target in (state,stages[index]):
+                    target['checked']=max(0,target.get('checked',0)-1)
+                    target[field]=max(0,target.get(field,0)-1)
+            if row.status=='removed':continue
+            row.status='retry';row.retry_at=0;row.input_key='';row.template_id=''
+            touched.append(index)
+        if touched:
+            state['policy_rewind_stage']=min([state.get('stage',0),*touched,
+                                             state.get('policy_rewind_stage',state.get('stage',0))])
+        state.update(policy_version=version,stages=stages,retry_at=0,
+            template_done=False,template_cursor='',policy_updated_at=now(),
+            message='Правила обновлены: затронутые ответы поставлены на новую проверку; отправка не включалась.')
+        job.result=state
+        job.progress=min(99,round(state.get('checked',0)*100/max(1,state.get('total',1))))
 
 
 def enqueue_draft(db, draft, review, actor_id=''):

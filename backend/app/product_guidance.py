@@ -39,7 +39,7 @@ def positive_detail(text):
     elif any(x in value for x in ('отработал', 'работает', 'рабочими')):
         details.append('Вы довольны работой товара')
     if any(x in value for x in ('подош', 'встали как родные', 'установился', 'установка', 'подходит', 'встал отлично')) and not re.search(r'(?<!\w)не\s+подош|не\s+установ', value):
-        details.append('установка прошла успешно по Вашему опыту')
+        details.append('установка прошла удачно')
     if re.search(r'(?:хорош\w*|отличн\w*|высок\w*|чудесн\w*|прекрасн\w*|превосходн\w*)\s+качеств|качеств\w*\s+(?:хорош|отличн|чудесн|прекрасн)|качественн\w*|на совесть', value) and not re.search(r'некачеств|не\s+качеств', value):
         details.append('Вы оценили качество товара')
     if 'соответствует описанию' in value or 'как в описании' in value:
@@ -81,14 +81,17 @@ def positive_review_reply(review, product, revision=0):
     analysis = analyze_customer_message(review.text, review.rating)
     if not review.text.strip() or review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed') or analysis['is_question']:
         return None
-    thanks = ['Спасибо за Ваш отзыв.', 'Благодарим за обратную связь.', 'Спасибо за Вашу оценку.'][int(revision) % 3]
+    thanks = ['Спасибо, что поделились впечатлениями!', 'Спасибо за добрые слова!', 'Спасибо за Ваш отзыв!'][int(revision) % 3]
     detail = positive_detail(review.text)
     if untested_review(review.text) and not detail:
         detail = 'Будем рады Вашим впечатлениям после использования.'
     if re.search(r'запаха нет|нет запаха|нейтральн', review.text.lower()):
         detail = 'Вы отметили нейтральный запах товара.'
     # A short wish adds warmth without inventing an effect or promising a result.
-    closing = ('Желаем приятного использования!', 'Надеемся, покупка будет Вам полезна!')[int(revision) % 2]
+    closing = ('Пользуйтесь с удовольствием!', 'Пусть покупка радует Вас!')[int(revision) % 2]
+    if untested_review(review.text):
+        thanks = 'Спасибо, что написали!'
+        closing = 'Надеемся, покупка будет Вам полезна!'
     if 'аромат Вам понравился' in detail:
         closing = 'Пусть аромат и дальше радует Вас!'
     return 'Здравствуйте! ' + thanks + (' ' + detail if detail else '') + ' ' + closing

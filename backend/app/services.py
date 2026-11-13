@@ -34,7 +34,7 @@ MIN_DRAFT_QUALITY = 96
 MAX_GENERATION_ATTEMPTS = 5
 MIN_AI_CANDIDATES = 3
 QUESTION_GENERATION_SECONDS = 105
-QUALITY_EVALUATOR_VERSION = '4.5-warm-body'
+QUALITY_EVALUATOR_VERSION = '4.6-human-tone'
 WEB_FACT_MAX_AGE_DAYS = 30
 
 
@@ -58,6 +58,8 @@ def local_product_facts(db, product):
             result.append(fact)
     from .steam_deo_guidance import reviewed_steam_facts
     result.extend(fact for fact in reviewed_steam_facts(product) if fact not in result)
+    from .lamp_specifications import lamp_specifications
+    result.extend(fact for fact in lamp_specifications(product)['facts'] if fact not in result)
     return prefer_manufacturer_instructions([{**fact, 'text': plain_text(fact.get('text', ''))} for fact in result])
 
 
@@ -92,7 +94,10 @@ def review_verified_facts(db, review, product, rules=None):
         holder=review_vent_holder(db,review,product)
         if holder:verified_facts=verified_facts+[holder]
     verified_facts += owner_business_facts(product, rules)
-    return verified_facts
+    unique = {}
+    for fact in verified_facts:
+        unique.setdefault(json.dumps(fact,ensure_ascii=False,sort_keys=True,default=str),fact)
+    return list(unique.values())
 
 
 def draft_public(db, draft, actors=None, rules=None):
@@ -1161,8 +1166,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
     # requires a current, successful owner-rule verdict.
-    from .reply_policy import has_reply_body
-    repaired_empty_reply = not has_reply_body(reply)
+    from .reply_policy import has_reply_body, conversational_issues
+    repaired_empty_reply = not has_reply_body(reply) or bool(conversational_issues(reply))
     if repaired_empty_reply:
         # A failed/destructive style rewrite must not replace a saved answer
         # with a greeting and signature. Prepare content, but never inherit the
