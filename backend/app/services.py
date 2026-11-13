@@ -1162,7 +1162,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     # several full checker deadlines on the same review. Publication still
     # requires a current, successful owner-rule verdict.
     from .reply_policy import has_reply_body
-    if not has_reply_body(reply):
+    repaired_empty_reply = not has_reply_body(reply)
+    if repaired_empty_reply:
         # A failed/destructive style rewrite must not replace a saved answer
         # with a greeting and signature. Prepare content, but never inherit the
         # verdict for a different text or publish an unchecked replacement.
@@ -1204,7 +1205,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     review.status = 'manual_review' if review.manual or not quality['passed'] or model.startswith('safety-fallback') else 'draft_ready'
     from .rule_retry import technical_check, enqueue
     from .generation_control import batch_context
-    if technical_check(quality) and not (batch_context.get() or {}).get('suppress_rule_retry'):
+    if (technical_check(quality) or (repaired_empty_reply and not quality['owner_rules'].get('checked'))) and not (batch_context.get() or {}).get('suppress_rule_retry'):
         db.flush()
         enqueue(db, draft, review)
     if not requested_instruction.strip():

@@ -3,7 +3,8 @@ import re
 from unittest.mock import AsyncMock
 import pytest
 from app import services
-from app.db import Session, Product, Review, Memory
+from app.db import Session, Product, Review, Memory, Job
+from sqlalchemy import select
 from app.reply_policy import generation_policy, has_reply_body
 from app.model_context import draft_messages, request_tokens
 
@@ -46,3 +47,4 @@ def test_destructive_verifier_never_saves_a_bare_greeting(client, monkeypatch):
         assert not re.search(r'55\s*(?:Вт|ватт)',draft['text'])
         assert not draft['quality']['owner_rules']['checked'] and not draft['quality']['passed']
         assert draft['text'].endswith('С уважением ГК Юником.')
+        assert db.scalar(select(Job).where(Job.kind=='draft_recheck')) is not None
