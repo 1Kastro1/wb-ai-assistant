@@ -151,6 +151,7 @@ class Review(Base):
     sections: Mapped[dict] = mapped_column(JSON, default=dict, server_default='{}')
     created_at: Mapped[str] = mapped_column(String, default=now)
     is_answered: Mapped[bool] = mapped_column(Boolean, default=False)
+    received_at: Mapped[str] = mapped_column(String, default=now, server_default='', index=True)
     existing_answer: Mapped[str] = mapped_column(Text, default='')
     status: Mapped[str] = mapped_column(String, default='unanswered')
     risk: Mapped[str] = mapped_column(String, default='NORMAL')
@@ -210,6 +211,7 @@ class Publication(Base):
     action_id: Mapped[str] = mapped_column(String)
     scheduled_job_id: Mapped[str] = mapped_column(String, default='', server_default='', index=True)
     status: Mapped[str] = mapped_column(String)
+    confirmed_at: Mapped[str] = mapped_column(String, default='', server_default='', index=True)
 
 
 class Memory(Base):

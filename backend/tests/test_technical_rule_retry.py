@@ -22,6 +22,23 @@ def seed_error(rating=5, **extra):
         db.commit()
 
 
+def test_one_manual_request_cannot_retry_model_failure_forever(monkeypatch):
+    seed_error()
+    async def unavailable(answer,*args,**kwargs):
+        return answer,{'checked':False,'passed':False,'technical_error':True,'retryable':True,'issues':['timeout']}
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',unavailable)
+    with Session() as db:
+        job=enqueue(db,db.get(Draft,'d'),db.get(Review,'r'),manual=True);jid=job.id;db.commit()
+    for _ in range(5):
+        with Session() as db:
+            job=db.get(Job,jid);job.result={**job.result,'retry_at':0};db.commit()
+        asyncio.run(recheck_step(jid))
+    with Session() as db:
+        draft=db.get(Draft,'d');verdict=draft.quality['owner_rules']
+        assert verdict['check_failures']==5 and verdict['retryable'] is False
+        assert not draft.quality['passed'] and draft.revision==7
+
+
 def test_outage_is_separate_from_personal_review_and_preserves_low_rating(client):
     seed_error()
     assert client.get('/reviews/page', params={'manual_only': True}).json()['total'] == 0
@@ -149,7 +166,7 @@ def test_outage_in_scan_gets_independent_retry_and_does_not_block_next_review(cl
         assert db.get(Draft,'d').text=='Добрый день! Спасибо за отзыв.'
 
 
-def test_transient_verification_exceptions_have_no_overall_attempt_limit(client,monkeypatch):
+def test_transient_verification_exceptions_stop_without_losing_saved_text(client,monkeypatch):
     seed_error()
     from app import main,draft_audit
     async def unavailable(*a,**k): raise TimeoutError('model unavailable')
@@ -159,8 +176,9 @@ def test_transient_verification_exceptions_have_no_overall_attempt_limit(client,
         job.max_attempts=1;job.result={**job.result,'failure_attempts':100};jid=job.id;db.commit()
     asyncio.run(main.execute_job(jid))
     with Session() as db:
-        assert db.get(Job,jid).status=='queued'
+        assert db.get(Job,jid).status=='failed'
         assert db.get(Job,jid).result['failure_attempts']==101
+        assert db.get(Draft,'d').text=='Добрый день! Спасибо за отзыв.'
 
 
 def test_endpoint_rejects_other_store_and_published_draft(client, monkeypatch):
@@ -196,7 +214,7 @@ def test_manual_click_resumes_backoff_without_duplicate_or_approval(client, monk
     with Session() as db:
         job = db.get(Job, jid)
         assert job.result['retry_at'] == 0 and job.result['manual_check'] is True
-        assert job.result['check_retries'] == 9
+        assert job.result['check_retries'] == 0  # a new explicit request gets a fresh finite budget
         assert next_job(db).id == jid
         assert db.get(Draft, 'd').quality['owner_rules']['passed'] is False
         assert db.get(Draft, 'd').revision == 7

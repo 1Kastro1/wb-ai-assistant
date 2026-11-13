@@ -75,6 +75,9 @@ def candidate_query(store_id, schedule, cursor=None):
         or_(*kinds) if kinds else False,
         ~select(Publication.id).where(Publication.review_id == Review.id,
             Publication.status != 'retryable').correlate(Review).exists())
+    # Exclude known unsupported cases before scanning, not thousands of times
+    # in the send loop. The provider's actual publication guard remains intact.
+    query = query.where(~and_(Review.marketplace == 'ozon', func.trim(Review.text) == ''))
     if cursor:
         query = query.where(or_(Review.created_at < cursor[0],
             and_(Review.created_at == cursor[0], Review.id < cursor[1])))
@@ -241,13 +244,25 @@ async def run_step(job_id, session_factory=Session):
             # Its unique reservation blocks that review, not unrelated replies.
             from .publication_reconciliation import enqueue_due
             enqueue_due(db)
-            review = db.scalar(candidate_query(state['account_id'], schedule, state.get('cursor')).limit(1))
+            # Approval time has its own cursor: a newly verified old review
+            # must not wait behind the remaining archive scan.
+            checked_at=Draft.quality['owner_rules']['checked_at'].as_string()
+            fresh=candidate_query(state['account_id'],schedule).order_by(None).where(checked_at>=job.created_at)
+            ready_cursor=state.get('ready_cursor')
+            if ready_cursor:
+                fresh=fresh.where(or_(checked_at>ready_cursor[0],and_(checked_at==ready_cursor[0],Review.id>ready_cursor[1])))
+            review=db.scalar(fresh.order_by(checked_at,Review.id).limit(1))
+            from_ready=review is not None
+            if review is None:
+                review = db.scalar(candidate_query(state['account_id'], schedule, state.get('cursor')).limit(1))
             if not review:
                 finish(db, job, schedule, 'Выгрузка завершена. Новые готовые ответы попадут в следующий запуск.')
                 return
             cursor = [review.created_at, review.id]
             review_id = review.id
             draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
+            if from_ready:
+                ready_cursor=[draft.quality['owner_rules']['checked_at'],review.id]
             recover_positive_verdict(db, review, draft)
             reason = eligibility_reason(db, review, draft, schedule)
             if reason and ('правил' in reason or 'проверку текста' in reason):
@@ -273,13 +288,19 @@ async def run_step(job_id, session_factory=Session):
             job = db.get(Job, job_id)
             outcome = db.scalar(select(Publication.status).where(Publication.review_id == review_id,
                 Publication.scheduled_job_id == job_id)) if aid else None
-            job.result = {**job.result, 'cursor': cursor, 'scanned': int((job.result or {}).get('scanned', 0)) + 1,
+            reasons=dict((job.result or {}).get('skip_reasons') or {})
+            if reason:
+                reason_key=reason[:160] if reason[:160] in reasons or len(reasons)<20 else 'Другие причины'
+                reasons[reason_key]=int(reasons.get(reason_key,0))+1
+            job.result = {**job.result, 'cursor': state.get('cursor') if from_ready else cursor,
+                'ready_cursor':ready_cursor, 'scanned': int((job.result or {}).get('scanned', 0)) + 1,
                 'processed': int((job.result or {}).get('scanned', 0)) + 1,
                 'published': int((job.result or {}).get('published', 0)) + int(outcome == 'published'),
                 'uncertain': int((job.result or {}).get('uncertain', 0)) + int(outcome in ('in_flight', 'uncertain', 'mismatch')),
                 'skipped': int((job.result or {}).get('skipped', 0)) + int(bool(reason)),
                 'last_reason': reason, 'updated_at': now(), 'last_served_at': now(),
-                'message': 'Публикуем готовые ответы на сервере'}
+                'message': 'Ответ передан на публикацию' if aid and not reason else 'Проверяем готовность ответов к отправке',
+                'skip_reasons':reasons}
             job.status = 'cancelled' if job.cancel_requested else 'queued'
             db.commit()
             if job.status in ('completed', 'cancelled') or time.monotonic() - started >= 15:

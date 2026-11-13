@@ -264,10 +264,10 @@ async def _recheck_one(job_id, session_factory=Session):
             # One shared result/backoff for this exact saved text, policy and
             # context, regardless of which automatic scan encounters it next.
             from .rule_retry import technical_check, retry_delay
-            failures = int(previous.get('check_failures',0)) + 1 if previous.get('input_key')==input_key else 1
-            verdict = {**verdict, 'input_key': input_key, 'checked_at': now(),
-                'check_failures': failures if technical_check({'owner_rules':verdict}) and not verdict.get('continuation') else 0,
-                'retry_at': time.time() if verdict.get('continuation') else time.time()+retry_delay(failures) if technical_check({'owner_rules':verdict}) else 0}
+            from .rule_retry import checkpoint_verdict
+            final_key=verification_key(answer,review,product,rules,facts)
+            verdict = checkpoint_verdict(verdict, previous, final_key, now(),
+                manual=bool(state.get('manual_check') and not state.get('check_retries')))
             quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
@@ -277,7 +277,7 @@ async def _recheck_one(job_id, session_factory=Session):
                 remember_template(db, review, product, rules, facts, draft)
             db.commit()
             from .db import setting
-            if not question and not quality['passed'] and not technical_check(quality) and setting(db,'auto_case_rules_enabled',False):
+            if not question and not quality['passed'] and not verdict.get('technical_error') and not technical_check(quality) and setting(db,'auto_case_rules_enabled',False):
                 from types import SimpleNamespace
                 from .library_workspace import suggest_case_rule
                 suggest_case_rule(db,SimpleNamespace(status='attention',issues=quality.get('issues',[])),review)

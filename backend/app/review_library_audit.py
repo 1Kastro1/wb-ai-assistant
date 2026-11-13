@@ -1,4 +1,4 @@
-"""Sequential, checkpointed audit; no imports, publication or rewriting saved replies."""
+"""Checkpointed archive audit with bounded, fair slices across stores."""
 import asyncio
 import time
 from types import SimpleNamespace
@@ -33,15 +33,8 @@ def start(db):
     if active:return active
     schedule=normalize_schedule(setting(db,'automation_schedule',{}))
     before=dict(schedule)
-    for field in ('enabled','reviews_sync_enabled','questions_sync_enabled','sync_enabled','drafts_enabled',
-                  'question_drafts_enabled','publication_enabled','auto_propose'):
-        schedule[field]=False
-    set_setting(db,'automation_schedule',normalize_schedule(schedule))
-    set_setting(db,'safe_mode',True)
-    for old in db.scalars(select(Job).where(Job.status.in_(('queued','running')))):
-        old.cancel_requested=True
-        old.status='cancelled'
-        old.result={**(old.result or {}),'stopped_for_library_audit':now()}
+    # Starting an archive scan must not revoke the owner's independent schedule
+    # or discard running imports/checks/publications. Each reply keeps its gates.
     stages=[]
     for market in ORDER:
         stores=list(db.scalars(select(StoreProfile).where(StoreProfile.provider==market).order_by(StoreProfile.id)))
@@ -52,11 +45,11 @@ def start(db):
                 'cursor':'','checked':0,'verified':0,'attention':0})
     library=migrate_legacy(db)
     job=Job(id=str(uuid4()),kind=KIND,priority=1,max_attempts=1000000,result={
-        'stages':stages,'stage':0,'checked':0,'verified':0,'attention':0,
+        'stages':stages,'stage':0,'checked':0,'verified':0,'attention':0,'fair_markets':True,
         'total':sum(s['total'] for s in stages),'account_id':stages[0]['account_id'] if stages else '',
         'policy_version':policy_version(db),'schedule_before':before,'library':library,
         'automated_repair':True,'repair_version':REPAIR_VERSION,
-        'message':'Последовательная проверка: Яндекс Маркет → Wildberries → Ozon'})
+        'message':'Проверка архива порциями: Яндекс Маркет, Wildberries и Ozon'})
     db.add(job)
     set_setting(db,MAINTENANCE,True)
     return job
@@ -136,10 +129,15 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
             local_quality=assess(answer)
             defects=list(dict.fromkeys([*((local_quality.get('issues') or []) if not local_quality.get('passed') else []),*local_issues(answer,rules,review)]))
             learned=None if defects else load_template(db,review,product,rules,facts,assess,exact_answer=answer)
+            saved_proof=((draft.quality or {}).get('owner_rules') or {}) if draft and not was_published else {}
+            cached=bool(not defects and saved_proof.get('input_key')==key and saved_proof.get('checked') is True
+                and saved_proof.get('passed') is True and not saved_proof.get('technical_error') and not saved_proof.get('issues'))
+            if cached:
+                learned=(answer,saved_proof)
             replacement=None
             from .draft_audit import manually_edited
             can_repair=automatic and (was_published or (draft and not manually_edited(draft)))
-            if can_repair:
+            if can_repair and not cached:
                 matched=load_template(db,review,product,rules,facts,assess)
                 if matched:
                     learned=matched
@@ -147,7 +145,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                         replacement=(matched[0],{**attach_rule_quality(assess(matched[0]),matched[1]),
                             'automatic_repair':{'version':'verified-template-reuse-1','case':'matched_template'}})
             if templates_only and not learned:return {'status':'unmatched'}
-            template_reused=bool(learned)
+            template_reused=bool(learned) and not cached
             if learned:checked,verdict=learned
             elif defects:
                 # A known local failure is sufficient to reject a saved reply.
@@ -216,7 +214,9 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                 key=verification_key(answer,review,product,fresh_rules,fresh_facts)
             if checked!=answer and not replacement:
                 verdict={**verdict,'passed':False,'checked':False,'issues':['Проверка предложила изменение; исходный текст сохранён']}
-            verdict={**verdict,'input_key':key,'checked_at':now()}
+            from .rule_retry import checkpoint_verdict
+            previous=(audit_previous.verification_progress or {}) if audit_previous else saved_proof
+            verdict=checkpoint_verdict(verdict,previous,key,now())
             quality=attach_rule_quality(assess(answer),verdict)
             if template_reused:
                 quality['template_reuse']={'source':verdict.get('template_source',''),
@@ -242,7 +242,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                     remember(db,key,'reference',answer,verdict,source=rid,marketplace=review.marketplace)
                 tid=text_id(answer)
             audit_record=db.get(ReviewLibraryAuditRow,(job_id,rid))
-            if verdict.get('group_progress') and not verdict.get('passed'):
+            if (verdict.get('group_progress') or verdict.get('technical_error')) and not verdict.get('passed'):
                 if audit_record is None:
                     audit_record=ReviewLibraryAuditRow(job_id=job_id,review_id=rid,status='retry')
                     db.add(audit_record)
@@ -251,6 +251,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
                 audit_record.verification_progress=None
             db.commit()
             return {'status':('verified_reference' if was_published and replacement else 'verified') if tid else 'retry' if technical_check(quality) else
+                'technical_attention' if verdict.get('technical_error') and verdict.get('failure_code')=='retry_exhausted' else
                 'blocked' if verdict.get('technical_error') else 'attention',
                 'input_key':key,'template_id':tid,'issues':quality.get('issues',[]),'continuation':bool(verdict.get('continuation')),
                 'auto_repaired':bool(replacement and not was_published),'template_reused':template_reused}
@@ -323,6 +324,20 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                 job.status='failed';job.result={**state,'message':'Правила изменены. Нужен новый полный проход; старые шаблоны не одобряют новые правила.'};db.commit();return
             stages=[dict(s) for s in state['stages']];index=state['stage']
             if index>=len(stages):
+                unfinished=next((i for i,s in enumerate(stages) if not s.get('scan_finished') and not s.get('completed_at')),None)
+                if state.get('fair_markets') and unfinished is not None:
+                    state.update(stage=unfinished,account_id=stages[unfinished]['account_id'],retry_at=0)
+                    job.status,job.result='queued',state;db.commit();return
+                waiting=db.execute(select(Review.wb_account_id,func.min(ReviewLibraryAuditRow.retry_at),func.count())
+                    .join(ReviewLibraryAuditRow,ReviewLibraryAuditRow.review_id==Review.id).where(
+                        ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.status.in_(('retry','blocked')))
+                    .group_by(Review.wb_account_id)).all()
+                if waiting:
+                    account,earliest,_=min(waiting,key=lambda row:row[1])
+                    resume=next(i for i,s in enumerate(stages) if s['account_id']==account)
+                    state.update(stage=resume,account_id=account,deferred=sum(row[2] for row in waiting),retry_at=max(time.time()+1,earliest),
+                        message='Ожидаем повторной проверки сохранённых текстов; новые отзывы и выгрузка продолжаются независимо.')
+                    job.status,job.result='queued',state;db.commit();return
                 from .verified_reply_library import statistics
                 checks=selfcheck(db,job_id,stages)
                 state.update(selfcheck=checks,library=statistics(db),completed_at=now(),message='Все площадки проверены. Действуют текущие настройки автоматизации владельца.')
@@ -346,13 +361,14 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             from_retry=due is not None
             rid=due.review_id if due else new_rid
             if not rid:
+                stage['scan_finished']=True
                 remaining=db.scalar(select(func.count()).select_from(pending.subquery())) or 0
                 if remaining:
-                    earliest=db.scalar(pending.with_only_columns(func.min(ReviewLibraryAuditRow.retry_at)))
-                    state.update(deferred=remaining,retry_at=max(time.time()+1,earliest or time.time()+60),
-                        message=f"{stage['marketplace']}: проверено {stage['checked']} из {stage['total']}; ожидают повтора {remaining}. Следующий маркет не запущен.")
-                    job.status,job.result='queued',state;db.commit();return
-                stage['completed_at']=now();state.update(stages=stages,stage=index+1,deferred=0,retry_at=0,
+                    state.update(stages=stages,stage=index+1,retry_at=0,
+                        account_id=stages[index+1]['account_id'] if index+1<len(stages) else stage['account_id'],
+                        message=f"{stage['marketplace']}: ожидают повтора {remaining}. Продолжаем следующую площадку.")
+                    job.result=state;db.commit();continue
+                stage['completed_at']=now();state.update(stages=stages,stage=index+1,retry_at=0,
                     account_id=stages[index+1]['account_id'] if index+1<len(stages) else stage['account_id'])
                 job.result=state;db.commit();continue
         if from_retry:retried=True
@@ -386,7 +402,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                 if not final_before:
                     for target in (stage,state):
                         target['checked']=target.get('checked',0)+1
-                        field='verified' if outcome['status'] in ('verified','verified_reference') else 'attention'
+                        field='verified' if outcome['status'] in ('verified','verified_reference') else 'technical' if outcome['status']=='technical_attention' else 'attention'
                         target[field]=target.get(field,0)+1
                         if outcome['status']=='verified_reference':target['corrected_references']=target.get('corrected_references',0)+1
                         if outcome.get('auto_repaired'):target['auto_repaired']=target.get('auto_repaired',0)+1
@@ -399,6 +415,9 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
                 message=f"{stage['marketplace']}: проверено {stage['checked']} из {stage['total']}, подтверждено {stage['verified']}, требуют внимания {stage['attention']}, ожидают повтора {deferred}")
             job.progress=min(99,round(state['checked']*100/max(1,state['total'])))
             yielding=time.monotonic()-started>=seconds or iteration==limit-1
+            if yielding and state.get('fair_markets') and stages:
+                next_index=(state['stage']+1)%len(stages)
+                state.update(stage=next_index,account_id=stages[next_index]['account_id'])
             job.result=state;job.status='queued' if yielding else 'running';db.commit()
         if learn_case:
             # Keep policy learning after the result commit: its scoped audit
@@ -429,11 +448,12 @@ async def sweep_templates(job_id,session_factory=Session,limit=24,seconds=4):
         state=job.result or {}
         if state.get('policy_version')!=policy_version(db) or state['stage']>=len(state['stages']):return
         index=state['stage'];stage=state['stages'][index]
-        cursor=state.get('template_cursor','') if state.get('template_stage')==index else ''
+        saved=(state.get('template_scans') or {}).get(str(index)) or (state if state.get('template_stage')==index else {})
+        cursor=saved.get('template_cursor','')
         from .db import VerifiedReplyContext
         size=db.scalar(select(func.count()).select_from(VerifiedReplyContext)) or 0
-        if state.get('template_stage')==index and state.get('template_done'):
-            if state.get('template_library_size')==size:return
+        if saved.get('template_done'):
+            if saved.get('template_library_size')==size:return
             cursor=''
         recorded=select(ReviewLibraryAuditRow.review_id).where(
             ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.review_id==Review.id).exists()
@@ -463,7 +483,9 @@ async def sweep_templates(job_id,session_factory=Session,limit=24,seconds=4):
                     job.result={**fresh,'stages':stages,'last_progress_at':now()}
             last=rid
             job.result={**job.result,'template_stage':index,'template_cursor':last,
-                'template_done':False,'template_library_size':size}
+                'template_done':False,'template_library_size':size,
+                'template_scans':{**(job.result.get('template_scans') or {}),str(index):{
+                    'template_cursor':last,'template_done':False,'template_library_size':size}}}
             db.commit()
         if time.monotonic()-started>=seconds:return
     if len(ids)<limit and (not ids or last==ids[-1]):
@@ -471,7 +493,9 @@ async def sweep_templates(job_id,session_factory=Session,limit=24,seconds=4):
             job=db.get(Job,job_id)
             if (job.result or {}).get('stage')==index:
                 job.result={**job.result,'template_stage':index,'template_done':True,
-                    'template_library_size':size,'template_cursor':last}
+                    'template_library_size':size,'template_cursor':last,
+                    'template_scans':{**(job.result.get('template_scans') or {}),str(index):{
+                        'template_cursor':last,'template_done':True,'template_library_size':size}}}
                 db.commit()
 
 

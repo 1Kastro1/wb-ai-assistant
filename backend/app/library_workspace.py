@@ -128,14 +128,15 @@ def counts(db, job_id):
     verified = sum(values.get(key, 0) for key in ('verified', 'verified_reference'))
     return {'verified': verified, 'attention': values.get('attention', 0),
         'retry': values.get('retry', 0), 'blocked': values.get('blocked', 0),
-        'checked': verified + values.get('attention', 0) + values.get('removed', 0)}
+        'technical_stopped':values.get('technical_attention',0),
+        'checked': verified + values.get('attention', 0) + values.get('removed', 0)+values.get('technical_attention',0)}
 
 
 def cases(db, view='attention', offset=0, limit=20):
     job = latest_job(db)
     if not job:
         return {'items': [], 'total': 0, 'offset': offset, 'limit': limit}
-    states = {'attention': ('attention',), 'retry': ('retry', 'blocked'),
+    states = {'attention': ('attention',), 'retry': ('retry', 'blocked','technical_attention'),
               'verified': ('verified', 'verified_reference'), 'history': ()}[view]
     query = select(ReviewLibraryAuditRow, Review, Product, Draft).join(Review, Review.id == ReviewLibraryAuditRow.review_id)
     query = query.outerjoin(Product, Product.id == Review.product_id).outerjoin(Draft, Draft.review_id == Review.id)
@@ -158,7 +159,7 @@ def cases(db, view='attention', offset=0, limit=20):
         items.append({'review_id': review.id, 'store_id': review.wb_account_id, 'marketplace': review.marketplace,
             'product': product.name if product else 'Товар не найден', 'review_text': review.text, 'rating': review.rating,
             'answer': review.existing_answer if review.is_answered else draft.text if draft else '',
-            'status': row.status, 'category': category(row.issues), 'issues': row.issues,
+            'status': row.status, 'category': 'technical' if row.status=='technical_attention' else category(row.issues), 'issues': row.issues,
             'attempts': row.attempts, 'retry_at': row.retry_at, 'updated_at': row.updated_at,
             'suggestion': {'id': rule.id, 'text': rule.text, 'scope': rule.scope, 'enabled': rule.enabled} if rule else None})
     return {'items': items, 'total': total, 'offset': offset, 'limit': limit}

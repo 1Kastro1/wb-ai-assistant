@@ -5,7 +5,7 @@ import './reply-library.css';
 import ReviewPolicyCampaign from './ReviewPolicyCampaign';
 type Row=Record<string,any>;
 const markets:Record<string,string>={yandex:'Яндекс Маркет',wb:'Wildberries',ozon:'Ozon'};
-const statuses:Record<string,string>={verified:'Подтверждён',verified_reference:'Проверенный образец',attention:'Нужно решение',retry:'Запланирован повтор',blocked:'Нужна настройка сервиса'};
+const statuses:Record<string,string>={verified:'Подтверждён',verified_reference:'Проверенный образец',attention:'Нужно решение',retry:'Запланирован повтор',blocked:'Нужна настройка сервиса',technical_attention:'Повторы остановлены · нужен сервис'};
 const number=(value:any)=>Number(value||0).toLocaleString('ru-RU');
 export default function ReplyLibraryStatus({onRule,onOpen}:{onRule?:(rule:Row)=>void;onOpen?:(item:Row)=>void}){
  const [data,setData]=useState<Row|null>(null),[error,setError]=useState(''),[tab,setTab]=useState('overview');
@@ -27,7 +27,7 @@ export default function ReplyLibraryStatus({onRule,onOpen}:{onRule?:(rule:Row)=>
   <div id="library-panel" role="tabpanel" aria-labelledby={'library-tab-'+tab}>
    {tab==='overview'?<>
     {!data?<p role="status">Загружаем библиотеку…</p>:<>
-     <div className="library-metrics">{[['Уникальные образцы',data.library?.unique_templates],['Подтверждённые отзывы',counts.verified],['Требуют внимания',counts.attention],['Ожидают повтора',(counts.retry||0)+(counts.blocked||0)]].map(([label,value])=><div className="card" key={label}><small>{label}</small><strong>{number(value)}</strong></div>)}</div>
+     <div className="library-metrics">{[['Уникальные образцы',data.library?.unique_templates],['Подтверждённые отзывы',counts.verified],['Требуют внимания',counts.attention],['Повторы и сбои',(counts.retry||0)+(counts.blocked||0)+(counts.technical_stopped||0)]].map(([label,value])=><div className="card" key={label}><small>{label}</small><strong>{number(value)}</strong></div>)}</div>
      {job&&<div className="card library-progress"><div><h3>{stage?markets[stage.marketplace]:'Проверка всех магазинов'}</h3><b>{percent.toLocaleString('ru-RU',{maximumFractionDigits:1})}%</b></div><progress max={100} value={percent} aria-label="Прогресс текущего магазина"/><p className="muted">Подтверждено — ответ прошёл проверки. Остальные проверенные случаи находятся во вкладке «Требуют внимания»; технические сбои — в «Повторах».</p>
       <div className="table-wrap"><table><thead><tr><th>Маркетплейс</th><th>Проверено / всего</th><th>Подтверждено</th><th>Состояние</th></tr></thead><tbody>{stages.map((item,index)=><tr key={item.account_id}><td>{markets[item.marketplace]||item.marketplace}</td><td>{number(item.checked)} / {number(item.total)}</td><td>{number(item.verified)}</td><td>{item.completed_at?'Завершено':index===job.stage?'Проверяется':'В очереди'}</td></tr>)}</tbody></table></div>
      </div>}

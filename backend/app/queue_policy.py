@@ -2,7 +2,7 @@
 import time
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select, func, case, or_
-from .db import Job, setting
+from .db import Job
 
 
 class QueueYield(Exception):
@@ -12,14 +12,9 @@ class QueueYield(Exception):
 def next_job(db, kinds=None):
     statement = select(Job).where(Job.status == 'queued', Job.cancel_requested == False,
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
-    if setting(db,'review_library_maintenance',False):
-        # Archive maintenance pauses automation, not an employee's explicit
-        # request for one draft/check. Explicitly authorized scheduled replies
-        # keep their own live consent and verification gates; imports stay paused.
-        manual_check=(Job.kind=='draft_recheck') & (Job.result['manual_check'].as_boolean()==True) & Job.result['retry_draft_id'].as_string().is_not(None)
-        direct=Job.kind.in_(('single_draft','single_question_draft')) & Job.result['requested_by'].as_string().is_not(None) & (Job.result['requested_by'].as_string()!='')
-        statement=statement.where(or_(Job.kind.in_(('review_library_audit','scheduled_publication','publication_reconcile')),
-            direct,manual_check))
+    # Archive inspection is ordinary resumable background work. Safe mode,
+    # assistant state and publication consent retain their own independent gates.
+    # Never suppress checks needed by the publisher, or new-review imports.
     if kinds is not None:
         statement = statement.where(Job.kind.in_(kinds))
     return db.scalar(statement.order_by(*queue_ordering()).limit(1))
@@ -36,7 +31,7 @@ def queue_ordering():
     # Its next checkpoint refreshes last_served_at, so other work still runs.
     overdue_send = Job.kind.in_(('wb_publish_send', 'scheduled_publication', 'publication_reconcile')) & (served < cutoff)
     generation_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts')),
+    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts','review_library_audit')),
         (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
             Job.result['policy_regeneration'].as_boolean() == True,
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))
@@ -52,7 +47,12 @@ def queue_ordering():
     # for days, even though the import's numeric priority is reasonable.
     # Each import yields only after committing its resume checkpoint.
     overdue_sync = Job.kind.in_(('products', 'reviews', 'questions')) & (served < generation_cutoff) & ~direct_waiting
-    interactive = case((or_(overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
+    fresh_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    fresh_due = (Job.kind.in_(('drafts','question_drafts')) &
+        (Job.result['fresh_reviews'].as_boolean()==True) & (served < fresh_cutoff) & ~direct_waiting)
+    # Fresh work ages sooner, but shares the oldest-served band: three long
+    # fresh batches must never permanently exclude checks, archive or sends.
+    interactive = case((or_(fresh_due, overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (manual_check, 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)

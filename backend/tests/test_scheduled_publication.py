@@ -45,6 +45,25 @@ def jobs():
     with Session() as db: return list(db.scalars(select(Job.id).where(Job.kind == automatic.KIND)))
 
 
+def test_recent_approval_bypasses_archive_cursor_without_rewinding_it(client,ready,monkeypatch):
+    from app.db import now
+    enable(client,publication_questions=False)
+    monkeypatch.setattr(automatic,'BATCH_SIZE',1)
+    with Session() as db:
+        job=db.scalar(select(Job).where(Job.kind==automatic.KIND,Job.result['account_id'].as_string()=='owner'))
+        jid=job.id;cursor=['1999-01-01','already-scanned']
+        job.result={**job.result,'cursor':cursor}
+        draft=db.get(Draft,'ownerreview')
+        draft.quality={**draft.quality,'owner_rules':{'checked':True,'passed':True,'checked_at':now()}}
+        db.commit()
+    asyncio.run(automatic.run_step(jid))
+    assert [item[1] for item in ready]==['ownerreview']
+    with Session() as db:
+        assert db.get(Job,jid).result['cursor']==cursor
+        assert db.get(Job,jid).result['ready_cursor'][1]=='ownerreview'
+        assert db.scalar(select(Publication).where(Publication.review_id=='ownerreview')).confirmed_at
+
+
 def test_owner_can_publish_verified_positive_reviews_during_archive_audit(client, ready):
     from app.queue_policy import next_job
     from app.review_library_audit import selfcheck
@@ -58,8 +77,9 @@ def test_owner_can_publish_verified_positive_reviews_during_archive_audit(client
            drafts_enabled=True, question_drafts_enabled=True)
     main.queue_scheduled_jobs()
     with Session() as db:
-        assert {job.kind for job in db.scalars(select(Job))} == {automatic.KIND}
-        assert next_job(db).kind == automatic.KIND
+        assert {job.kind for job in db.scalars(select(Job))} == {automatic.KIND,'products','reviews','questions','drafts','question_drafts'}
+        db.add(Job(id='needed-check',kind='draft_recheck',result={'account_id':'owner'}));db.flush()
+        assert next_job(db,('draft_recheck',)).id=='needed-check'
         assert selfcheck(db, 'audit', [])['publication_disabled'] is False
     for jid in jobs():
         asyncio.run(automatic.run_step(jid))

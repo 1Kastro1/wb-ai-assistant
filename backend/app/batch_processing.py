@@ -115,7 +115,9 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
         if selected:
             conditions.append(Review.id.in_(selected))
         if since:
-            conditions.append(Review.created_at >= since)
+            conditions.append(or_(Review.created_at >= since,
+                Review.received_at >= initial['received_since']) if initial.get('received_since')
+                else Review.created_at >= since)
         if excluded:
             conditions.append(Review.id.not_in(excluded))
         return select(Review).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions)

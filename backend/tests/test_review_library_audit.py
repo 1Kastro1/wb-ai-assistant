@@ -29,6 +29,44 @@ async def good(answer,review,product,rules,facts,assess,**kwargs):
     return answer,{'checked':True,'passed':True,'issues':[],'fingerprint':fingerprint(rules)}
 
 
+def test_bounded_slices_rotate_markets_and_resume_saved_positions(monkeypatch):
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
+    with Session() as db:seed(db);jid=start(db).id;db.commit()
+    for expected in (1,2,0):
+        asyncio.run(step(jid,limit=1))
+        with Session() as db:
+            state=db.get(Job,jid).result
+            assert state['stage']==expected
+    with Session() as db:
+        state=db.get(Job,jid).result
+        assert [s['checked'] for s in state['stages']]==[1,1,1]
+        assert all(s['cursor'] for s in state['stages'])
+    asyncio.run(step(jid))
+    with Session() as db:assert db.get(Job,jid).status=='completed'
+
+
+def test_current_exact_verdict_is_reused_without_model_or_rewrite(monkeypatch):
+    from app.review_library_audit import inspect_review
+    from app.services import matching_owner_rules,review_verified_facts
+    from app.rule_execution import verification_key
+    with Session() as db:
+        seed(db);jid=start(db).id;db.commit()
+        review=db.get(Review,'r-yandex');product=db.get(Product,review.product_id)
+        draft=db.get(Draft,'d-yandex');rules=matching_owner_rules(db,product)
+        facts=review_verified_facts(db,review,product,rules)
+        draft.quality={'passed':True,'owner_rules':{'checked':True,'passed':True,'issues':[],
+            'fingerprint':fingerprint(rules),'input_key':verification_key(draft.text,review,product,rules,facts)}}
+        before=(draft.text,draft.revision,draft.original,draft.edits)
+        db.commit()
+    async def no_model(*args,**kwargs):raise AssertionError('current proof must be reused')
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',no_model)
+    result=asyncio.run(inspect_review(jid,'r-yandex',Session))
+    assert result['status']=='verified' and not result['template_reused']
+    with Session() as db:
+        draft=db.get(Draft,'d-yandex')
+        assert (draft.text,draft.revision,draft.original,draft.edits)==before
+
+
 def test_durable_dedup_preserves_exact_verified_presentation_and_expired_legacy_is_inactive():
     with Session() as db:
         a='Добрый день!\nСпасибо за отзыв.';b='  добрый день! Спасибо за отзыв. '
@@ -58,7 +96,7 @@ def test_legacy_conversion_does_not_turn_expired_proof_into_new_approval():
         assert migrate_legacy(db)['converted_approvals']==0
 
 
-def test_activation_pauses_all_automation_preserves_old_job_progress_and_orders_stores():
+def test_activation_preserves_automation_consent_and_old_job_progress():
     with Session() as db:
         seed(db)
         db.add(Job(id='old',kind='reviews',status='queued',result={'cursor':'kept'}))
@@ -66,14 +104,14 @@ def test_activation_pauses_all_automation_preserves_old_job_progress_and_orders_
         jid=start(db).id;db.commit()
         state=db.get(Job,jid).result
         assert [s['marketplace'] for s in state['stages']]==['yandex','wb','ozon']
-        assert state['total']==3 and setting(db,'safe_mode') is True
+        assert state['total']==3 and not setting(db,'safe_mode',False)
         assert setting(db,'review_library_maintenance') is True
-        assert not any(setting(db,'automation_schedule')[f] for f in ('enabled','publication_enabled','drafts_enabled','reviews_sync_enabled'))
-        assert db.get(Job,'old').status=='cancelled' and db.get(Job,'old').result['cursor']=='kept'
+        assert all(setting(db,'automation_schedule')[f] for f in ('enabled','publication_enabled','drafts_enabled','reviews_sync_enabled'))
+        assert db.get(Job,'old').status=='queued' and db.get(Job,'old').result['cursor']=='kept'
         assert start(db).id==jid
         from app.queue_policy import next_job
         db.add(Job(id='interactive',kind='single_draft',priority=0));db.flush()
-        assert next_job(db).id==jid
+        assert next_job(db).id=='interactive'
 
 
 @pytest.mark.parametrize('published',[False,True])
@@ -90,8 +128,8 @@ def test_sequential_audit_preserves_answers_and_saves_one_body_across_three_mark
         assert result['job']['status']=='completed' and result['job']['verified']==3
         assert result['library']['unique_templates']==1
         assert set(result['library']['markets'])=={'wb','ozon','yandex'}
-        assert setting(db,'safe_mode') is True
-        assert not setting(db,'automation_schedule')['publication_enabled']
+        assert not setting(db,'safe_mode',False)
+        assert not setting(db,'automation_schedule',{}).get('publication_enabled',False)
         for d in db.scalars(select(Draft)):
             assert d.revision==7 and d.original=='Original employee text' and d.edits==[{'by':'employee'}]
             assert d.text=='Добрый день! Спасибо за отзыв.'
@@ -100,7 +138,7 @@ def test_sequential_audit_preserves_answers_and_saves_one_body_across_three_mark
         assert db.scalar(select(func.count()).select_from(ReviewLibraryAuditRow))==3
 
 
-def test_retry_does_not_advance_market_or_approve_failed_check(monkeypatch):
+def test_retry_visits_other_markets_without_approving_failed_check(monkeypatch):
     async def timeout(answer,*args,**kwargs):
         return answer,{'passed':False,'checked':False,'technical_error':True,'retryable':True,'issues':['timeout']}
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',timeout)
@@ -113,8 +151,10 @@ def test_retry_does_not_advance_market_or_approve_failed_check(monkeypatch):
         assert not list(db.scalars(select(VerifiedReplyContext)))
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
     with Session() as db:
-        db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).retry_at=0;db.commit()
-    asyncio.run(step(jid))
+        for row in db.scalars(select(ReviewLibraryAuditRow).where(ReviewLibraryAuditRow.job_id==jid)):
+            row.retry_at=0
+        db.commit()
+    for _ in range(5):asyncio.run(step(jid))
     with Session() as db:
         assert db.get(Job,jid).status=='completed'
         assert db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).attempts==2
@@ -223,8 +263,8 @@ def test_completed_campaign_releases_manual_queue_with_automation_still_paused(m
     with Session() as db:
         assert db.get(Job,jid).status=='completed'
         assert setting(db,'review_library_maintenance') is False
-        assert setting(db,'safe_mode') is True
-        assert not setting(db,'automation_schedule')['enabled']
+        assert not setting(db,'safe_mode',False)
+        assert not setting(db,'automation_schedule',{}).get('enabled',False)
         db.add(Job(id='owner-manual',kind='single_draft'));db.flush()
         assert next_job(db).id=='owner-manual'
 
@@ -272,7 +312,7 @@ def test_deferred_failure_allows_same_market_progress_without_crossing_barrier(m
         seed(db)
         db.add(Review(id='z-yandex',wb_review_id='second',product_id='p-yandex',wb_account_id='yandex',marketplace='yandex',text='Отлично!',rating=4))
         db.flush();db.add(Draft(id='second',review_id='z-yandex',text='Добрый день! Спасибо за отзыв.',original='old'))
-        jid=start(db).id;db.commit()
+        job=start(db);job.result={**job.result,'fair_markets':False};jid=job.id;db.commit()
     if old_checkpoint:
         asyncio.run(step(jid,limit=1))
         with Session() as db:
@@ -281,15 +321,15 @@ def test_deferred_failure_allows_same_market_progress_without_crossing_barrier(m
     asyncio.run(step(jid))
     with Session() as db:
         job=db.get(Job,jid)
-        assert job.result['checked']==1 and job.result['verified']==1 and job.result['deferred']==1
-        assert job.result['stage']==0 and job.result['stages'][1]['checked']==0
+        assert job.result['checked']==3 and job.result['verified']==3 and job.result['deferred']==1
+        assert job.result['stage']==0 and job.result['stages'][1]['checked']==1
         assert db.get(ReviewLibraryAuditRow,(jid,'z-yandex')).status=='verified'
         assert db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).attempts==1
         assert all(v.source_review_id!='r-yandex' for v in db.scalars(select(VerifiedReplyContext)))
         db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).retry_at=0;db.commit()
     asyncio.run(step(jid))
     with Session() as db:
-        assert db.get(Job,jid).result['checked']==1 and db.get(Job,jid).result['deferred']==1
+        assert db.get(Job,jid).result['checked']==3 and db.get(Job,jid).result['deferred']==1
         assert db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).attempts==2
         db.get(ReviewLibraryAuditRow,(jid,'r-yandex')).retry_at=0;db.commit()
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
@@ -325,7 +365,7 @@ def test_long_retry_slices_cannot_starve_new_reviews_in_same_market(monkeypatch)
         for rid,rating in (('s-yandex',5),('z-yandex',4)):
             db.add(Review(id=rid,wb_review_id=rid,product_id='p-yandex',wb_account_id='yandex',marketplace='yandex',text='Отлично!',rating=rating))
             db.flush();db.add(Draft(id=rid,review_id=rid,text='Добрый день! Спасибо за отзыв.',original='old'))
-        jid=start(db).id;db.commit()
+        job=start(db);job.result={**job.result,'fair_markets':False};jid=job.id;db.commit()
     # Each operation exhausts a slice, as a long real model call would.
     asyncio.run(step(jid,seconds=0));asyncio.run(step(jid,seconds=0))
     with Session() as db:
