@@ -1149,10 +1149,17 @@ sync_schedule_lock = asyncio.Lock()
 
 async def run_sync_job(job_id):
     async with sync_lock, maintenance_lock:
-        await execute_job(job_id)
+        from .pipeline_dispatch import run_slice
+        await run_slice(job_id, execute_job)
 
 
 async def run_waiting_sync(kinds=('products', 'reviews', 'questions', 'single_draft', 'single_question_draft')):
+    from .pipeline_dispatch import parallel_slice
+    if parallel_slice.get():
+        # The outer check/audit owns one explicit I/O lane. Do not recursively
+        # start imports or another model request from an import callback.
+        await asyncio.sleep(0)
+        return
     # Called only by the worker while it holds both execution locks. Use a
     # separate session after committing a draft, so imports cannot be rolled
     # back with a later generation failure or overlap restore/maintenance.
@@ -1188,12 +1195,13 @@ async def execute_job(job_id):
         if job.status != 'queued':
             return
         started_clock = time.monotonic()
-        queue_seconds = max(0, time.time() - datetime.fromisoformat(job.created_at).timestamp())
+        queue_seconds = max(0, time.time() - datetime.fromisoformat((job.result or {}).get('queued_at') or job.created_at).timestamp())
+        previous_timing = (job.result or {}).get('timing') or {}
         manual_batch = bool((job.result or {}).get('manual_batch'))
         requested_by = (job.result or {}).get('requested_by', '')
         job_metadata = {key: job.result[key] for key in ('operation_key', 'operation_requested_ids', 'skipped') if key in (job.result or {})}
         job.result = {**(job.result or {}), 'started_at': (job.result or {}).get('started_at') or now(), 'last_served_at': now(), 'retry_at': 0}
-        job.status, job.progress, job.attempts = 'running', 1, job.attempts + 1
+        job.status, job.progress, job.attempts = 'running', max(1,job.progress), job.attempts + 1
         kind = job.kind
         account_id = (job.result or {}).get('account_id') or setting(db, 'active_store', 'owner')
         start_checkpoint = (job.result or {}).get('checkpoint') or {}
@@ -1329,10 +1337,11 @@ async def execute_job(job_id):
                 if kind in ('reviews', 'questions'):
                     enqueue_generation(db, schedule, store, 'drafts' if kind == 'reviews' else 'question_drafts', time.time())
                     set_setting(db, 'automation_schedule', schedule)
+            job.result = {**(job.result or {}), 'failure_attempts':0}
         except QueueYield:
             db.refresh(job)
             job.status = 'queued'
-            job.result = {**(job.result or {}), 'last_served_at': now(), 'message': 'Прогресс сохранён; очередь передана следующему заданию'}
+            job.result = {**(job.result or {}), 'failure_attempts':0, 'last_served_at': now(), 'message': 'Прогресс сохранён; очередь передана следующему заданию'}
         except asyncio.CancelledError:
             db.rollback()
             db.expire_all()
@@ -1352,8 +1361,7 @@ async def execute_job(job_id):
             job = db.get(Job, job_id)
             failure_attempts = int((job.result or {}).get('failure_attempts', 0)) + 1
             job.result = {**(job.result or {}), 'failure_attempts': failure_attempts}
-            from .rule_retry import durable_retry
-            if (failure_attempts < job.max_attempts or durable_retry(job, error)) and not job.cancel_requested:
+            if failure_attempts < min(job.max_attempts, 5) and not job.cancel_requested:
                 job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Ожидает повторной попытки', 'account_id': account_id, 'detail': (str(error) or type(error).__name__)[:500], 'retry_at': time.time() + min(300, 30 * 2 ** min(job.attempts - 1, 3))}
             else:
                 default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'
@@ -1366,7 +1374,16 @@ async def execute_job(job_id):
                 db.add(Activity(user_id=requested_by or 'system', username=actor.username if actor else 'system',
                                 method='POST', path='/jobs/' + job_id, status=500,
                                 details={'event': 'job_failed', 'job_kind': kind}))
-        job.result = {**job_metadata, **(job.result or {}), 'last_served_at': now(), 'timing': {'queue_seconds': round(queue_seconds, 2), 'processing_seconds': round(time.monotonic() - started_clock, 2)}, 'finished_at': now()}
+        elapsed = round(time.monotonic() - started_clock, 2)
+        timing = {'queue_seconds':round(queue_seconds, 2), 'processing_seconds':elapsed,
+            'total_processing_seconds':round(previous_timing.get('total_processing_seconds', 0)+elapsed, 2),
+            'slices':int(previous_timing.get('slices', 0))+1}
+        job.result = {**job_metadata, **(job.result or {}), 'last_served_at':now(), 'timing':timing}
+        if job.status == 'queued':
+            job.result = {**job.result, 'queued_at':now()}
+            job.result.pop('finished_at', None)
+        else:
+            job.result = {**job.result, 'finished_at':now()}
         db.commit()
 
 

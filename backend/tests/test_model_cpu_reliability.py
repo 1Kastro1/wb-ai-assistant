@@ -43,7 +43,7 @@ def test_cancelled_network_request_is_not_reported_as_a_policy_block():
         assert row.status=='CANCELLED' and row.provider=='ollama'
 
 
-def test_archive_does_not_starve_direct_draft_and_recheck_but_keeps_sending_paused():
+def test_archive_keeps_direct_checks_imports_and_sends_dispatchable():
     from app.db import Job,set_setting
     from app.queue_policy import next_job
     with Session() as db:
@@ -56,8 +56,11 @@ def test_archive_does_not_starve_direct_draft_and_recheck_but_keeps_sending_paus
             Job(id='auto-check',kind='draft_recheck',priority=0,result={'technical_scan':True}),
             Job(id='import',kind='reviews',priority=0)])
         db.commit()
-        for expected in ('single','manual-check','audit'):
+        for expected in ('single','manual-check','audit','publish','auto-check','import'):
             job=next_job(db)
-            assert job.id==expected
+            if expected in ('audit','publish','auto-check','import'):
+                assert job.id in ('audit','publish','auto-check','import')
+            else:
+                assert job.id==expected
             job.status='completed';db.commit()
         assert next_job(db) is None

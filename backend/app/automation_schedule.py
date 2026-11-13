@@ -27,10 +27,11 @@ def normalize_schedule(raw):
     return value
 
 
-def pending(db, kind, account_id):
+def pending(db, kind, account_id, archive=None):
     return db.scalar(select(Job.id).where(
         Job.kind == kind, Job.status.in_(('queued', 'running')), Job.cancel_requested == False,
-        func.coalesce(Job.result['account_id'].as_string(), 'owner') == account_id).limit(1))
+        func.coalesce(Job.result['account_id'].as_string(), 'owner') == account_id,
+        *([] if archive is None else [func.coalesce(Job.result['archive'].as_boolean(), False) == archive])).limit(1))
 
 
 def schedule_status(db, schedule, store_id, current):
@@ -61,14 +62,20 @@ def enqueue_generation(db, schedule, store, kind, current):
     last_key = f'last_{kind}:{store.id}'
     last = float(schedule.get(last_key, schedule.get('last_' + kind, 0) if store.id == 'owner' else 0))
     hours = schedule.get('question_drafts_hours', schedule.get('drafts_hours', 6)) if kind == 'question_drafts' else schedule.get('drafts_hours', 6)
-    if current - last < max(1, int(hours)) * 3600 or pending(db, kind, store.id):
+    if current - last < max(1, int(hours)) * 3600 or pending(db, kind, store.id, archive=False):
         return False
     result = {'account_id': store.id, 'scheduled': True,
               'message': 'Плановая подготовка ответов на вопросы' if kind == 'question_drafts' else 'Плановая подготовка ответов на отзывы'}
-    if refreshing:
-        result.update(fresh_reviews=True,last_served_at='')
+    result.update(fresh_reviews=True)
     if kind == 'drafts':
-        result['since'] = (datetime.fromtimestamp(current, timezone.utc)-timedelta(days=1)).isoformat() if refreshing else '' if schedule.get('drafts_all_history') else (datetime.fromtimestamp(current, timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
+        result['since'] = (datetime.fromtimestamp(current, timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
+        result['received_since'] = datetime.fromtimestamp(last or current-86400, timezone.utc).isoformat()
+        archive_audit=db.scalar(select(Job.id).where(Job.kind=='review_library_audit',
+            Job.status.in_(('queued','running')),Job.cancel_requested==False).limit(1))
+        if schedule.get('drafts_all_history') and not refreshing and not archive_audit and not pending(db, kind, store.id, archive=True):
+            db.add(Job(id=str(uuid4()), kind=kind, priority=400, result={
+                'account_id':store.id, 'scheduled':True, 'archive':True, 'since':'',
+                'message':'Подготовка ответов на архив отзывов'}))
     db.add(Job(id=str(uuid4()), kind=kind, priority=250, result=result))
     schedule[last_key] = current
     return True
@@ -77,10 +84,9 @@ def enqueue_generation(db, schedule, store, kind, current):
 def enqueue_due_jobs(db, schedule, current):
     if not schedule.get('enabled'):
         return
-    maintenance = setting(db, 'review_library_maintenance', False)
     stores = list(db.scalars(select(StoreProfile).join(Account, Account.id == StoreProfile.id).order_by(StoreProfile.created_at)))
     for store in stores:
-        if not maintenance and schedule.get('sync_enabled', True):
+        if schedule.get('sync_enabled', True):
             for kind in ('products', 'reviews', 'questions'):
                 if kind != 'products' and not schedule.get(kind + '_sync_enabled', schedule.get('sync_enabled', True)):
                     continue
@@ -90,9 +96,8 @@ def enqueue_due_jobs(db, schedule, current):
                 if current - last >= max(1, int(hours)) * 3600 and not pending(db, kind, store.id):
                     db.add(Job(id=str(uuid4()), kind=kind, priority=200, result={'account_id': store.id, 'scheduled': True}))
                     schedule[key] = current
-        if not maintenance:
-            for kind in ('drafts', 'question_drafts'):
-                enqueue_generation(db, schedule, store, kind, current)
+        for kind in ('drafts', 'question_drafts'):
+            enqueue_generation(db, schedule, store, kind, current)
         if store.provider in ('wb', 'ozon', 'yandex'):
             from .scheduled_publication import enqueue
             enqueue(db, schedule, store, current)

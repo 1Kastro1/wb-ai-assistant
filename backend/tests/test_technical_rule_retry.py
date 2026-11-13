@@ -149,7 +149,7 @@ def test_outage_in_scan_gets_independent_retry_and_does_not_block_next_review(cl
         assert db.get(Draft,'d').text=='Добрый день! Спасибо за отзыв.'
 
 
-def test_transient_verification_exceptions_have_no_overall_attempt_limit(client,monkeypatch):
+def test_transient_verification_exceptions_stop_without_losing_saved_text(client,monkeypatch):
     seed_error()
     from app import main,draft_audit
     async def unavailable(*a,**k): raise TimeoutError('model unavailable')
@@ -159,8 +159,9 @@ def test_transient_verification_exceptions_have_no_overall_attempt_limit(client,
         job.max_attempts=1;job.result={**job.result,'failure_attempts':100};jid=job.id;db.commit()
     asyncio.run(main.execute_job(jid))
     with Session() as db:
-        assert db.get(Job,jid).status=='queued'
+        assert db.get(Job,jid).status=='failed'
         assert db.get(Job,jid).result['failure_attempts']==101
+        assert db.get(Draft,'d').text=='Добрый день! Спасибо за отзыв.'
 
 
 def test_endpoint_rejects_other_store_and_published_draft(client, monkeypatch):

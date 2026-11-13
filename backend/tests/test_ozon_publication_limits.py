@@ -78,7 +78,7 @@ def test_scheduled_empty_rating_does_not_stop_textual_review(client,prepared):
     with Session() as db:
         job=db.get(Job,jid)
         assert job.status=='completed'
-        assert job.result['published']==1 and job.result['skipped']==1 and job.result['uncertain']==0
+        assert job.result['published']==1 and job.result['skipped']==0 and job.result['uncertain']==0
         assert db.scalar(select(func.count()).select_from(Publication).where(Publication.review_id=='a-empty'))==0
         assert db.get(Draft,'a-empty').revision==7
         assert db.get(Review,'b-text').is_answered

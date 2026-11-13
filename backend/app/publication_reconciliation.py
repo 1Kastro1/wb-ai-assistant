@@ -98,6 +98,7 @@ def record_outcome(db, publication, review, result=None, error=None):
         state.update(outcome=status, comment_id=result.get('comment_id', ''), retryable=False)
     publication.status = status
     if status == 'published':
+        publication.confirmed_at = publication.confirmed_at or now()
         review.status, review.is_answered = 'published', True
         review.existing_answer = state.get('text', review.existing_answer)
     elif status == 'answer_pending':

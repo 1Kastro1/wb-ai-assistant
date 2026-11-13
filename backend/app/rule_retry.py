@@ -62,14 +62,34 @@ def verification_failure(error):
 
 
 def durable_retry(job, error):
-    # No overall expiration for a saved-text verification outage. Programming,
-    # validation and authorization failures still follow the ordinary error path.
+    # Compatibility helper; transient errors have a finite consecutive budget.
     from .batch_processing import transient
-    return job.kind == 'draft_recheck' and bool((job.result or {}).get('check_only')) and transient(error)
+    return (job.kind == 'draft_recheck' and bool((job.result or {}).get('check_only'))
+        and int((job.result or {}).get('failure_attempts',0)) < MAX_CHECK_FAILURES and transient(error))
 
 
 def retry_delay(attempt):
     return (60, 120, 300)[min(2, max(0, int(attempt)-1))]
+
+
+MAX_CHECK_FAILURES = 5
+
+
+def checkpoint_verdict(verdict, previous, input_key, timestamp, *, manual=False):
+    """Bound failures for exact input; successful group continuations are free."""
+    import time
+    technical = bool(verdict.get('technical_error') or verdict.get('status') == 'error')
+    continuation = bool(verdict.get('continuation'))
+    count = (int(previous.get('check_failures', 0)) if previous.get('input_key') == input_key and not manual else 0) + 1
+    count = count if technical and not continuation else 0
+    result = {**verdict, 'input_key':input_key, 'checked_at':timestamp,
+        'check_failures':count,
+        'retry_at':time.time() if continuation else time.time()+retry_delay(count) if technical else 0}
+    if count >= MAX_CHECK_FAILURES:
+        result.update(retryable=False, failure_code='retry_exhausted', retry_at=0,
+            technical_error=True, checked=False, passed=False,
+            issues=['Проверка временно недоступна после 5 попыток. Текст сохранён; требуется восстановление сервиса и повторный запуск проверки.'])
+    return result
 
 
 def enqueue(db, draft, review, actor_id='', *, manual=False):

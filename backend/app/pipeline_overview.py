@@ -4,6 +4,7 @@ from .db import Review, Draft, Publication, Job, GenerationOutcome, setting
 from .attention_queue import personal_condition, automatic_publication
 from .automation_schedule import normalize_schedule
 from .read_cache import cached_read
+from datetime import datetime, timezone, timedelta
 
 
 def overview(db, stores):
@@ -23,8 +24,15 @@ def _overview(db,stores):
     pending=and_(unanswered,~personal,Draft.quality_pending == True,Draft.quality_technical == False)
     negative=Review.rating.between(1,3)
     sent=Publication.status == 'published'
+    moscow=timezone(timedelta(hours=3))
+    current=datetime.now(moscow)
+    midnight=current.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc).isoformat()
+    tomorrow=(current.replace(hour=0,minute=0,second=0,microsecond=0)+timedelta(days=1)).astimezone(timezone.utc).isoformat()
     flags={'unanswered':unanswered,'ready':ready,'personal':attention,'technical':technical,'pending':pending,
-        'published':sent,'negative_ready':and_(negative,ready),'negative_personal':and_(negative,attention),
+        'published':sent,'published_today':and_(sent,Publication.confirmed_at>=midnight,Publication.confirmed_at<tomorrow),
+        'awaiting_moderation':Publication.status=='answer_pending',
+        'technical_stopped':and_(technical,Draft.quality['owner_rules']['retryable'].as_boolean()==False),
+        'negative_ready':and_(negative,ready),'negative_personal':and_(negative,attention),
         'negative_published':and_(negative,sent),'safety':and_(attention,Review.risk!='NORMAL'),
         'content':and_(attention,Draft.quality_attention==True),
         'reconciliation':and_(unanswered,Publication.status.in_(('uncertain','mismatch')))}
@@ -69,10 +77,12 @@ def _overview(db,stores):
             'usage':state.get('usage',{}),'last_progress_at':state.get('last_progress_at'),
             'started_at':job.created_at,'finished_at':state.get('finished_at')}
     result=[]
+    from .pipeline_metrics import delivery_latency
     for sid,store in stores.items():
         result.append({'id':sid,'provider':store.provider,'name':store.name,
             'counts':counts.get(sid,{k:0 for k in flags}),'refresh':latest.get(sid),
             'last_progress_at':movements.get(sid),
+            'delivery_latency':delivery_latency(db,sid),
             'completed_stages':stages.get(sid,{}),
             'enabled':{'sync':bool(schedule['enabled'] and schedule.get('reviews_sync_enabled')),
                 'generation':bool(schedule['enabled'] and schedule.get('drafts_enabled')),

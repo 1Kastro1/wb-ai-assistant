@@ -90,6 +90,6 @@ def test_ozon_low_empty_rating_is_preserved_and_skipped(client,ready):
     assert not ready
     with Session() as db:
         job=db.scalar(select(Job).where(Job.kind==automatic.KIND,Job.result['account_id'].as_string()=='oz'))
-        assert job.result['skipped']==1 and job.result['uncertain']==0
-        assert 'Ozon не принимает' in job.result['last_reason']
+        assert job.result['skipped']==0 and job.result['uncertain']==0
+        assert job.result['scanned']==0  # excluded before scanning or reserving
         assert db.get(Draft,'ozreview').text

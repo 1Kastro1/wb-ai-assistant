@@ -66,6 +66,12 @@ def should_check(db, draft, review, product, state, rules=None):
     verdict = (draft.quality or {}).get('owner_rules') or {}
     if verdict.get('fingerprint') != fingerprint(rules):
         return True
+    if verdict.get('input_key'):
+        from .rule_execution import verification_key
+        from .services import trusted_product_facts, review_verified_facts
+        facts=trusted_product_facts(db,product) if review.marketplace.endswith('_question') else review_verified_facts(db,review,product,rules)
+        if verdict['input_key']!=verification_key(draft.text,review,product,rules,facts):
+            return True
     # An unchanged, completed verdict (including a content violation) doesn't
     # improve by sending the same text through another verification scan.
     current = saved_rule_quality(draft.text, rules, verdict, review=review)
@@ -168,7 +174,7 @@ def rebase_library_audits(db, scopes, version=None):
             state['policy_rewind_stage']=min([state.get('stage',0),*touched,
                                              state.get('policy_rewind_stage',state.get('stage',0))])
         state.update(policy_version=version,stages=stages,retry_at=0,
-            template_done=False,template_cursor='',policy_updated_at=now(),
+            template_done=False,template_cursor='',template_scans={},policy_updated_at=now(),
             message='Правила обновлены: затронутые ответы поставлены на новую проверку; отправка не включалась.')
         job.result=state
         job.progress=min(99,round(state.get('checked',0)*100/max(1,state.get('total',1))))
