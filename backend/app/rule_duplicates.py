@@ -35,6 +35,15 @@ def lock_rules(db, *, begin=False):
         db.execute(text('SELECT pg_advisory_xact_lock(73124, 1)'))
 
 
+def try_rules_lock(db):
+    """Workers must not wait while holding a review/job needed by a UI save."""
+    if IS_SQLITE:
+        db.flush()
+        db.execute(text('UPDATE memories SET id=id WHERE 1=0'))
+        return True
+    return bool(db.scalar(text('SELECT pg_try_advisory_xact_lock(73124, 1)')))
+
+
 @contextmanager
 def rule_write(db, *, begin=True):
     try:
