@@ -4,7 +4,8 @@ export function workspaceResources({page='shell',settingsTab='connections',owner
  const common=[['stores','/stores'],['actions','/actions'],['assistant','/settings/assistant'],['notifications','/notifications'],...(owner?[['security','/security']]:[])];
  const sections={
   'Ассистент':[['conversations','/conversations'],['voice','/voice/status'],['ai','/ollama'],['stats','/analytics'],['questionStats','/questions/stats']],
-  'Главная':[['stats','/analytics'],['system','/system/status'],['quality','/quality-report'],['overview','/analytics/marketplaces?days='+days],['sync','/sync/status']],
+  'Главная':[['stats','/analytics'],['system','/system/status'],['quality','/quality-report'],['sync','/sync/status']],
+  'Аналитика':[['stats','/analytics'],['quality','/quality-report'],['overview','/analytics/marketplaces?days='+days]],
   'Отзывы':[['jobs','/jobs'],['auto','/auto-replies/status']],
   'Вопросы':[['jobs','/jobs'],['questionStats','/questions/stats']],
   'Товары':[['products','/products/page?limit=60&knowledge='+encodeURIComponent(productKnowledge)+'&q='+encodeURIComponent(productQuery)]],

@@ -1,5 +1,7 @@
 import {ReactNode} from 'react';
 const paths:Record<string,ReactNode>={
+ 'Аналитика':<><path d="M4 3v17h17M8 15v-4m5 4V7m5 8V4"/></>,
+ 'Библиотека ответов':<><path d="M3 4h7l2 2 2-2h7v16h-7l-2 1-2-1H3ZM12 6v15M6 8h3m-3 4h3m6-4h3m-3 4h3"/></>,
  'Главная':<><path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/></>,
  'Ассистент':<><path d="M4 4h16v12H9l-5 4Z"/><path d="M8 8h8M8 12h5"/></>,
  'Очередь ответов':<><rect x="7" y="3" width="13" height="15" rx="2"/><path d="M4 7v14h12M11 7h5M11 11h5"/></>,

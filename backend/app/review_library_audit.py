@@ -65,8 +65,10 @@ def start(db):
 def report(db):
     from .verified_reply_library import statistics
     job=db.scalar(select(Job).where(Job.kind==KIND).order_by(Job.created_at.desc()).limit(1))
+    from .library_workspace import counts
     return {'maintenance':setting(db,MAINTENANCE,False),'safe_mode':setting(db,'safe_mode',False),
-        'library':statistics(db),'job':{'id':job.id,'status':job.status,**(job.result or {})} if job else None}
+        'library':statistics(db),'counts':counts(db,job.id) if job else {},
+        'job':{'id':job.id,'status':job.status,**(job.result or {})} if job else None}
 
 
 def enable_automatic_repair(db,job_id):
@@ -296,6 +298,7 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
     from .rule_retry import retry_delay,verification_failure
     from .generation_control import GenerationBusy
     started=time.monotonic();retried=False
+    await sweep_templates(job_id,session_factory)
     for iteration in range(limit):
         with session_factory() as db:
             job=db.get(Job,job_id)
@@ -357,6 +360,9 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
             row.status=outcome['status'];row.attempts=(row.attempts or 0)+1
             row.input_key=outcome.get('input_key','');row.template_id=outcome.get('template_id','')
             row.issues=outcome.get('issues',[]);row.updated_at=now()
+            if row.status=='attention':
+                from .library_workspace import suggest_case_rule
+                suggest_case_rule(db,row,db.get(Review,rid))
             if not from_retry:stage['cursor']=rid
             if outcome['status'] in ('retry','blocked'):
                 delay=retry_delay(row.attempts) if outcome['status']=='retry' else 3600
@@ -385,6 +391,67 @@ async def step(job_id,session_factory=Session,limit=40,seconds=25):
     with session_factory() as db:
         job=db.get(Job,job_id)
         if job.status=='running':job.status='queued';db.commit()
+
+
+async def sweep_templates(job_id,session_factory=Session,limit=24,seconds=4):
+    """Independent local lane: slow model reviews never hide proven matches.
+
+    Never advances the model cursor or records unmatched rows. A separate cursor
+    and row key ensure that resuming a scan cannot lose or count a review twice.
+    """
+    from .rule_change_recheck import policy_version
+    from .generation_control import GenerationBusy
+    started=time.monotonic()
+    with session_factory() as db:
+        job=db.get(Job,job_id)
+        if not job or job.cancel_requested or job.status not in ('queued','running'):return
+        state=job.result or {}
+        if state.get('policy_version')!=policy_version(db) or state['stage']>=len(state['stages']):return
+        index=state['stage'];stage=state['stages'][index]
+        cursor=state.get('template_cursor','') if state.get('template_stage')==index else ''
+        from .db import VerifiedReplyContext
+        size=db.scalar(select(func.count()).select_from(VerifiedReplyContext)) or 0
+        if state.get('template_stage')==index and state.get('template_done'):
+            if state.get('template_library_size')==size:return
+            cursor=''
+        recorded=select(ReviewLibraryAuditRow.review_id).where(
+            ReviewLibraryAuditRow.job_id==job_id,ReviewLibraryAuditRow.review_id==Review.id).exists()
+        ids=list(db.scalars(select(Review.id).where(Review.wb_account_id==stage['account_id'],
+            Review.marketplace==stage['marketplace'],Review.id>cursor,Review.id<=stage['last_id'],
+            ~recorded).order_by(Review.id).limit(limit)))
+    last=cursor
+    for rid in ids:
+        try:outcome=await inspect_review(job_id,rid,session_factory,templates_only=True)
+        except GenerationBusy:break
+        # A local probe is best-effort; the durable normal lane owns errors.
+        except Exception:break
+        with session_factory() as db:
+            job=db.scalar(select(Job).where(Job.id==job_id).with_for_update())
+            if job.cancel_requested or (job.result or {}).get('stage')!=index:return
+            if outcome.get('template_reused') and outcome['status'] in ('verified','verified_reference'):
+                row=db.get(ReviewLibraryAuditRow,(job_id,rid))
+                if row is None:
+                    db.add(ReviewLibraryAuditRow(job_id=job_id,review_id=rid,status=outcome['status'],
+                        attempts=1,retry_at=0,issues=[],input_key=outcome['input_key'],
+                        template_id=outcome['template_id']))
+                    fresh=dict(job.result);stages=[dict(s) for s in fresh['stages']]
+                    for target in (fresh,stages[index]):
+                        for key in ('checked','verified','template_reused'):target[key]=target.get(key,0)+1
+                        if outcome['status']=='verified_reference':target['corrected_references']=target.get('corrected_references',0)+1
+                        if outcome.get('auto_repaired'):target['auto_repaired']=target.get('auto_repaired',0)+1
+                    job.result={**fresh,'stages':stages,'last_progress_at':now()}
+            last=rid
+            job.result={**job.result,'template_stage':index,'template_cursor':last,
+                'template_done':False,'template_library_size':size}
+            db.commit()
+        if time.monotonic()-started>=seconds:return
+    if len(ids)<limit and (not ids or last==ids[-1]):
+        with session_factory() as db:
+            job=db.get(Job,job_id)
+            if (job.result or {}).get('stage')==index:
+                job.result={**job.result,'template_stage':index,'template_done':True,
+                    'template_library_size':size,'template_cursor':last}
+                db.commit()
 
 
 async def reuse_pending_templates(job_id,session_factory=Session):
