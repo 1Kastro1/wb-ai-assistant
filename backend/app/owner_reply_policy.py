@@ -349,6 +349,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                 result['semantic_groups'] = len(groups)
                 # Persist successful groups bound to every input and partition.
                 # Partial progress is never approval; all groups must pass.
+                from .model_router import ModelRouter
                 progress_key = verification_key(adjusted, review, product, rules, facts, instruction,
                     ModelRouter().choose('OWNER_RULES'))
                 partition = hashlib.sha256(json.dumps(groups, ensure_ascii=False).encode()).hexdigest()
