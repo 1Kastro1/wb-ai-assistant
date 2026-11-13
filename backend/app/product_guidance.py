@@ -90,7 +90,7 @@ def positive_review_reply(review, product, revision=0):
     # A short wish adds warmth without inventing an effect or promising a result.
     closing = ('Пользуйтесь с удовольствием!', 'Пусть покупка радует Вас!')[int(revision) % 2]
     if untested_review(review.text):
-        thanks = 'Спасибо, что написали!'
+        thanks = ('Спасибо, что написали!', 'Спасибо за Вашу оценку!', 'Спасибо за отзыв!')[int(revision) % 3]
         closing = 'Надеемся, покупка будет Вам полезна!'
     if 'аромат Вам понравился' in detail:
         closing = 'Пусть аромат и дальше радует Вас!'
