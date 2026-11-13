@@ -321,7 +321,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             for attempt in range(2):
                 from .rule_check_plan import prepare, request_json, step_deadline
                 messages, payload, schema, groups = prepare(review, product, semantic, facts, adjusted,
-                    protected=protected, check_only=check_only)
+                    protected=protected, check_only=check_only, style_rules=rules)
                 result['semantic_groups'] = len(groups)
                 # Persist successful groups bound to every input and partition.
                 # Partial progress is never approval; all groups must pass.

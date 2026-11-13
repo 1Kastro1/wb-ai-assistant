@@ -32,7 +32,7 @@ def main():
         rules = matching_owner_rules(db, product)
         facts = review_verified_facts(db, review, product, rules)
         semantic = semantic_rules(select_rules(rules, review, product)[0])
-        messages, payload, schema, groups = prepare(review, product, semantic, facts, draft.text, check_only=True)
+        messages, payload, schema, groups = prepare(review, product, semantic, facts, draft.text, check_only=True, style_rules=rules)
     print(json.dumps({'groups': len(groups), 'facts': len(facts), 'fact_chars': sum(len(f.get('text','')) for f in facts)}, ensure_ascii=False), flush=True)
     for index, group in enumerate(groups):
         messages[-1]['content'] = request_json(payload, group)

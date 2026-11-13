@@ -11,7 +11,7 @@ def request_json(payload, group):
     return json.dumps({**payload, 'owner_rules': group}, ensure_ascii=False, separators=(',', ':'))
 
 
-def prepare(review, product, rules, facts, answer, *, protected=False, check_only=False):
+def prepare(review, product, rules, facts, answer, *, protected=False, check_only=False, style_rules=None):
     from .owner_reply_policy import context_constraints, rule_groups, CHECK_SCHEMA
     schema = deepcopy(CHECK_SCHEMA)
     system = SYSTEM
@@ -20,7 +20,7 @@ def prepare(review, product, rules, facts, answer, *, protected=False, check_onl
         # model to generate a second customer reply that will be discarded.
         schema['properties']['revised_answer']['enum'] = ['']
         system = system.replace('Otherwise: compliant=false, name specific violations in Russian and optionally return a corrected Russian answer preserving verified facts, required style and safety warnings.', 'Otherwise set compliant=false and report specific violations in Russian. Do not rewrite the answer.')
-    style = context_constraints(rules, review)
+    style = context_constraints(rules if style_rules is None else style_rules, review)
     payload = {'buyer_message': review.text, 'rating': review.rating,
         'reply_kind': 'question' if (getattr(review, 'marketplace', '') or '').endswith('_question') else 'review',
         'product': product.name, 'verified_facts': facts, 'answer': answer,

@@ -148,3 +148,16 @@ def test_streaming_recheck_continues_same_draft_without_backoff_or_cursor_skip(m
         assert db.get(Job,jid).result['cursor_id']=='d'
         assert db.get(Draft,'d').quality['owner_rules']['passed']
         assert model.await_count==2
+
+
+def test_semantic_group_keeps_greeting_and_signature_from_full_policy(monkeypatch):
+    from app.integrations import ollama
+    args=inputs()
+    args['rules']=['Каждый ответ начинай с «Добрый день!».','Подпись: «С уважением ГК Юником.».','Пиши тепло.']
+    args['reply']='Добрый день! Спасибо, что написали. Для этой модели заявлены 55 Вт при 12 В.\nС уважением ГК Юником.'
+    model=AsyncMock(return_value=PASS);monkeypatch.setattr(ollama,'structured',model)
+    _,result=asyncio.run(enforce_owner_rules(**args))
+    assert result['passed']
+    payload=json.loads(model.await_args.args[0][-1]['content'])
+    assert payload['required_style']['greeting']=='Добрый день!'
+    assert payload['required_style']['signature']=='С уважением ГК Юником.'
