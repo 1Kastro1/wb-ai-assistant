@@ -180,6 +180,9 @@ def eligibility_reason(db, review, draft, schedule):
 def enqueue(db, schedule, store, current):
     if not schedule.get('publication_enabled') or not market_enabled(schedule, store.provider) or blocked_reason(db, schedule):
         return False
+    if not schedule.get('publication_ready_since'):
+        activation=setting(db,'live-review-pipeline-v1',{}) or {}
+        schedule['publication_ready_since']=activation.get('at') or datetime.fromtimestamp(current-86400,timezone.utc).isoformat()
     last_key = f'last_publication:{store.id}'
     if current - float(schedule.get(last_key, 0)) < int(schedule.get('publication_hours', 1)) * 3600:
         return False
@@ -189,6 +192,7 @@ def enqueue(db, schedule, store, current):
     db.add(Job(id=str(uuid4()), kind=KIND, priority=180, max_attempts=3, result={
         'account_id': store.id, 'scheduled': True, 'authorization': schedule.get('publication_authorization'),
         'requested_by': schedule.get('publication_authorized_by'), 'cursor': None,
+        'ready_since':schedule['publication_ready_since'],
         'scanned': 0, 'skipped': 0, 'published': 0, 'uncertain': 0,
         'message': 'Плановая выгрузка готовых ответов поставлена в очередь'}))
     schedule[last_key] = current
@@ -247,7 +251,9 @@ async def run_step(job_id, session_factory=Session):
             # Approval time has its own cursor: a newly verified old review
             # must not wait behind the remaining archive scan.
             checked_at=Draft.quality['owner_rules']['checked_at'].as_string()
-            fresh=candidate_query(state['account_id'],schedule).order_by(None).where(checked_at>=job.created_at)
+            activation=setting(db,'live-review-pipeline-v1',{}) or {}
+            ready_since=state.get('ready_since') or schedule.get('publication_ready_since') or activation.get('at') or job.created_at
+            fresh=candidate_query(state['account_id'],schedule).order_by(None).where(checked_at>=ready_since)
             ready_cursor=state.get('ready_cursor')
             if ready_cursor:
                 fresh=fresh.where(or_(checked_at>ready_cursor[0],and_(checked_at==ready_cursor[0],Review.id>ready_cursor[1])))
