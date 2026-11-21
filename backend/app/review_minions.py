@@ -5,7 +5,7 @@ from sqlalchemy import and_, func, or_, select
 
 from .db import Account, Draft, IS_SQLITE, Job, Publication, Review, ReviewLibraryAuditRow, Session, StoreProfile, now, setting
 from .generation_control import GenerationBusy
-from .rule_retry import retry_delay, verification_failure
+from .rule_retry import MAX_CHECK_FAILURES, retry_delay, verification_failure
 
 KIND = 'review_minion'
 PROVIDERS = ('wb', 'ozon', 'yandex')
@@ -130,7 +130,10 @@ async def run_step(job_id, session_factory=Session):
             return
         schedule = setting(db, 'automation_schedule', {})
         enabled = enabled_for(db, schedule)
-        review_id = candidate(db, job, time.time()) if enabled else None
+        delivery = db.scalar(select(ReviewLibraryAuditRow).where(
+            ReviewLibraryAuditRow.job_id == job_id, ReviewLibraryAuditRow.status == 'ready_to_deliver')
+            .order_by(ReviewLibraryAuditRow.updated_at, ReviewLibraryAuditRow.review_id).limit(1))
+        review_id = delivery.review_id if delivery else candidate(db, job, time.time()) if enabled else None
         if not review_id:
             job.status = 'queued'
             job.result = {**job.result, 'handoff_at': None, 'retry_at': time.time() + 120,
@@ -138,7 +141,8 @@ async def run_step(job_id, session_factory=Session):
                 'message': 'Ожидает сложных отзывов' if enabled else 'Подготовка ответов выключена'}
             db.commit()
             return
-        revision = db.scalar(select(Draft.revision).where(Draft.review_id == review_id))
+        revision = ((delivery.verification_progress or {}).get('_minion_revision') if delivery else
+            db.scalar(select(Draft.revision).where(Draft.review_id == review_id)))
         prior = db.get(ReviewLibraryAuditRow, (job_id, review_id))
         same_revision = bool(prior and (prior.verification_progress or {}).get('_minion_revision') == revision)
         previous_attempts = prior.attempts if same_revision else 0
@@ -147,7 +151,10 @@ async def run_step(job_id, session_factory=Session):
             db.commit()
 
     try:
-        outcome = await inspect_review(job_id, review_id, session_factory, live_minion=True)
+        if delivery:
+            outcome = {'status': 'verified', 'input_key': delivery.input_key, 'template_id': delivery.template_id}
+        else:
+            outcome = await inspect_review(job_id, review_id, session_factory, live_minion=True)
     except GenerationBusy:
         outcome = {'status': 'retry', 'issues': ['Черновик уже обрабатывается']}
     except (TimeoutError, ValueError) as error:
@@ -169,6 +176,20 @@ async def run_step(job_id, session_factory=Session):
         if not job or job.cancel_requested:
             return
         checked_revision = revision + int(bool(outcome.get('auto_repaired')))
+        attempts = previous_attempts + int(not outcome.get('continuation'))
+        stopped = outcome['status'] == 'technical_attention' or (
+            outcome['status'] == 'retry' and attempts >= MAX_CHECK_FAILURES)
+        if stopped:
+            draft = db.scalar(select(Draft).where(Draft.review_id == review_id,
+                Draft.revision == checked_revision).with_for_update())
+            if draft and draft.quality_passed is not True:
+                quality = draft.quality or {}
+                rules = quality.get('owner_rules') or {}
+                draft.quality = {**quality, 'passed': False, 'owner_rules': {
+                    **rules, 'status': 'error', 'retryable': False, 'technical_error': True,
+                    'continuation': False, 'checked': False, 'passed': False, 'retry_at': 0,
+                    'failure_code': 'retry_exhausted' if outcome['status'] == 'retry' else
+                        rules.get('failure_code') or 'minion_stopped'}}
         if outcome['status'] == 'verified':
             from .scheduled_publication import queue_minion_reply
             queue_minion_reply(db, review_id, checked_revision)
@@ -180,10 +201,8 @@ async def run_step(job_id, session_factory=Session):
         if row is None:
             row = ReviewLibraryAuditRow(job_id=job_id, review_id=review_id, status='retry')
             db.add(row)
-        row.attempts = (previous_attempts or 0) + (0 if outcome.get('continuation') else 1)
-        row.status = outcome['status']
-        if row.status == 'retry' and row.attempts >= 5:
-            row.status = 'technical_attention'
+        row.attempts = attempts
+        row.status = 'technical_attention' if stopped else outcome['status']
         row.retry_at = time.time() + (0 if outcome.get('continuation') else retry_delay(row.attempts)) if row.status == 'retry' else 0
         row.input_key = outcome.get('input_key', '')
         row.template_id = outcome.get('template_id', '')
@@ -204,5 +223,5 @@ async def run_step(job_id, session_factory=Session):
             'handoff_at': new_handoff, 'retry_at': 0 if new_handoff else time.time() + 5,
             'last_progress_at': now(), 'wait_reason': 'cadence',
             'last_lane': 'retry' if same_revision else 'new',
-            'message': 'Миньон проверяет сложные отзывы'}
+            'message': 'Миньон завершил этап проверки'}
         db.commit()

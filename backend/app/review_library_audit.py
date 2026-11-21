@@ -275,7 +275,16 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                     remember(db,key,'reference',answer,verdict,source=rid,marketplace=review.marketplace)
                 tid=text_id(answer)
             audit_record=db.get(ReviewLibraryAuditRow,(job_id,rid))
-            if (verdict.get('group_progress') or verdict.get('technical_error')) and not verdict.get('passed'):
+            if tid and live_minion:
+                if audit_record is None:
+                    audit_record = ReviewLibraryAuditRow(job_id=job_id, review_id=rid)
+                    db.add(audit_record)
+                audit_record.status = 'ready_to_deliver'
+                audit_record.input_key, audit_record.template_id = key, tid
+                audit_record.verification_progress = {'_minion_revision': draft.revision}
+                audit_record.issues = []
+                audit_record.updated_at = now()
+            elif (verdict.get('group_progress') or verdict.get('technical_error')) and not verdict.get('passed'):
                 if audit_record is None:
                     audit_record=ReviewLibraryAuditRow(job_id=job_id,review_id=rid,status='retry')
                     db.add(audit_record)

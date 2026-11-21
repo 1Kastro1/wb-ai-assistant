@@ -45,6 +45,29 @@ def jobs():
     with Session() as db: return list(db.scalars(select(Job.id).where(Job.kind == automatic.KIND)))
 
 
+def test_stale_priority_batch_yields_instead_of_staying_running(client, ready, monkeypatch):
+    from app.queue_policy import next_job
+    enable(client, enabled=True)
+    monkeypatch.setattr(automatic, 'BATCH_SIZE', 2)
+    with Session() as db:
+        job = db.scalar(select(Job).where(Job.kind == automatic.KIND, Job.result['account_id'].as_string() == 'owner'))
+        job.status = 'running'
+        job.result = {**job.result, 'priority_only': True,
+            'priority_reviews': {'ownerreview': 8, 'missing': 9}, 'has_priority_reviews': True}
+        jid = job.id
+        db.commit()
+    asyncio.run(automatic.run_step(jid))
+    with Session() as db:
+        job = db.get(Job, jid)
+        assert job.status == 'queued'
+        assert job.result['priority_reviews'] == {}
+        assert next_job(db, (automatic.KIND,)) is not None
+    asyncio.run(automatic.run_step(jid))
+    with Session() as db:
+        assert db.get(Job, jid).status == 'completed'
+    assert ready == []
+
+
 @pytest.mark.parametrize('store', ['owner', 'oz', 'ya'])
 def test_minion_verdict_queues_only_approved_revision_without_waiting_for_schedule(client, ready, store):
     from app.queue_policy import next_job

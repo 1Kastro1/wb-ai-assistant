@@ -41,30 +41,34 @@ def queue_ordering():
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))
     manual_check = ((Job.result['retry_draft_id'].as_string().is_not(None))
                     & (Job.result['manual_check'].as_boolean() == True))
+    direct_request = or_(Job.kind.in_(('single_draft', 'single_question_draft')), manual_check)
     direct_waiting = select(Job.id).where(Job.status == 'queued', Job.cancel_requested == False,
-        or_(Job.kind.in_(('single_draft', 'single_question_draft')),
-            manual_check),
+        direct_request,
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
     overdue_generation = batch_generation & (served < generation_cutoff) & ~direct_waiting
     # Imports must age into the same fair, oldest-served band. Otherwise a
     # continuous rotation of model checks/publication can starve fresh reviews
     # for days, even though the import's numeric priority is reasonable.
     # Each import yields only after committing its resume checkpoint.
-    overdue_sync = Job.kind.in_(('products', 'reviews', 'questions')) & (served < generation_cutoff) & ~direct_waiting
+    overdue_sync = Job.kind.in_(('products', 'reviews', 'questions')) & (served < generation_cutoff)
     fresh_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
     fresh_due = (Job.kind.in_(('drafts','question_drafts')) &
         (Job.result['fresh_reviews'].as_boolean()==True) & (served < fresh_cutoff) & ~direct_waiting)
     # Fresh work ages sooner, but shares the oldest-served band: three long
     # fresh batches must never permanently exclude checks, archive or sends.
     direct_delivery = (Job.kind == 'scheduled_publication') & (Job.result['has_priority_reviews'].as_boolean() == True)
-    interactive = case((direct_delivery, -4), (minion_handoff_pending(), -3),
-                       (or_(fresh_due, overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
+    expedited_waiting = select(Job.id).where(Job.status == 'queued', Job.cancel_requested == False,
+        or_(direct_delivery, minion_handoff_pending()),
+        func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
+    aged = or_(overdue_send, overdue_sync, direct_request & (served < cutoff) & expedited_waiting, overdue_generation)
+    interactive = case((aged, -5), (direct_delivery, -4), (minion_handoff_pending(), -3),
+                       (fresh_due, -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (manual_check, 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)
     requested_check = case((Job.result['retry_draft_id'].as_string().is_not(None),
         func.coalesce(Job.result['requested_check_at'].as_string(), Job.created_at)), else_='')
-    return (interactive, requested_check.desc(), served, Job.priority, Job.created_at, Job.id)
+    return (interactive, case((aged, ''), else_=requested_check).desc(), served, Job.priority, Job.created_at, Job.id)
 
 
 def other_waiting(db, job_id, *, priority_only=False):

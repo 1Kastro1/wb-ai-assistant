@@ -31,6 +31,26 @@ export function stageStatus(group,key,now=Date.now()/1000){
  if(group.completed_stages?.[key])return {label:'Завершено',tone:'done'};
  return {label:key==='verification'?'Нет ответов на проверке':'Новых задач нет',tone:'idle'};
 }
+export function marketWorkStatus(group,now=Date.now()/1000){
+ const stages=workStages.map(([key])=>stageStatus(group,key,now));
+ if(stages.some(s=>s.tone==='running'))return {label:'Выполняется',tone:'running'};
+ if(group.minion?.status==='failed')return {label:'Нужна помощь',tone:'retry'};
+ if(stages.some(s=>s.tone==='waiting'))return {label:'Ожидает очереди',tone:'waiting'};
+ const retry=stages.find(s=>s.tone==='retry');
+ if(retry)return retry;
+ if(workStages.every(([key])=>group.enabled?.[key]===false))return {label:'На паузе',tone:'idle'};
+ if(stages.some(s=>s.tone==='done'))return {label:'Последний проход завершён',tone:'done'};
+ return {label:'Новых задач нет',tone:'idle'};
+}
+
+export function minionStatus(minion){
+ if(minion.status==='failed')return 'Нужна проверка сервиса';
+ if(minion.status==='cancelled')return 'Остановлен';
+ if(minion.status==='running')return 'Проверяет отзыв';
+ if(minion.wait_reason==='disabled')return 'На паузе';
+ if(minion.wait_reason==='idle')return 'Ожидает сложных отзывов';
+ return 'Ожидает следующего прохода';
+}
 export function lastMovement(group){
  const values=[group.last_progress_at,group.refresh?.last_progress_at,...group.tasks.map(t=>t.last_progress_at),
   ...Object.values(group.completed_stages||{}).map(s=>s.finished_at)].filter(Boolean);

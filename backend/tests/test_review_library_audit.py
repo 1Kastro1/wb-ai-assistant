@@ -61,6 +61,19 @@ def test_minion_resumes_unpublished_repair_before_approving(monkeypatch):
     with Session() as db:
         assert db.get(Draft, 'd-wb').text == replacement
         assert db.get(Review, rid).status == 'draft_ready'
+        assert db.get(ReviewLibraryAuditRow, (jid, rid)).status == 'ready_to_deliver'
+    from app.review_minions import run_step
+    deliveries = []
+    monkeypatch.setattr('app.scheduled_publication.queue_minion_reply',
+        lambda _db, review_id, revision: deliveries.append((review_id, revision)))
+    check = AsyncMock(side_effect=AssertionError('Уже проверенный ответ не проверяется после перезапуска'))
+    monkeypatch.setattr('app.review_library_audit.inspect_review', check)
+    asyncio.run(run_step(jid))
+    check.assert_not_awaited()
+    assert deliveries == [(rid, 8)]
+    with Session() as db:
+        assert db.get(ReviewLibraryAuditRow, (jid, rid)).status == 'verified'
+        assert db.get(Job, jid).result['verified'] == 1
 
 
 def test_minion_timeout_without_proof_repairs_before_retrying_original(monkeypatch):
