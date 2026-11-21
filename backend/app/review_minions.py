@@ -61,6 +61,8 @@ async def run_step(job_id, session_factory=Session):
         outcome = await inspect_review(job_id, review_id, session_factory, live_minion=True)
     except GenerationBusy:
         outcome = {'status': 'retry', 'issues': ['Черновик уже обрабатывается']}
+    except TimeoutError:
+        outcome = {'status': 'retry', 'issues': ['Истекло время подготовки ответа моделью']}
 
     with session_factory() as db:
         job = db.get(Job, job_id)
