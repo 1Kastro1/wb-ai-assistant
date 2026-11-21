@@ -164,10 +164,11 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                     'fingerprint':fingerprint(rules),'matched':len(rules),'issues':defects,
                     'verification_method':'local_rejection','verification_seconds':0}
             else:
-                from .generation_budget import AUTO_RULE_CHECK_SECONDS
+                from .generation_budget import AUTO_RULE_CHECK_SECONDS, MINION_RULE_CHECK_SECONDS
                 from .generation_control import FastPathUnavailable
                 options={'protected':review.risk!='NORMAL','check_only':True,'allow_fast_positive':True,
-                    'check_seconds':AUTO_RULE_CHECK_SECONDS, 'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else audit_previous.verification_progress if audit_previous else None, 'group_limit':1}
+                    'check_seconds':MINION_RULE_CHECK_SECONDS if live_minion else AUTO_RULE_CHECK_SECONDS,
+                    'previous_check':(draft.quality or {}).get('owner_rules') if draft and not was_published else audit_previous.verification_progress if audit_previous else None, 'group_limit':1}
                 try:
                     checked,verdict=await enforce_owner_rules(answer,review,product,rules,facts,assess,
                         **options,local_only=bool(can_repair))

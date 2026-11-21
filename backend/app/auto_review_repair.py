@@ -7,8 +7,8 @@ async def repair(review, product, rules, facts, assess, *, local_only=False, gen
     from .review_cases import specific_review_case
     from .safety import safe_fallback_reply
     from .brake_feedback import template as brake_template
-    from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
-    from .generation_budget import AUTO_RULE_CHECK_SECONDS, GenerationBudget
+    from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, apply_local_preferences, apply_signature
+    from .generation_budget import AUTO_RULE_CHECK_SECONDS, MINION_RULE_CHECK_SECONDS, GenerationBudget
     # Critical technical conclusions stay protected. This routine does not
     # clear risk flags, publication restrictions, or human revisions.
     brake = brake_template(review, product, rules)
@@ -47,9 +47,16 @@ async def repair(review, product, rules, facts, assess, *, local_only=False, gen
         generated=True
     from .generation_control import FastPathUnavailable
     try:
-        options = {'group_limit': 1, 'previous_check': (resume or {}).get('proof')} if generation_seconds else {}
+        options = {}
+        if generation_seconds:
+            candidate, _ = apply_local_preferences(candidate, review, rules)
+            candidate = apply_signature(candidate, rules)
+            # Validate a frozen proposal in durable groups. A second rewrite
+            # would change its proof key and discard any finished groups.
+            options = {'check_only': True, 'group_limit': 1, 'previous_check': (resume or {}).get('proof')}
         answer, verdict = await enforce_owner_rules(candidate, review, product, rules, facts, assess,
-            allow_fast_positive=True, check_seconds=AUTO_RULE_CHECK_SECONDS, local_only=local_only, **options)
+            allow_fast_positive=True, check_seconds=MINION_RULE_CHECK_SECONDS if generation_seconds else AUTO_RULE_CHECK_SECONDS,
+            local_only=local_only, **options)
     except FastPathUnavailable:
         if local_only:return None
         raise
