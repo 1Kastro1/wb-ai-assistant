@@ -87,6 +87,17 @@ def handoff(db, draft, review):
         .execution_options(populate_existing=True))
     if job.status not in ('queued', 'running') or job.cancel_requested:
         return None
+    audit = db.get(ReviewLibraryAuditRow, (job.id, review.id))
+    if not audit:
+        audit = ReviewLibraryAuditRow(job_id=job.id, review_id=review.id)
+        db.add(audit)
+    elif (audit.verification_progress or {}).get('_minion_revision') == draft.revision:
+        if audit.status == 'retry':
+            return job  # Keep the repair proposal and any model backoff.
+        if audit.status not in ('handoff', 'verified'):
+            return job  # This exact revision already has a decision.
+    audit.status, audit.attempts, audit.retry_at = 'handoff', 0, 0
+    audit.verification_progress = {'_minion_revision': draft.revision}
     job.result = {**job.result, 'handoff_at': now(), 'retry_at': 0,
         'message': 'Миньон подхватил прерванную проверку'}
     return job
@@ -95,13 +106,11 @@ def handoff(db, draft, review):
 def candidate(db, job, current):
     audit = ReviewLibraryAuditRow
     changed = func.coalesce(audit.verification_progress['_minion_revision'].as_integer(), -1) != Draft.revision
-    fresh = or_(audit.review_id.is_(None), changed)
+    handed_off = func.coalesce(audit.status == 'handoff', False)
+    fresh = or_(audit.review_id.is_(None), changed, handed_off)
     retry = and_(audit.status == 'retry', audit.retry_at <= current)
     prefer_fresh = job.result.get('last_lane') == 'retry'
-    order = [fresh.desc() if prefer_fresh else fresh.asc(), Review.created_at.desc(), Review.id]
-    if job.result.get('handoff_at'):
-        order[:0] = [func.coalesce(Draft.quality_technical, False).desc(),
-            func.coalesce(Draft.quality['owner_rules']['checked_at'].as_string(), '').desc()]
+    order = [handed_off.desc(), fresh.desc() if prefer_fresh else fresh.asc(), Review.created_at.desc(), Review.id]
     return db.scalar(select(Review.id).join(Draft, Draft.review_id == Review.id)
         .outerjoin(audit, and_(audit.job_id == job.id, audit.review_id == Review.id))
         .where(
@@ -121,7 +130,6 @@ async def run_step(job_id, session_factory=Session):
             return
         schedule = setting(db, 'automation_schedule', {})
         enabled = enabled_for(db, schedule)
-        handoff_at = job.result.get('handoff_at')
         review_id = candidate(db, job, time.time()) if enabled else None
         if not review_id:
             job.status = 'queued'
@@ -182,9 +190,14 @@ async def run_step(job_id, session_factory=Session):
         row.issues = outcome.get('issues', [])
         row.updated_at = now()
         row.verification_progress = {**(row.verification_progress or {}), '_minion_revision': checked_revision}
+        db.flush()
+        more_handoffs = db.scalar(select(ReviewLibraryAuditRow.review_id)
+            .join(Review, Review.id == ReviewLibraryAuditRow.review_id).join(Draft, Draft.review_id == Review.id)
+            .where(ReviewLibraryAuditRow.job_id == job.id, ReviewLibraryAuditRow.status == 'handoff',
+                eligible_review(), interrupted_text_check()).limit(1))
         job.status = 'queued'
         state = {k: v for k, v in job.result.items() if k not in ('failure_attempts', 'error_type', 'detail')}
-        new_handoff = state.get('handoff_at') if state.get('handoff_at') != handoff_at else None
+        new_handoff = state.get('handoff_at') if more_handoffs else None
         job.result = {**state, 'processed': job.result.get('processed', 0) + int(row.status != 'retry'),
             'verified': job.result.get('verified', 0) + int(row.status == 'verified'),
             'needs_person': job.result.get('needs_person', 0) + int(row.status in ('attention', 'blocked', 'technical_attention')),
