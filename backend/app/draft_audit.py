@@ -165,12 +165,20 @@ async def _recheck_one(job_id, session_factory=Session):
         if job.cancel_requested:
             job.status = 'cancelled'; db.commit(); return
         if scan:
+            technical_condition = automatic_check_condition()
+            if state.get('technical_scan'):
+                from .review_minions import KIND, eligible_review, enabled_for, interrupted_text_check
+                from .db import setting
+                minion = db.get(Job, f"{KIND}:{state['account_id']}")
+                if (minion and minion.status in ('queued', 'running') and not minion.cancel_requested
+                    and enabled_for(db, setting(db, 'automation_schedule', {}))):
+                    technical_condition = technical_condition & ~(eligible_review() & interrupted_text_check())
             query = select(Draft.id).join(Review, Review.id == Draft.review_id).where(
                 Review.wb_account_id == state['account_id'], Review.is_answered == False,
                 Review.status != 'publishing', Draft.id > state.get('cursor_id', ''),
                 *([~Review.marketplace.like('%_question')] if state.get('reviews_only') else []))
             if state.get('technical_scan'):
-                query = query.where(automatic_check_condition())
+                query = query.where(technical_condition)
             if state.get('rule_change'):
                 from .rule_change_recheck import scope_conditions
                 query = query.where(*scope_conditions(state))
@@ -180,7 +188,7 @@ async def _recheck_one(job_id, session_factory=Session):
                     remaining = db.scalar(select(Draft.id).join(Review, Review.id == Draft.review_id).where(
                         Review.wb_account_id == state['account_id'], Review.is_answered == False,
                         Review.status != 'publishing',
-                        automatic_check_condition()).limit(1))
+                        technical_condition).limit(1))
                     if remaining:
                         from .rule_retry import retry_delay
                         cycle = state.get('cycles', 0) + 1

@@ -1,9 +1,43 @@
 import asyncio
 import time
 from unittest.mock import AsyncMock
+import pytest
 
 from app.db import Draft, Job, Product, Publication, Review, ReviewLibraryAuditRow, Session, StoreProfile, set_setting
 from app.review_minions import enqueue, run_step, candidate
+
+
+@pytest.mark.parametrize('provider', ['wb', 'ozon', 'yandex'])
+@pytest.mark.parametrize('proof', [
+    {'technical_error': True, 'retryable': True, 'failure_code': 'timeout'},
+    {'technical_error': True, 'retryable': False, 'failure_code': 'retry_exhausted'},
+    {'checked': False, 'continuation': True},
+])
+def test_interrupted_text_check_reaches_minion_without_queueing_unsafe_reviews(provider, proof):
+    from app.scheduled_publication import candidate_query
+
+    with Session() as db:
+        db.add(Product(id='p', name='Product'))
+        db.flush()
+        for review_id, text, safety_critical in (
+            ('eligible', 'Не оправдало ожиданий', False),
+            ('empty', '', False),
+            ('hazard', 'Опасный случай', True),
+        ):
+            db.add(Review(id=review_id, wb_review_id=review_id, wb_account_id='owner',
+                marketplace=provider, product_id='p', rating=3, text=text,
+                status='manual_review', safety_critical=safety_critical))
+            db.flush()
+            db.add(Draft(id=review_id, review_id=review_id, text='Спасибо за отзыв!',
+                original='Спасибо за отзыв!', quality={'passed': False, 'owner_rules': proof}))
+        enqueue(db, StoreProfile(id='owner', provider=provider, name='Shop'))
+        db.commit()
+        assert candidate(db, db.get(Job, 'review_minion:owner'), time.time()) == 'eligible'
+        schedule = {'publication_low_ratings': True}
+        assert list(db.scalars(candidate_query('owner', schedule))) == []
+        db.get(Draft, 'eligible').quality = {'passed': True, 'owner_rules': {'checked': True, 'passed': True}}
+        db.commit()
+        assert [review.id for review in db.scalars(candidate_query('owner', schedule))] == ['eligible']
 
 
 def test_minion_routes_only_unpublished_safe_content_failures_and_remembers_result(monkeypatch):
@@ -48,6 +82,30 @@ def test_minion_routes_only_unpublished_safe_content_failures_and_remembers_resu
         db.get(Draft, 'safe').revision += 1
         db.commit()
         assert candidate(db, db.get(Job, job_id), time.time()) == 'safe'
+
+
+def test_active_minion_owns_interrupted_text_check_instead_of_store_scan():
+    from app.draft_audit import recheck_step
+    from app.rule_retry import automatic_queue
+
+    with Session() as db:
+        set_setting(db, 'review_minions_enabled', True)
+        set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True})
+        db.add(Product(id='p', name='Product'))
+        db.flush()
+        db.add(Review(id='r', wb_review_id='r', product_id='p', rating=5,
+            marketplace='wb', text='Очень понравилось', status='manual_review'))
+        db.flush()
+        db.add(Draft(id='d', review_id='r', text='Спасибо!', original='Спасибо!',
+            quality={'passed': False, 'owner_rules': {'technical_error': True, 'retryable': True}}))
+        enqueue(db, StoreProfile(id='owner', provider='wb', name='Shop'))
+        scan_id = automatic_queue(db, 'owner').id
+        db.commit()
+
+    asyncio.run(recheck_step(scan_id))
+    with Session() as db:
+        assert db.get(Job, scan_id).status == 'completed'
+        assert candidate(db, db.get(Job, 'review_minion:owner'), time.time()) == 'r'
 
 
 def test_failed_minion_self_recovers_but_explicit_stop_remains():

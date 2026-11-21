@@ -44,6 +44,31 @@ def restart(job):
     job.result = {**state, 'message': 'Миньон возобновит проверку отзывов'}
 
 
+def enabled_for(db, schedule):
+    return (schedule.get('enabled') and schedule.get('drafts_enabled')
+        and setting(db, 'review_minions_enabled', False) and setting(db, 'assistant_enabled', True))
+
+
+def eligible_review():
+    return and_(
+        Review.marketplace.in_(PROVIDERS), Review.is_answered == False,
+        Review.status.in_(('manual_review', 'draft_ready')), Review.manual == False,
+        Review.safety_critical == False, Review.risk == 'NORMAL',
+        ~and_(Review.marketplace == 'ozon', func.trim(Review.text) == ''),
+        ~select(Publication.id).where(Publication.review_id == Review.id).exists(),
+    )
+
+
+def interrupted_text_check():
+    proof = Draft.quality['owner_rules']
+    return and_(func.trim(Review.text) != '', or_(
+        and_(Draft.quality_technical == True, or_(
+            func.coalesce(proof['retryable'].as_boolean(), True),
+            proof['failure_code'].as_string() == 'retry_exhausted')),
+        func.coalesce(proof['continuation'].as_boolean(), False),
+    ))
+
+
 def candidate(db, job, current):
     audit = ReviewLibraryAuditRow
     changed = func.coalesce(audit.verification_progress['_minion_revision'].as_integer(), -1) != Draft.revision
@@ -53,12 +78,9 @@ def candidate(db, job, current):
     return db.scalar(select(Review.id).join(Draft, Draft.review_id == Review.id)
         .outerjoin(audit, and_(audit.job_id == job.id, audit.review_id == Review.id))
         .where(
-            Review.wb_account_id == job.result['account_id'], Review.marketplace.in_(PROVIDERS),
-            Review.is_answered == False, Review.status.in_(('manual_review', 'draft_ready')),
-            Review.manual == False, Review.safety_critical == False, Review.risk == 'NORMAL',
-            or_(and_(Draft.quality_attention == True, Draft.quality_technical == False), audit.status == 'retry'),
-            ~and_(Review.marketplace == 'ozon', func.trim(Review.text) == ''),
-            ~select(Publication.id).where(Publication.review_id == Review.id).exists(),
+            Review.wb_account_id == job.result['account_id'], eligible_review(),
+            or_(and_(Draft.quality_attention == True, Draft.quality_technical == False),
+                interrupted_text_check(), audit.status == 'retry'),
             or_(fresh, retry),
         ).order_by(fresh.desc() if prefer_fresh else fresh.asc(), Review.created_at.desc(), Review.id).limit(1))
 
@@ -71,8 +93,7 @@ async def run_step(job_id, session_factory=Session):
         if not job or job.cancel_requested:
             return
         schedule = setting(db, 'automation_schedule', {})
-        enabled = (schedule.get('enabled') and schedule.get('drafts_enabled')
-            and setting(db, 'review_minions_enabled', False) and setting(db, 'assistant_enabled', True))
+        enabled = enabled_for(db, schedule)
         review_id = candidate(db, job, time.time()) if enabled else None
         if not review_id:
             job.status = 'queued'
