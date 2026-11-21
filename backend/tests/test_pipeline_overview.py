@@ -1,5 +1,5 @@
 from sqlalchemy import select
-from app.db import Session,Product,Review,Draft,Job,Publication,StoreProfile,GenerationOutcome,set_setting
+from app.db import Session,Product,Review,Draft,Job,Publication,StoreProfile,GenerationOutcome,ReviewLibraryAuditRow,set_setting,setting
 from app.queue_overview import queue_overview
 from app.generation_control import record_outcome,batch_context
 
@@ -62,6 +62,25 @@ def test_empty_store_and_employee_scope_are_preserved(client):
         assert next(s for s in owner if s['id']=='other')['counts']['ready']==0
         scoped=queue_overview(db,{'role':'operator'},'owner')['market_processes']
         assert [s['id'] for s in scoped]==['owner']
+
+
+def test_template_only_upload_and_legacy_exhaustion_appear_in_overview(client, monkeypatch):
+    monkeypatch.setattr('app.config.REAL_PUBLISH', True)
+    with Session() as db:
+        seed(db)
+        set_setting(db, 'test_mode', False)
+        schedule = {**setting(db, 'automation_schedule', {}), 'publication_reviews': False,
+            'publication_questions': False, 'publication_all_low_ratings': False}
+        set_setting(db, 'automation_schedule', schedule)
+        db.add(Job(id='review_minion:owner', kind='review_minion', result={'account_id': 'owner'}))
+        db.flush()
+        db.add(ReviewLibraryAuditRow(job_id='review_minion:owner', review_id='technical',
+            status='technical_attention', verification_progress={'_minion_revision': 1}))
+        db.commit()
+        store = queue_overview(db, {'role': 'owner'}, 'owner')['market_processes'][0]
+        assert store['enabled']['publication']
+        assert store['negative_publication_mode'] == 'templates'
+        assert store['counts']['technical_stopped'] == 1
 
 
 def test_usage_is_atomic_and_idempotent_with_saved_outcome(client):

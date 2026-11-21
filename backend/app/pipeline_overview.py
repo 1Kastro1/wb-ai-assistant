@@ -1,7 +1,7 @@
 """Store aggregates and durable campaign progress; no buyer bodies or prompts."""
-from sqlalchemy import select, func, case, and_
-from .db import Review, Draft, Publication, Job, GenerationOutcome, setting
-from .attention_queue import personal_condition, automatic_publication, publication_schedule, supported_review
+from sqlalchemy import select, func, case, and_, or_
+from .db import Review, Draft, Publication, Job, GenerationOutcome, ReviewLibraryAuditRow, setting
+from .attention_queue import personal_condition, automatic_publication, low_rating_publication_mode, publication_schedule, supported_review
 from .read_cache import cached_read
 from datetime import datetime, timezone, timedelta
 
@@ -28,10 +28,17 @@ def _overview(db,stores):
     midnight=current.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc).isoformat()
     tomorrow=(current.replace(hour=0,minute=0,second=0,microsecond=0)+timedelta(days=1)).astimezone(timezone.utc).isoformat()
     published_today=and_(sent,Publication.confirmed_at>=midnight,Publication.confirmed_at<tomorrow)
+    stopped_by_minion = select(ReviewLibraryAuditRow.review_id).where(
+        ReviewLibraryAuditRow.review_id == Review.id,
+        ReviewLibraryAuditRow.job_id == 'review_minion:' + Review.wb_account_id,
+        ReviewLibraryAuditRow.status == 'technical_attention',
+        ReviewLibraryAuditRow.verification_progress['_minion_revision'].as_integer() == Draft.revision,
+    ).exists()
     flags={'unanswered':unanswered,'ready':ready,'personal':attention,'technical':technical,'pending':pending,
         'published':sent,'published_today':published_today,'negative_published_today':and_(negative,published_today),
         'awaiting_moderation':Publication.status=='answer_pending',
-        'technical_stopped':and_(technical,Draft.quality['owner_rules']['retryable'].as_boolean()==False),
+        'technical_stopped':and_(unanswered, or_(stopped_by_minion,
+            and_(technical,Draft.quality['owner_rules']['retryable'].as_boolean()==False))),
         'negative_ready':and_(negative,ready),'negative_personal':and_(negative,attention),
         'negative_published':and_(negative,sent),'safety':and_(attention,Review.risk!='NORMAL'),
         'content':and_(attention,Draft.quality_attention==True),
@@ -47,7 +54,6 @@ def _overview(db,stores):
         .join(Review,Review.id==GenerationOutcome.review_id).where(Review.wb_account_id.in_(stores),
             GenerationOutcome.created_at!='').group_by(Review.wb_account_id)).all())
     latest={};stages={}
-    from sqlalchemy import or_
     groups={'sync':Job.kind.in_(('products','reviews','questions')),
         'publication':Job.kind.in_(('scheduled_publication','wb_publish_send','wb_publish_prepare','publication_reconcile')),
         'generation':or_(Job.kind.in_(('drafts','single_draft','question_drafts','single_question_draft')),
@@ -81,18 +87,22 @@ def _overview(db,stores):
     for sid,store in stores.items():
         minion = db.get(Job, 'review_minion:' + sid)
         minion_state = (minion.result or {}) if minion else {}
+        negative_mode = low_rating_publication_mode(schedule, store.provider)
+        sends_reviews = automatic_publication(schedule, store.provider)
+        sends_any = sends_reviews or negative_mode != 'off' or automatic_publication(schedule, store.provider, question=True)
         result.append({'id':sid,'provider':store.provider,'name':store.name,
             'counts':counts.get(sid,{k:0 for k in flags}),'refresh':latest.get(sid),
             'last_progress_at':movements.get(sid),
             'delivery_latency':delivery_latency(db,sid),
             'minion':{'status': minion.status, 'message': minion_state.get('message', ''),
+                'wait_reason': minion_state.get('wait_reason', ''), 'retry_at': minion_state.get('retry_at', 0),
                 'verified': minion_state.get('verified', 0), 'needs_person': minion_state.get('needs_person', 0)} if minion else None,
             'completed_stages':stages.get(sid,{}),
             'enabled':{'sync':bool(schedule['enabled'] and schedule.get('reviews_sync_enabled')),
                 'generation':bool(schedule['enabled'] and schedule.get('drafts_enabled')),
                 'verification':bool(setting(db,'assistant_enabled',True)),
-                'publication':automatic_publication(schedule,store.provider)},
-            'auto_publication':automatic_publication(schedule,store.provider),
+                'publication':sends_any},
+            'auto_publication':sends_any,
             'publication_block':publication_block,
-            'auto_negative':automatic_publication(schedule,store.provider,rating=1)})
+            'auto_negative':negative_mode != 'off', 'negative_publication_mode':negative_mode})
     return result

@@ -1,6 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {serverWorkGroups,workStages,stageStatus,lastMovement,relativeTime} from '../app/server-work.mjs';
+import {serverWorkGroups,workStages,stageStatus,marketWorkStatus,minionStatus,lastMovement,relativeTime} from '../app/server-work.mjs';
+
+test('market summary and minion labels distinguish idle, stopped and active work',()=>{
+ assert.equal(marketWorkStatus({stages:{}}).label,'Новых задач нет');
+ assert.equal(marketWorkStatus({stages:{},enabled:{sync:false,generation:false,verification:false,publication:false}}).label,'На паузе');
+ assert.equal(marketWorkStatus({stages:{},minion:{status:'failed'}}).label,'Нужна помощь');
+ assert.equal(marketWorkStatus({stages:{verification:{running:1}}}).label,'Выполняется');
+ assert.equal(minionStatus({status:'queued',wait_reason:'cadence',message:'Миньон проверяет'}),'Ожидает следующего прохода');
+});
 
 test('idle stores stay visible; completion, disabled and backoff are distinct',()=>{
  const [group]=serverWorkGroups([{store_id:'wb',kind:'drafts',status:'queued',retry_at:220}],100,

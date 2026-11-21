@@ -269,7 +269,7 @@ def finish(db, job, schedule, message):
 async def run_step(job_id, session_factory=Session):
     from .services import confirm_action
     started = time.monotonic()
-    for index in range(BATCH_SIZE):
+    for _ in range(BATCH_SIZE):
         with session_factory() as db:
             try:
                 schedule, job = authorized_job(db, job_id)
@@ -298,13 +298,18 @@ async def run_step(job_id, session_factory=Session):
                 fresh=fresh.where(or_(checked_at>ready_cursor[0],and_(checked_at==ready_cursor[0],Review.id>ready_cursor[1])))
             from_ready = False
             if priority:
-                review = db.scalar(candidates.where(Review.id == priority[0], Draft.revision == priority[1]))
-                if review is None:
+                pair = db.execute(candidates.add_columns(Draft)
+                    .where(Review.id == priority[0], Draft.revision == priority[1])).one_or_none()
+                if pair is None:
                     job = db.scalar(select(Job).where(Job.id == job_id).with_for_update()
                         .execution_options(populate_existing=True))
                     consume_priority(job, *priority)
+                    job.status = 'cancelled' if job.cancel_requested else 'queued'
                     db.commit()
+                    if job.cancel_requested or time.monotonic() - started >= 15:
+                        return
                     continue
+                review, draft = pair
             elif state.get('priority_only'):
                 review = None
             else:
@@ -316,15 +321,21 @@ async def run_step(job_id, session_factory=Session):
                 job = db.scalar(select(Job).where(Job.id == job_id).with_for_update()
                     .execution_options(populate_existing=True))
                 if job.result.get('priority_reviews'):
+                    job.status = 'cancelled' if job.cancel_requested else 'queued'
+                    db.commit()
+                    if job.cancel_requested or time.monotonic() - started >= 15:
+                        return
                     continue
                 finish(db, job, schedule, 'Выгрузка завершена. Новые готовые ответы попадут в следующий запуск.')
                 return
             cursor = [review.created_at, review.id]
             review_id = review.id
-            draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
+            if not priority:
+                draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
             if from_ready:
                 ready_cursor=[draft.quality['owner_rules']['checked_at'],review.id]
-            recover_positive_verdict(db, review, draft)
+            if not priority:
+                recover_positive_verdict(db, review, draft)
             reason = eligibility_reason(db, review, draft, schedule)
             if not priority and reason and ('правил' in reason or 'проверку текста' in reason):
                 from .rule_change_recheck import enqueue_draft

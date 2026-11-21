@@ -4,6 +4,22 @@ from app.queue_policy import next_job
 import pytest
 
 
+def test_expired_wait_promotes_manual_work_and_reconciliation_over_priority(client):
+    current = datetime.now(timezone.utc)
+    old = (current - timedelta(minutes=2)).isoformat()
+    with Session() as db:
+        db.add_all([Job(id='minion', kind='review_minion', result={'handoff_at': current.isoformat()}),
+            Job(id='upload', kind='scheduled_publication', result={'has_priority_reviews': True}),
+            Job(id='manual', kind='single_draft', created_at=old),
+            Job(id='reconcile', kind='publication_reconcile', created_at=old)])
+        db.commit()
+        first = next_job(db)
+        assert first.id in ('manual', 'reconcile')
+        first.status = 'completed'
+        db.commit()
+        assert next_job(db).id == ({'manual', 'reconcile'} - {first.id}).pop()
+
+
 @pytest.mark.parametrize('kind,store', [('wb_publish_send','owner'), ('scheduled_publication','owner'),
     ('scheduled_publication','ozon-store'), ('scheduled_publication','yandex-store'),
     ('publication_reconcile','ozon-store')])

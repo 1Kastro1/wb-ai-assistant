@@ -47,3 +47,11 @@ def automatic_publication(schedule, provider, question=False, rating=5):
         (schedule.get('publication_questions',True) if question else
          schedule.get('publication_reviews',True) if rating>=4 else
          schedule.get('publication_low_ratings',False) and schedule.get('publication_all_low_ratings',False)))
+
+
+def low_rating_publication_mode(schedule, provider):
+    if not (schedule.get('enabled') and schedule.get('publication_enabled')
+        and schedule.get('publication_markets', {}).get(provider, True)
+        and schedule.get('publication_low_ratings')):
+        return 'off'
+    return 'all' if schedule.get('publication_all_low_ratings') else 'templates'
