@@ -14,7 +14,8 @@ export function serverWorkGroups(tasks,now=Date.now()/1000,processes=[]){
   const group=groups.get(key);group.tasks.push(task);
   const keyStage=workStage(task),stage=group.stages[keyStage]||{running:0,queued:0,retry:0,retry_at:0};
   if(task.status==='running')stage.running++;
-  else if(task.retry_at>now){stage.retry++;stage.retry_at=stage.retry_at?Math.min(stage.retry_at,task.retry_at):task.retry_at;}
+  else if(task.retry_at>now&&(task.retry_pending??true)){stage.retry++;stage.retry_at=stage.retry_at?Math.min(stage.retry_at,task.retry_at):task.retry_at;}
+  else if(task.retry_at>now&&['idle','disabled'].includes(task.wait_reason))continue;
   else stage.queued++;
   group.stages[keyStage]=stage;
  }

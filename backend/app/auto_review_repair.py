@@ -2,7 +2,7 @@
 VERSION = 'automatic-review-repair-2026-11-12-v1'
 
 
-async def repair(review, product, rules, facts, assess, *, local_only=False):
+async def repair(review, product, rules, facts, assess, *, local_only=False, generation_seconds=None, resume=None):
     from .rule_execution import positive_template, untried_template
     from .review_cases import specific_review_case
     from .safety import safe_fallback_reply
@@ -21,7 +21,9 @@ async def repair(review, product, rules, facts, assess, *, local_only=False):
                  or (case or {}).get('answer')
                  or safe_fallback_reply(review, product, facts=facts))
     generated=False
-    if not local_only and not assess(candidate).get('passed'):
+    if resume:
+        candidate, generated = resume['text'], resume['generated']
+    if not resume and not local_only and not assess(candidate).get('passed'):
         # Do not spend a long semantic check proving that a generic fallback
         # already fails local content checks. Generate one contextual repair,
         # then run the ordinary independent rule/fact verification below.
@@ -38,13 +40,16 @@ async def repair(review, product, rules, facts, assess, *, local_only=False):
                 'required_style':{key:context_constraints(rules,review)[key] for key in ('greeting','greetings','signature')},
                 'previous_answer':candidate,'content_issues':assess(candidate).get('issues',[])},
             select_rules(rules,review,product)[0], facts)
-        variants=await GenerationBudget().run(lambda:ollama.reply_variants(messages,count=1))
+        options = {'timeout_seconds': generation_seconds} if generation_seconds else {}
+        budget = GenerationBudget(generation_seconds) if generation_seconds else GenerationBudget()
+        variants = await budget.run(lambda: ollama.reply_variants(messages, count=1, **options))
         candidate=validate_reply(variants[0])
         generated=True
     from .generation_control import FastPathUnavailable
     try:
+        options = {'group_limit': 1, 'previous_check': (resume or {}).get('proof')} if generation_seconds else {}
         answer, verdict = await enforce_owner_rules(candidate, review, product, rules, facts, assess,
-            allow_fast_positive=True, check_seconds=AUTO_RULE_CHECK_SECONDS, local_only=local_only)
+            allow_fast_positive=True, check_seconds=AUTO_RULE_CHECK_SECONDS, local_only=local_only, **options)
     except FastPathUnavailable:
         if local_only:return None
         raise

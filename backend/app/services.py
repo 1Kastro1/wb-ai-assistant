@@ -328,7 +328,9 @@ def _review_query(filters):
     if filters.get('unanswered'):
         conditions.append(Review.is_answered == False)
     if filters.get('attention'):
-        conditions.append(manual_review_condition())
+        from .attention_queue import personal_condition, supported_review
+        conditions.extend((Review.is_answered == False, supported_review(),
+            personal_condition(filters.get('attention_schedule') or {})))
     if filters.get('product_id'):
         conditions.append(Review.product_id == filters['product_id'])
     if filters.get('account_id'):
@@ -407,13 +409,19 @@ def review_items(db, rows):
     return result
 
 
-def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids='', ratings=None, text_status='all', answer_status='all', draft_status='all', manual_only=False, brands=None, categories=None, technical_only=False):
+def reviews_search(db, q='', unanswered=False, max_rating=5, days=0, product_id='', limit=50, offset=0, account_id='', attention=False, view='all', review_ids='', ratings=None, text_status='all', answer_status='all', draft_status='all', manual_only=False, brands=None, categories=None, technical_only=False, attention_schedule=None):
+    if attention and attention_schedule is None:
+        from .attention_queue import publication_schedule
+        attention_schedule, _ = publication_schedule(db)
     query = _review_query(locals())
     rows = db.scalars(query.order_by(Review.created_at.desc(), Review.id).offset(max(0, offset)).limit(min(200, max(1, limit)))).all()
     return review_items(db, rows)
 
 
 def reviews_page(db, **filters):
+    if filters.get('attention'):
+        from .attention_queue import publication_schedule
+        filters['attention_schedule'], _ = publication_schedule(db)
     limit = min(200, max(1, int(filters.get('limit', 50))))
     offset = max(0, int(filters.get('offset', 0)))
     rows = reviews_search(db, **{**filters, 'limit': limit, 'offset': offset})

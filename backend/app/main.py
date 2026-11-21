@@ -290,6 +290,12 @@ def health(db: DB):
     return {'status': 'ok', 'database': 'ok'}
 
 
+@app.get('/health/background')
+def health_background(db: DB):
+    from .background_health import background_health
+    return background_health(db)
+
+
 @app.post('/auth/login')
 async def login(body: Password, response: Response, request: Request, db: DB):
     async with login_lock:
@@ -1368,6 +1374,7 @@ async def execute_job(job_id):
             job.result = {**(job.result or {}), 'failure_attempts': failure_attempts}
             if failure_attempts < min(job.max_attempts, 5) and not job.cancel_requested:
                 job.status, job.result = 'queued', {**(job.result or {}), 'message': 'Ожидает повторной попытки', 'account_id': account_id, 'detail': (str(error) or type(error).__name__)[:500], 'retry_at': time.time() + min(300, 30 * 2 ** min(job.attempts - 1, 3))}
+                job.result = {**job.result, 'wait_reason': 'retry'}
             else:
                 default_message = 'Автоответы не завершены. Проверьте локальную модель и повторите задание.' if kind in ('drafts','question_drafts','single_draft','single_question_draft') else 'Синхронизация не завершена.'
                 if kind == 'scheduled_publication': default_message = 'Автоматическая выгрузка не завершена. Проверьте состояние магазинов.'
@@ -1379,6 +1386,9 @@ async def execute_job(job_id):
                 db.add(Activity(user_id=requested_by or 'system', username=actor.username if actor else 'system',
                                 method='POST', path='/jobs/' + job_id, status=500,
                                 details={'event': 'job_failed', 'job_kind': kind}))
+        if kind == 'review_minion' and job.cancel_requested:
+            job.status = 'cancelled'
+            job.result = {**(job.result or {}), 'message': 'Миньон остановлен'}
         elapsed = round(time.monotonic() - started_clock, 2)
         timing = {'queue_seconds':round(queue_seconds, 2), 'processing_seconds':elapsed,
             'total_processing_seconds':round(previous_timing.get('total_processing_seconds', 0)+elapsed, 2),
@@ -1490,6 +1500,7 @@ async def scheduler_loop():
     try:
         while True:
             await asyncio.sleep(30)
+            scheduler_state = 'ok'
             try:
                 queue_scheduled_jobs()
                 # Backups may wait for the batch lock for a long time. Their
@@ -1501,9 +1512,20 @@ async def scheduler_loop():
                 if not job_dispatch_lock.locked():
                     asyncio.create_task(run_job_queue())
             except Exception as error:
+                scheduler_state = 'error'
                 with Session() as db:
                     set_setting(db, 'scheduler_status', {'state': 'error', 'checked_at': now(), 'last_error': type(error).__name__})
                     db.commit()
+            model_state = 'ok'
+            try:
+                result = await asyncio.wait_for(ollama.health_check(), timeout=5)
+                if not result.get('models'):
+                    model_state = 'unavailable'
+            except Exception:
+                model_state = 'unavailable'
+            with Session() as db:
+                set_setting(db, 'worker_heartbeat', {'at': now(), 'scheduler': scheduler_state, 'model': model_state})
+                db.commit()
     finally:
         if maintenance_task:
             maintenance_task.cancel()
@@ -1719,6 +1741,9 @@ async def retry_job(jid: str, background: BackgroundTasks, auth: MARKET_OPERATOR
     elif auth['role'] != 'owner':
         raise HTTPException(403, 'Это задание доступно только владельцу')
     job.status, job.cancel_requested, job.progress, job.attempts = 'queued', False, 0, 0
+    if job.kind == 'review_minion':
+        from .review_minions import restart
+        restart(job)
     db.commit()
     background.add_task(run_job_queue)
     return public(job)
@@ -2148,8 +2173,8 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
     ids = [s.id for s in db.scalars(select(StoreProfile)) if not store_id or s.id == store_id]
     if not ids:
         return {'items': [], 'total': 0, 'limit': limit, 'offset': offset}
-    from .attention_queue import personal_condition
-    queue_schedule=normalize_schedule(setting(db,'automation_schedule',{}))
+    from .attention_queue import personal_condition, publication_schedule
+    queue_schedule, _ = publication_schedule(db)
     conditions = [Review.wb_account_id.in_(ids), Review.is_answered == False]
     if kind:
         conditions.append(Review.marketplace.like('%_question') if kind == 'questions' else ~Review.marketplace.like('%_question'))
@@ -2167,21 +2192,17 @@ def work_queue(auth: AUTH, db: DB, kind: str = '', store_id: str = '', limit: in
                           ((Review.status == 'manual_review') & ~draft_exists) |
                           ((~Review.marketplace.like('%_question')) & (Review.rating <= 3)) | draft_attention)
     if view == 'attention':
-        from .attention_queue import personal_condition
-        schedule=normalize_schedule(setting(db,'automation_schedule',{}))
-        conditions.append(select(Draft.id).where(Draft.review_id==Review.id,personal_condition(schedule)).correlate(Review).exists() |
-            (Review.manual==True) | (Review.risk!='NORMAL') | (Review.safety_critical==True) |
-            ((Review.status=='manual_review') & ~draft_exists))
+        conditions.append(personal_condition(queue_schedule))
     if view in ('technical', 'pending'):
         flag = Draft.quality_technical if view == 'technical' else Draft.quality_pending
         conditions.append(select(Draft.id).where(Draft.review_id == Review.id, flag == True).correlate(Review).exists())
     if view == 'missing': conditions.append(~draft_exists)
     if view == 'ready': conditions.extend([Review.manual == False, Review.status == 'draft_ready', select(Draft.id).where(Draft.review_id == Review.id, Draft.quality_passed == True).correlate(Review).exists()])
     limit, offset = min(100, max(1, limit)), max(0, offset)
-    total = db.scalar(select(func.count()).select_from(Review).where(*conditions)) or 0
+    total = db.scalar(select(func.count()).select_from(Review)
+        .outerjoin(Draft, Draft.review_id == Review.id).where(*conditions)) or 0
     rows = db.execute(select(Review, Product.name, StoreProfile.name, StoreProfile.provider, Draft.id, Draft.quality, personal_condition(queue_schedule)).join(Product, Product.id == Review.product_id).join(StoreProfile, StoreProfile.id == Review.wb_account_id).outerjoin(Draft, Draft.review_id == Review.id).where(*conditions).order_by(Review.manual.desc(), Review.created_at.desc(), Review.id).offset(offset).limit(limit)).all()
     from .attention_queue import automatic_publication
-    queue_schedule=normalize_schedule(setting(db,'automation_schedule',{}))
     return {'items': [{'auto_publication':automatic_publication(queue_schedule,provider,review.marketplace.endswith('_question'),review.rating),
                        'id': review.id, 'store_id': review.wb_account_id, 'store_name': name, 'provider': provider,
                        'kind': 'questions' if review.marketplace.endswith('_question') else 'reviews',
@@ -2512,26 +2533,23 @@ def actions(auth: AUTH, db: DB):
 
 
 @app.post('/publications/reconcile')
-async def reconcile_publications(auth: WB_OPERATOR, db: DB):
+def reconcile_publications(background: BackgroundTasks, auth: WB_OPERATOR, db: DB):
+    from .publication_reconciliation import PENDING, schedule_reconciliation
     active = active_store(db, auth)
-    can_operate_store(auth, db.get(StoreProfile, active))
+    store = db.get(StoreProfile, active)
+    can_operate_store(auth, store)
+    if not store or store.provider != 'wb':
+        raise HTTPException(409, 'Выберите магазин Wildberries')
     wb_token(db, active)
-    await wb.sync_reviews(db, active)
-    checked, confirmed, mismatched = 0, 0, 0
-    for publication in db.scalars(select(Publication).where(Publication.status.in_(['uncertain', 'in_flight']))):
-        review = db.get(Review, publication.review_id)
-        if not review or review.wb_account_id != active:
-            continue
-        draft = db.scalar(select(Draft).where(Draft.review_id == review.id))
-        checked += 1
-        if review.is_answered and draft and review.existing_answer.strip() == draft.text.strip():
-            publication.status, review.status = 'published', 'published'
-            confirmed += 1
-        elif review.is_answered:
-            publication.status, review.status = 'mismatch', 'manual_review'
-            mismatched += 1
-    db.commit()
-    return {'checked': checked, 'confirmed': confirmed, 'mismatched': mismatched}
+    pending = select(Publication, Review).join(Review, Review.id == Publication.review_id).where(
+        Publication.status.in_(PENDING), Review.wb_account_id == active, Review.marketplace == 'wb')
+    remaining = db.scalar(select(func.count()).select_from(pending.subquery())) or 0
+    row = db.execute(pending.limit(1)).first()
+    if row:
+        schedule_reconciliation(db, *row, delay=0, resume=True)
+        db.commit()
+        background.add_task(run_job_queue)
+    return {'queued': remaining}
 
 
 @app.delete('/actions/{aid}')

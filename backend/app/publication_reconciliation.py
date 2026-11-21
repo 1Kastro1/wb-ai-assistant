@@ -56,14 +56,19 @@ def can_retry(db, publication, review):
         float(state.get('retry_at', 0)) <= time.time())
 
 
-def schedule_reconciliation(db, publication, review, *, delay=30):
+def schedule_reconciliation(db, publication, review, *, delay=30, resume=False):
     jid = KIND + ':' + review.wb_account_id
-    job = db.get(Job, jid)
+    job = db.scalar(select(Job).where(Job.id == jid).with_for_update()
+        .execution_options(populate_existing=True))
     if job:
         # One store has one durable reader, regardless of publication volume.
         # Explicit cancellation remains respected.
         if job.cancel_requested or job.status == 'cancelled':
-            return
+            if not resume:
+                return
+            job.cancel_requested = False
+            if job.status != 'running':
+                job.status, job.progress = 'queued', 0
         if job.status in ('completed', 'failed'):
             job.status, job.progress = 'queued', 0
         job.result = {**(job.result or {}), 'retry_at': min(
@@ -256,7 +261,7 @@ async def _reconcile_one(job_id, session_factory):
                 state = setting(db, key(remaining[0]), {}) or {}
                 job.status = 'queued'
                 job.result = {**job.result, 'retry_at': max(time.time() + 1, float(state.get('reconcile_after', 0))),
-                    'last_served_at': now(), 'message': 'Ожидаем подтверждения маркетплейса.'}
+                    'wait_reason': 'moderation', 'last_served_at': now(), 'message': 'Ожидаем подтверждения маркетплейса.'}
             else:
                 job.status, job.progress = 'completed', 100
                 job.result = {**job.result, 'message': 'Сверка отправок завершена.', 'finished_at': now()}
@@ -312,7 +317,7 @@ async def _reconcile_one(job_id, session_factory):
             'remote_state': remote_state, 'last_reconcile_error': error, 'reconciled_at': now()})
         job.status = 'queued'
         job.result = {**job.result, 'processed': int((job.result or {}).get('processed', 0)) + 1,
-            'updated_at': now(), 'last_served_at': now(), 'retry_at': 0,
+            'updated_at': now(), 'last_served_at': now(), 'retry_at': 0, 'wait_reason': '',
             'message': message, 'last_error': error, 'remote_state': remote_state,
             'last_publication_id': publication.id}
         db.commit()

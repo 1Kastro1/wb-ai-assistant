@@ -11,6 +11,24 @@ from app.publication_errors import PublicationError
 from app import publication_reconciliation as recovery
 
 
+def test_manual_wildberries_reconciliation_only_queues_saved_attempt(client, monkeypatch):
+    reserve('wb', 'uncertain', 'store')
+    with Session() as db:
+        set_setting(db, 'active_store', 'store')
+        db.get(Draft, 'store').text = 'Изменённый черновик'
+        db.commit()
+    monkeypatch.setattr('app.main.wb_token', lambda db, active: 'fixture')
+    consumer = AsyncMock()
+    monkeypatch.setattr('app.main.run_job_queue', consumer)
+    response = client.post('/publications/reconcile')
+    assert response.status_code == 200 and response.json() == {'queued': 1}
+    consumer.assert_awaited_once()
+    with Session() as db:
+        pub = db.get(Publication, 'store')
+        assert pub.status == 'uncertain' and not pub.confirmed_at
+        assert setting(db, recovery.key(pub))['text'] != db.get(Draft, 'store').text
+
+
 @pytest.mark.parametrize('failure,outcome,retryable', [
     (httpx.ConnectTimeout('timeout'), 'not_sent', True),
     (httpx.ConnectError('connect'), 'not_sent', True),

@@ -36,6 +36,12 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; data=json.load(urllib.request.urlopen('http://backend:8000/health/background', timeout=5)); assert data['worker']=='ok'"]
+      interval: 30s
+      timeout: 6s
+      start_period: 90s
+      retries: 3
   postgres:
     image: postgres:17-alpine
     shm_size: 256mb

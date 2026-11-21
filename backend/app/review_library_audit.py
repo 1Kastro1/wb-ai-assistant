@@ -141,6 +141,10 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
             replacement=None
             from .draft_audit import manually_edited
             can_repair=automatic and (was_published or (draft and not manually_edited(draft)))
+            resume = (audit_previous.verification_progress or {}).get('_minion_pending_repair') if live_minion and audit_previous else None
+            if not can_repair or (resume and resume['original_key'] != key):
+                resume = None
+            pending_repair = None
             if can_repair and not cached:
                 matched=load_template(db,review,product,rules,facts,assess)
                 if matched:
@@ -151,6 +155,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
             if templates_only and not learned:return {'status':'unmatched'}
             template_reused=bool(learned) and not cached
             if learned:checked,verdict=learned
+            elif resume:checked,verdict=answer,{'passed':False}
             elif defects:
                 # A known local failure is sufficient to reject a saved reply.
                 # Never spend a model timeout proving a reply already ineligible.
@@ -182,7 +187,8 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                 and (not answer.strip() or not verdict.get('passed') or not local_quality.get('passed'))
                 ):
                 from .auto_review_repair import repair
-                repaired=await repair(review,product,rules,facts,assess)
+                options = {'generation_seconds': 150, 'resume': resume} if live_minion else {}
+                repaired=await repair(review,product,rules,facts,assess,**options)
                 if repaired:
                     value,repaired_quality=repaired
                     proof=repaired_quality.get('owner_rules') or {}
@@ -191,7 +197,10 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                         and not proof.get('issues')):
                         replacement=(value,repaired_quality)
                     elif technical_check(repaired_quality):
-                        return {'status':'retry','issues':repaired_quality.get('issues',[])}
+                        if not live_minion:
+                            return {'status':'retry','issues':repaired_quality.get('issues',[])}
+                        pending_repair = {'text':value, 'proof':proof, 'original_key':key,
+                            'generated':repaired_quality['automatic_repair']['contextual_generation']}
             db.rollback()
             review=db.scalar(select(Review).where(Review.id==rid).with_for_update())
             product=db.get(Product,review.product_id) if review else None
@@ -205,6 +214,15 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                 return {'status':'retry','issues':['Контекст изменился во время проверки']}
             if live_minion and (published(review) or review.manual or review.safety_critical or review.risk != 'NORMAL'):
                 return {'status': 'attention', 'issues': ['Случай требует личной проверки']}
+            if pending_repair:
+                row = db.get(ReviewLibraryAuditRow, (job_id, rid))
+                if row is None:
+                    row = ReviewLibraryAuditRow(job_id=job_id, review_id=rid, status='retry')
+                    db.add(row)
+                row.verification_progress = {'_minion_pending_repair': pending_repair}
+                db.commit()
+                return {'status':'retry', 'continuation':bool(proof.get('continuation')),
+                    'issues':repaired_quality.get('issues', [])}
             if replacement:
                 candidate,repaired_quality=replacement
                 if not was_published:
