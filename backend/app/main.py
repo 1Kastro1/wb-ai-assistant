@@ -84,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'review_minion', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -1236,6 +1236,10 @@ async def execute_job(job_id):
                 from .scheduled_publication import run_step
                 await run_step(job_id)
                 db.refresh(job)
+            elif kind == 'review_minion':
+                from .review_minions import run_step
+                await run_step(job_id, session_factory=Session)
+                db.refresh(job)
             elif kind == 'publication_reconcile':
                 from .publication_reconciliation import run_step
                 await run_step(job_id)
@@ -1350,7 +1354,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'review_minion', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -1688,6 +1692,8 @@ def cancel_job(jid: str, auth: MARKET_OPERATOR, db: DB):
         can_operate_store(auth, db.get(StoreProfile, job_store))
     elif auth['role'] != 'owner':
         raise HTTPException(403, 'Это задание доступно только владельцу')
+    if job.kind == 'publication_reconcile':
+        raise HTTPException(409, 'Сверка уже отправленных ответов завершится автоматически')
     job.cancel_requested = True
     if job.kind in ('wb_publish_prepare', 'wb_publish_send'):
         parent = db.get(Action, (job.result or {}).get('parent_id', ''))

@@ -87,7 +87,7 @@ def enable_automatic_repair(db,job_id):
     job.result=state;job.status='queued'
 
 
-async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
+async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live_minion=False):
     from .services import assess_reply,review_verified_facts,generate_draft
     from .owner_reply_rules import matching_owner_rules
     from .owner_reply_policy import enforce_owner_rules,attach_rule_quality,local_issues,fingerprint
@@ -101,6 +101,8 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
         draft=db.scalar(select(Draft).where(Draft.review_id==rid))
         if not review:return {'status':'removed'}
         if publication_protected(db,review):return {'status':'attention','issues':['Сохранён статус публикации; требуется личная сверка']}
+        if live_minion and (not draft or published(review) or review.manual or review.safety_critical or review.risk != 'NORMAL'):
+            return {'status': 'attention', 'issues': ['Случай требует личной проверки']}
         missing=not published(review) and not draft
         if missing and templates_only:return {'status':'unmatched'}
         if missing:
@@ -115,6 +117,8 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
             product=db.get(Product,review.product_id)
             draft=db.scalar(select(Draft).where(Draft.review_id==rid))
             was_published=published(review)
+            if live_minion and (not draft or was_published or review.manual or review.safety_critical or review.risk != 'NORMAL'):
+                return {'status': 'attention', 'issues': ['Случай требует личной проверки']}
             audit_previous=db.get(ReviewLibraryAuditRow,(job_id,rid))
             answer=review.existing_answer if was_published else draft.text if draft else ''
             if publication_protected(db,review):return {'status':'attention','issues':['Сохранён статус публикации; требуется личная сверка']} 
@@ -199,6 +203,8 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False):
             fresh_facts=review_verified_facts(db,review,product,fresh_rules)
             if (publication_protected(db,review) or current!=expected or verification_key(current_answer,review,product,fresh_rules,fresh_facts)!=key):
                 return {'status':'retry','issues':['Контекст изменился во время проверки']}
+            if live_minion and (published(review) or review.manual or review.safety_critical or review.risk != 'NORMAL'):
+                return {'status': 'attention', 'issues': ['Случай требует личной проверки']}
             if replacement:
                 candidate,repaired_quality=replacement
                 if not was_published:

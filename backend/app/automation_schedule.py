@@ -107,3 +107,6 @@ def enqueue_due_jobs(db, schedule, current):
         if store.provider in ('wb', 'ozon', 'yandex'):
             from .scheduled_publication import enqueue
             enqueue(db, schedule, store, current)
+            if schedule.get('drafts_enabled') and setting(db, 'review_minions_enabled', False) and setting(db, 'assistant_enabled', True):
+                from .review_minions import enqueue as enqueue_minion
+                enqueue_minion(db, store)
