@@ -220,7 +220,8 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                 if row is None:
                     row = ReviewLibraryAuditRow(job_id=job_id, review_id=rid, status='retry')
                     db.add(row)
-                row.verification_progress = {'_minion_pending_repair': pending_repair}
+                row.verification_progress = {'_minion_pending_repair': pending_repair,
+                    '_minion_revision': draft.revision}
                 db.commit()
                 return {'status':'retry', 'continuation':bool(proof.get('continuation')),
                     'issues':repaired_quality.get('issues', [])}
@@ -240,7 +241,9 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
             if checked!=answer and not replacement:
                 verdict={**verdict,'passed':False,'checked':False,'issues':['Проверка предложила изменение; исходный текст сохранён']}
             from .rule_retry import checkpoint_verdict
-            previous=(audit_previous.verification_progress or {}) if audit_previous else saved_proof
+            # The minion has its own retry budget. It inherits completed rule
+            # groups from the draft, but not failures from the earlier worker.
+            previous=(audit_previous.verification_progress or {}) if audit_previous else ({} if live_minion else saved_proof)
             verdict=checkpoint_verdict(verdict,previous,key,now())
             quality=attach_rule_quality(assess(answer),verdict)
             if template_reused:
@@ -272,6 +275,8 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                     audit_record=ReviewLibraryAuditRow(job_id=job_id,review_id=rid,status='retry')
                     db.add(audit_record)
                 audit_record.verification_progress=verdict
+                if live_minion:
+                    audit_record.verification_progress={**verdict, '_minion_revision':draft.revision}
             elif audit_record is not None:
                 audit_record.verification_progress=None
             db.commit()
