@@ -10,7 +10,9 @@ class QueueYield(Exception):
 
 
 def minion_handoff_pending():
-    return (Job.kind == 'review_minion') & Job.result['handoff_at'].as_string().is_not(None)
+    return (Job.kind == 'review_minion') & or_(
+        Job.result['handoff_at'].as_string().is_not(None),
+        Job.result['continuation_pending'].as_boolean() == True)
 
 
 def next_job(db, kinds=None):
