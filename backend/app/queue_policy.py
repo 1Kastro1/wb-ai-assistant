@@ -57,7 +57,10 @@ def queue_ordering():
     # Fresh work ages sooner, but shares the oldest-served band: three long
     # fresh batches must never permanently exclude checks, archive or sends.
     direct_delivery = (Job.kind == 'scheduled_publication') & (Job.result['has_priority_reviews'].as_boolean() == True)
-    aged = or_(overdue_send, overdue_sync, direct_request & (served < cutoff), overdue_generation)
+    expedited_waiting = select(Job.id).where(Job.status == 'queued', Job.cancel_requested == False,
+        or_(direct_delivery, minion_handoff_pending()),
+        func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
+    aged = or_(overdue_send, overdue_sync, direct_request & (served < cutoff) & expedited_waiting, overdue_generation)
     interactive = case((aged, -5), (direct_delivery, -4), (minion_handoff_pending(), -3),
                        (fresh_due, -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
