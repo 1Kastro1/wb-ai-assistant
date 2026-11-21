@@ -148,6 +148,46 @@ def test_timeout_wakes_minion_with_priority_instead_of_store_scan(monkeypatch):
         assert candidate(db, db.get(Job, jid), time.time()) == 'old-queue'
 
 
+def test_minion_keeps_started_verification_ahead_of_new_reviews(monkeypatch):
+    from app.queue_policy import next_job
+
+    jid = 'review_minion:owner'
+    with Session() as db:
+        set_setting(db, 'review_minions_enabled', True)
+        set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True})
+        db.add(Product(id='p', name='Product'))
+        db.flush()
+        for i, rid in enumerate(('repair', 'saved', 'delayed', 'stale', 'fresh'), 1):
+            db.add(Review(id=rid, wb_review_id=rid, product_id='p', rating=2,
+                text='Не подошло', status='manual_review', created_at=f'2026-11-0{i}'))
+            db.flush()
+            db.add(Draft(id=rid, review_id=rid, text='Спасибо!', original='Спасибо!',
+                quality={'passed': False, 'text_issues': ['Нужен ответ по существу']}))
+        enqueue(db, StoreProfile(id='owner', provider='wb', name='Shop'))
+        db.get(Job, jid).result = {**db.get(Job, jid).result, 'last_lane': 'retry'}
+        db.add(Job(id='fresh-generation', kind='drafts', result={}))
+        for rid, done, review_at, revision in (
+            ('repair', 4, 0, 1), ('saved', 2, 0, 1),
+            ('delayed', 5, time.time() + 300, 1), ('stale', 5, 0, 0),
+        ):
+            proof = {'continuation': True, 'semantic_groups': 6, 'verified_groups': done}
+            progress = {'_minion_pending_repair': {'proof': proof}} if rid == 'repair' else proof
+            db.add(ReviewLibraryAuditRow(job_id=jid, review_id=rid, status='retry', retry_at=review_at,
+                verification_progress={**progress, '_minion_revision': revision}))
+        db.commit()
+        assert candidate(db, db.get(Job, jid), time.time()) == 'repair'
+    inspect = AsyncMock(return_value={'status': 'attention'})
+    monkeypatch.setattr('app.review_library_audit.inspect_review', inspect)
+    asyncio.run(run_step(jid))
+    with Session() as db:
+        assert next_job(db).id == jid
+        assert candidate(db, db.get(Job, jid), time.time()) == 'saved'
+    asyncio.run(run_step(jid))
+    with Session() as db:
+        assert not db.get(Job, jid).result['continuation_pending']
+        assert next_job(db).id == 'fresh-generation'
+
+
 def test_failed_minion_self_recovers_but_explicit_stop_remains():
     with Session() as db:
         store = StoreProfile(id='owner', provider='wb', name='Shop')

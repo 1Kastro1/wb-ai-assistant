@@ -1,7 +1,7 @@
 """One durable review repair worker per connected marketplace store."""
 import time
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from .db import Account, Draft, IS_SQLITE, Job, Publication, Review, ReviewLibraryAuditRow, Session, StoreProfile, now, setting
 from .generation_control import GenerationBusy
@@ -103,6 +103,15 @@ def handoff(db, draft, review):
     return job
 
 
+def continuation_check(current):
+    audit = ReviewLibraryAuditRow
+    progress = audit.verification_progress
+    return and_(audit.status == 'retry', audit.retry_at <= current,
+        progress['_minion_revision'].as_integer() == Draft.revision,
+        or_(progress['continuation'].as_boolean() == True,
+            progress['_minion_pending_repair']['proof']['continuation'].as_boolean() == True))
+
+
 def candidate(db, job, current):
     audit = ReviewLibraryAuditRow
     changed = func.coalesce(audit.verification_progress['_minion_revision'].as_integer(), -1) != Draft.revision
@@ -110,7 +119,13 @@ def candidate(db, job, current):
     fresh = or_(audit.review_id.is_(None), changed, handed_off)
     retry = and_(audit.status == 'retry', audit.retry_at <= current)
     prefer_fresh = job.result.get('last_lane') == 'retry'
-    order = [handed_off.desc(), fresh.desc() if prefer_fresh else fresh.asc(), Review.created_at.desc(), Review.id]
+    progress = audit.verification_progress
+    repaired = progress['_minion_pending_repair']['proof']
+    remaining = (func.coalesce(repaired['semantic_groups'].as_integer(), progress['semantic_groups'].as_integer(), 1000)
+        - func.coalesce(repaired['verified_groups'].as_integer(), progress['verified_groups'].as_integer(), 0))
+    continuing = func.coalesce(continuation_check(current), False)
+    order = [continuing.desc(), case((continuing, remaining), else_=0), handed_off.desc(),
+        fresh.desc() if prefer_fresh else fresh.asc(), Review.created_at.desc(), Review.id]
     return db.scalar(select(Review.id).join(Draft, Draft.review_id == Review.id)
         .outerjoin(audit, and_(audit.job_id == job.id, audit.review_id == Review.id))
         .where(
@@ -136,7 +151,7 @@ async def run_step(job_id, session_factory=Session):
         review_id = delivery.review_id if delivery else candidate(db, job, time.time()) if enabled else None
         if not review_id:
             job.status = 'queued'
-            job.result = {**job.result, 'handoff_at': None, 'retry_at': time.time() + 120,
+            job.result = {**job.result, 'handoff_at': None, 'continuation_pending': False, 'retry_at': time.time() + 120,
                 'wait_reason': 'idle' if enabled else 'disabled',
                 'message': 'Ожидает сложных отзывов' if enabled else 'Подготовка ответов выключена'}
             db.commit()
@@ -214,13 +229,17 @@ async def run_step(job_id, session_factory=Session):
             .join(Review, Review.id == ReviewLibraryAuditRow.review_id).join(Draft, Draft.review_id == Review.id)
             .where(ReviewLibraryAuditRow.job_id == job.id, ReviewLibraryAuditRow.status == 'handoff',
                 eligible_review(), interrupted_text_check()).limit(1))
+        more_continuations = db.scalar(select(ReviewLibraryAuditRow.review_id)
+            .join(Review, Review.id == ReviewLibraryAuditRow.review_id).join(Draft, Draft.review_id == Review.id)
+            .where(ReviewLibraryAuditRow.job_id == job.id, eligible_review(), continuation_check(time.time())).limit(1))
         job.status = 'queued'
         state = {k: v for k, v in job.result.items() if k not in ('failure_attempts', 'error_type', 'detail')}
         new_handoff = state.get('handoff_at') if more_handoffs else None
         job.result = {**state, 'processed': job.result.get('processed', 0) + int(row.status != 'retry'),
             'verified': job.result.get('verified', 0) + int(row.status == 'verified'),
             'needs_person': job.result.get('needs_person', 0) + int(row.status in ('attention', 'blocked', 'technical_attention')),
-            'handoff_at': new_handoff, 'retry_at': 0 if new_handoff else time.time() + 5,
+            'handoff_at': new_handoff, 'continuation_pending': bool(more_continuations),
+            'retry_at': 0 if new_handoff or more_continuations else time.time() + 5,
             'last_progress_at': now(), 'wait_reason': 'cadence',
             'last_lane': 'retry' if same_revision else 'new',
             'message': 'Миньон завершил этап проверки'}
