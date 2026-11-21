@@ -177,26 +177,65 @@ def eligibility_reason(db, review, draft, schedule):
     return ''
 
 
-def enqueue(db, schedule, store, current):
+def enqueue(db, schedule, store, current, *, target=None):
     if not schedule.get('publication_enabled') or not market_enabled(schedule, store.provider) or blocked_reason(db, schedule):
         return False
     if not schedule.get('publication_ready_since'):
         activation=setting(db,'live-review-pipeline-v1',{}) or {}
         schedule['publication_ready_since']=activation.get('at') or datetime.fromtimestamp(current-86400,timezone.utc).isoformat()
     last_key = f'last_publication:{store.id}'
-    if current - float(schedule.get(last_key, 0)) < int(schedule.get('publication_hours', 1)) * 3600:
+    if not target and current - float(schedule.get(last_key, 0)) < int(schedule.get('publication_hours', 1)) * 3600:
         return False
-    if db.scalar(select(Job.id).where(Job.kind == KIND, Job.status.in_(('queued', 'running')),
-        Job.cancel_requested == False, Job.result['account_id'].as_string() == store.id).limit(1)):
+    active = db.scalar(select(Job).where(Job.kind == KIND, Job.status.in_(('queued', 'running')),
+        Job.cancel_requested == False, Job.result['account_id'].as_string() == store.id,
+        Job.result['authorization'].as_string() == schedule.get('publication_authorization'))
+        .order_by(Job.created_at).limit(1).with_for_update().execution_options(populate_existing=True))
+    if active:
+        if target:
+            active.result = {**active.result, 'priority_reviews': {**active.result.get('priority_reviews', {}), **target},
+                'has_priority_reviews': True}
         return False
-    db.add(Job(id=str(uuid4()), kind=KIND, priority=180, max_attempts=3, result={
+    result = {
         'account_id': store.id, 'scheduled': True, 'authorization': schedule.get('publication_authorization'),
         'requested_by': schedule.get('publication_authorized_by'), 'cursor': None,
         'ready_since':schedule['publication_ready_since'],
         'scanned': 0, 'skipped': 0, 'published': 0, 'uncertain': 0,
-        'message': 'Плановая выгрузка готовых ответов поставлена в очередь'}))
-    schedule[last_key] = current
+        'message': 'Плановая выгрузка готовых ответов поставлена в очередь'}
+    if target:
+        result.update(priority_reviews=target, has_priority_reviews=True, priority_only=True,
+            message='Одобренный миньоном ответ готов к отправке')
+    else:
+        schedule[last_key] = current
+    db.add(Job(id=str(uuid4()), kind=KIND, priority=180, max_attempts=3, result=result))
     return True
+
+
+def queue_minion_reply(db, review_id, revision):
+    row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update()
+        .execution_options(populate_existing=True))
+    schedule = dict(row.value or {}) if row else {}
+    if not (schedule.get('enabled') and schedule.get('publication_enabled')
+        and schedule.get('publication_authorization')):
+        return
+    pair = db.execute(select(Review, Draft).join(Draft).where(Review.id == review_id,
+        Draft.revision == revision, Review.status == 'draft_ready', Review.is_answered == False,
+        Draft.quality_passed == True,
+        Draft.quality['owner_rules']['checked'].as_boolean() == True,
+        Draft.quality['owner_rules']['passed'].as_boolean() == True)).one_or_none()
+    if not pair:
+        return
+    review, draft = pair
+    store = db.get(StoreProfile, review.wb_account_id)
+    if (store and db.get(Account, store.id) and market_enabled(schedule, store.provider)
+        and not eligibility_reason(db, review, draft, schedule)):
+        enqueue(db, schedule, store, time.time(), target={review_id: revision})
+
+
+def consume_priority(job, review_id, revision):
+    pending = dict(job.result.get('priority_reviews', {}))
+    if pending.get(review_id) == revision:
+        pending.pop(review_id)
+    job.result = {**job.result, 'priority_reviews': pending, 'has_priority_reviews': bool(pending)}
 
 
 def publication_counts(db, job):
@@ -241,9 +280,8 @@ async def run_step(job_id, session_factory=Session):
                     job.result = {**(job.result or {}), 'message': str(error), 'finished_at': now()}
                     db.commit()
                 return
-            if index == 0:
-                refresh_counts(db, job)
             state = dict(job.result or {})
+            priority = next(iter(state.get('priority_reviews', {}).items()), None)
             # Each ambiguous attempt has a durable read-only reconciliation.
             # Its unique reservation blocks that review, not unrelated replies.
             from .publication_reconciliation import enqueue_due
@@ -253,15 +291,32 @@ async def run_step(job_id, session_factory=Session):
             checked_at=Draft.quality['owner_rules']['checked_at'].as_string()
             activation=setting(db,'live-review-pipeline-v1',{}) or {}
             ready_since=state.get('ready_since') or schedule.get('publication_ready_since') or activation.get('at') or job.created_at
-            fresh=candidate_query(state['account_id'],schedule).order_by(None).where(checked_at>=ready_since)
+            candidates = candidate_query(state['account_id'], schedule)
+            fresh=candidates.order_by(None).where(checked_at>=ready_since)
             ready_cursor=state.get('ready_cursor')
             if ready_cursor:
                 fresh=fresh.where(or_(checked_at>ready_cursor[0],and_(checked_at==ready_cursor[0],Review.id>ready_cursor[1])))
-            review=db.scalar(fresh.order_by(checked_at,Review.id).limit(1))
-            from_ready=review is not None
-            if review is None:
-                review = db.scalar(candidate_query(state['account_id'], schedule, state.get('cursor')).limit(1))
+            from_ready = False
+            if priority:
+                review = db.scalar(candidates.where(Review.id == priority[0], Draft.revision == priority[1]))
+                if review is None:
+                    job = db.scalar(select(Job).where(Job.id == job_id).with_for_update()
+                        .execution_options(populate_existing=True))
+                    consume_priority(job, *priority)
+                    db.commit()
+                    continue
+            elif state.get('priority_only'):
+                review = None
+            else:
+                review = db.scalar(fresh.order_by(checked_at, Review.id).limit(1))
+                from_ready = review is not None
+                if review is None:
+                    review = db.scalar(candidate_query(state['account_id'], schedule, state.get('cursor')).limit(1))
             if not review:
+                job = db.scalar(select(Job).where(Job.id == job_id).with_for_update()
+                    .execution_options(populate_existing=True))
+                if job.result.get('priority_reviews'):
+                    continue
                 finish(db, job, schedule, 'Выгрузка завершена. Новые готовые ответы попадут в следующий запуск.')
                 return
             cursor = [review.created_at, review.id]
@@ -271,7 +326,7 @@ async def run_step(job_id, session_factory=Session):
                 ready_cursor=[draft.quality['owner_rules']['checked_at'],review.id]
             recover_positive_verdict(db, review, draft)
             reason = eligibility_reason(db, review, draft, schedule)
-            if reason and ('правил' in reason or 'проверку текста' in reason):
+            if not priority and reason and ('правил' in reason or 'проверку текста' in reason):
                 from .rule_change_recheck import enqueue_draft
                 enqueue_draft(db, draft, review, actor_id=schedule.get('publication_authorized_by', ''))
             aid = None
@@ -291,14 +346,16 @@ async def run_step(job_id, session_factory=Session):
                         action.status = 'cancelled'; db.commit()
                     reason = str(error)
             db.expire_all()
-            job = db.get(Job, job_id)
+            job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+            if priority:
+                consume_priority(job, *priority)
             outcome = db.scalar(select(Publication.status).where(Publication.review_id == review_id,
                 Publication.scheduled_job_id == job_id)) if aid else None
             reasons=dict((job.result or {}).get('skip_reasons') or {})
             if reason:
                 reason_key=reason[:160] if reason[:160] in reasons or len(reasons)<20 else 'Другие причины'
                 reasons[reason_key]=int(reasons.get(reason_key,0))+1
-            job.result = {**job.result, 'cursor': state.get('cursor') if from_ready else cursor,
+            job.result = {**job.result, 'cursor': state.get('cursor') if from_ready or priority else cursor,
                 'ready_cursor':ready_cursor, 'scanned': int((job.result or {}).get('scanned', 0)) + 1,
                 'processed': int((job.result or {}).get('scanned', 0)) + 1,
                 'published': int((job.result or {}).get('published', 0)) + int(outcome == 'published'),

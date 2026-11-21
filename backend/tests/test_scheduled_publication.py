@@ -45,6 +45,39 @@ def jobs():
     with Session() as db: return list(db.scalars(select(Job.id).where(Job.kind == automatic.KIND)))
 
 
+@pytest.mark.parametrize('store', ['owner', 'oz', 'ya'])
+def test_minion_verdict_queues_only_approved_revision_without_waiting_for_schedule(client, ready, store):
+    from app.queue_policy import next_job
+
+    enable(client, enabled=True)
+    rid = store + 'review'
+    with Session() as db:
+        schedule = setting(db, 'automation_schedule', {})
+        last_key = f'last_publication:{store}'
+        assert schedule[last_key]
+        for job in db.scalars(select(Job)):
+            job.status = 'completed'
+        draft = db.get(Draft, rid)
+        draft.quality = {'passed': True, 'owner_rules': {'checked': True, 'passed': True}}
+        db.commit()
+        automatic.queue_minion_reply(db, rid, 8)
+        assert next_job(db) is None
+        automatic.queue_minion_reply(db, rid, 9)
+        automatic.queue_minion_reply(db, rid, 9)
+        db.commit()
+        job = next_job(db)
+        assert job.kind == automatic.KIND
+        assert job.result['priority_reviews'] == {rid: 9}
+        assert setting(db, 'automation_schedule', {})[last_key] == schedule[last_key]
+        jid = job.id
+
+    asyncio.run(automatic.run_step(jid))
+    assert [call[1] for call in ready] == [rid]
+    with Session() as db:
+        assert db.get(Job, jid).status == 'completed'
+        assert db.scalar(select(Publication).where(Publication.review_id == rid)).status == 'published'
+
+
 def test_recent_approval_bypasses_archive_cursor_without_rewinding_it(client,ready,monkeypatch):
     from app.owner_reply_policy import attach_rule_quality
     enable(client,publication_questions=False)

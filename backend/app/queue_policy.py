@@ -52,7 +52,10 @@ def queue_ordering():
         (Job.result['fresh_reviews'].as_boolean()==True) & (served < fresh_cutoff) & ~direct_waiting)
     # Fresh work ages sooner, but shares the oldest-served band: three long
     # fresh batches must never permanently exclude checks, archive or sends.
-    interactive = case((or_(fresh_due, overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
+    direct_minion = (Job.kind == 'review_minion') & Job.result['handoff_at'].as_string().is_not(None)
+    direct_delivery = (Job.kind == 'scheduled_publication') & (Job.result['has_priority_reviews'].as_boolean() == True)
+    interactive = case((direct_delivery, -4), (direct_minion, -3),
+                       (or_(fresh_due, overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (manual_check, 1),
                        (Job.kind == 'wb_excluded_recovery', 2), else_=3)

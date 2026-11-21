@@ -95,7 +95,8 @@ def checkpoint_verdict(verdict, previous, input_key, timestamp, *, manual=False)
 def enqueue(db, draft, review, actor_id='', *, manual=False):
     # Caller holds the draft row lock (or its generation lease).
     if not manual:
-        return automatic_queue(db, review.wb_account_id)
+        from .review_minions import handoff
+        return handoff(db, draft, review) or automatic_queue(db, review.wb_account_id)
     active = db.scalars(select(Job).where(Job.kind == 'draft_recheck',
         Job.status.in_(('queued', 'running')), Job.cancel_requested == False,
         Job.result['account_id'].as_string() == review.wb_account_id).order_by(Job.created_at, Job.id))

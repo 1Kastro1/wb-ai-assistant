@@ -1221,7 +1221,10 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if (technical_check(quality) or (repaired_empty_reply and not quality['owner_rules'].get('checked'))) and not (batch_context.get() or {}).get('suppress_rule_retry'):
         db.flush()
         context=batch_context.get() or {}
-        enqueue(db,draft,review,context.get('requested_by',''),manual=bool(context.get('interactive')))
+        interactive = bool(context.get('interactive'))
+        from .review_minions import handoff
+        if not interactive or not handoff(db, draft, review):
+            enqueue(db, draft, review, context.get('requested_by', ''), manual=interactive)
     if not requested_instruction.strip():
         remember_template(db, review, product, memories, verified_facts, draft)
     record_outcome(db, review, draft)

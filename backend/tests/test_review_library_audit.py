@@ -63,6 +63,33 @@ def test_minion_resumes_unpublished_repair_before_approving(monkeypatch):
         assert db.get(Review, rid).status == 'draft_ready'
 
 
+def test_minion_timeout_without_proof_repairs_before_retrying_original(monkeypatch):
+    from app.review_library_audit import inspect_review
+    from app.review_minions import enqueue
+
+    with Session() as db:
+        seed(db)
+        draft = db.get(Draft, 'd-wb')
+        draft.edits, draft.original = [], draft.text
+        draft.quality = {'passed': False, 'owner_rules': {'technical_error': True, 'failure_code': 'timeout'}}
+        enqueue(db, db.get(StoreProfile, 'wb'))
+        db.commit()
+    replacement = 'Добрый день! Благодарим Вас за отзыв.'
+    monkeypatch.setattr('app.services.assess_reply', lambda *_: {'passed': True, 'issues': []})
+    monkeypatch.setattr('app.owner_reply_policy.local_issues', lambda *_: [])
+    verify = AsyncMock(side_effect=AssertionError('Прерванный исходный ответ не должен проверяться заново'))
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules', verify)
+    repair = AsyncMock(return_value=(replacement, {'passed': True, 'owner_rules': {
+        'checked': True, 'passed': True, 'issues': []}, 'automatic_repair': {'contextual_generation': True}}))
+    monkeypatch.setattr('app.auto_review_repair.repair', repair)
+    assert asyncio.run(inspect_review('review_minion:wb', 'r-wb', Session, live_minion=True))['status'] == 'verified'
+    repair.assert_awaited_once()
+    verify.assert_not_awaited()
+    with Session() as db:
+        assert db.get(Draft, 'd-wb').text == replacement
+        assert db.get(Draft, 'd-wb').revision == 8
+
+
 def test_bounded_slices_rotate_markets_and_resume_saved_positions(monkeypatch):
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
     with Session() as db:seed(db);jid=start(db).id;db.commit()
