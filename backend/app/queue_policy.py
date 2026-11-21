@@ -9,6 +9,10 @@ class QueueYield(Exception):
     """The current import committed its cursor and can safely resume later."""
 
 
+def minion_handoff_pending():
+    return (Job.kind == 'review_minion') & Job.result['handoff_at'].as_string().is_not(None)
+
+
 def next_job(db, kinds=None):
     statement = select(Job).where(Job.status == 'queued', Job.cancel_requested == False,
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
@@ -52,9 +56,8 @@ def queue_ordering():
         (Job.result['fresh_reviews'].as_boolean()==True) & (served < fresh_cutoff) & ~direct_waiting)
     # Fresh work ages sooner, but shares the oldest-served band: three long
     # fresh batches must never permanently exclude checks, archive or sends.
-    direct_minion = (Job.kind == 'review_minion') & Job.result['handoff_at'].as_string().is_not(None)
     direct_delivery = (Job.kind == 'scheduled_publication') & (Job.result['has_priority_reviews'].as_boolean() == True)
-    interactive = case((direct_delivery, -4), (direct_minion, -3),
+    interactive = case((direct_delivery, -4), (minion_handoff_pending(), -3),
                        (or_(fresh_due, overdue_send, overdue_generation, overdue_sync), -2), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
                        (manual_check, 1),
@@ -64,7 +67,10 @@ def queue_ordering():
     return (interactive, requested_check.desc(), served, Job.priority, Job.created_at, Job.id)
 
 
-def other_waiting(db, job_id):
-    return bool(db.scalar(select(Job.id).where(Job.id != job_id, Job.status == 'queued',
-        Job.cancel_requested == False, func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time()).limit(1)))
+def other_waiting(db, job_id, *, priority_only=False):
+    query = select(Job.id).where(Job.id != job_id, Job.status == 'queued',
+        Job.cancel_requested == False, func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
+    if priority_only:
+        query = query.where(minion_handoff_pending())
+    return bool(db.scalar(query.limit(1)))
 
