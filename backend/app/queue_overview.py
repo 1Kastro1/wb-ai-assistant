@@ -25,6 +25,11 @@ def job_stage(kind,state):
     return 'generation'
 
 
+def retry_pending(state, timestamp):
+    return (state.get('retry_at') or 0) > timestamp and state.get('wait_reason') not in (
+        'idle', 'disabled', 'cadence', 'moderation')
+
+
 def queue_overview(db, auth, store_id):
     timestamp = time.time()
     query = select(Job).where(Job.status.in_(('queued', 'running')), Job.cancel_requested == False)
@@ -40,9 +45,11 @@ def queue_overview(db, auth, store_id):
         state = job.result or {}
         store = stores.get(state.get('account_id'))
         retry_at = state.get('retry_at') or 0
+        retrying = retry_pending(state, timestamp)
         waiting = job.status == 'queued'
         blocker = next((j for j in running if j.id != job.id), None)
-        reason = ('Повтор после временной ошибки' if retry_at > timestamp else
+        reason = ('Повтор после временной ошибки' if retrying else
+                  state.get('message', '') if waiting and retry_at > timestamp else
                   'Выполняется: ' + LABELS.get(blocker.kind, blocker.kind) if waiting and blocker else
                   'Ожидает свободного места в очереди' if waiting else 'Выполняется на сервере')
         if job.kind == 'wb_excluded_recovery':
@@ -52,7 +59,8 @@ def queue_overview(db, auth, store_id):
                       'provider': store.provider if store else '', 'status': job.status,
                       'stage_key': job_stage(job.kind,state), 'last_progress_at':state.get('last_progress_at'),
                       'last_served_at':state.get('last_served_at'), 'started_at':state.get('started_at'),
-                      'detail':state.get('detail',''), 'progress': job.progress, 'reason': reason, 'retry_at': retry_at,
+                      'detail':state.get('detail',''), 'progress': job.progress, 'reason': reason,
+                      'retry_at': retry_at, 'retry_pending': retrying, 'wait_reason': state.get('wait_reason'),
                       'created_at': job.created_at, 'updated_at': state.get('last_progress_at') or state.get('updated_at') or state.get('last_served_at') or state.get('started_at') or job.created_at,
                       'processed': state.get('processed', state.get('checked', state.get('checkpoint', {}).get('processed', 0))),
                       'total': state.get('total'), 'message': state.get('message', ''),
@@ -78,13 +86,22 @@ def queue_overview(db, auth, store_id):
         backup = {key: backup.get(key) for key in ('created_at', 'name', 'size_mb', 'catalog_verified', 'restore_tested')}
     except (OSError, ValueError, TypeError):
         backup = None
+    try:
+        restore = json.loads((DATA / 'backups/restore-status.json').read_text(encoding='utf-8'))
+        restore = {key: restore[key] for key in ('name', 'tested_at')}
+    except (OSError, ValueError, TypeError, KeyError):
+        restore = None
     from .generation_monitor import recent_generation
     from .pipeline_overview import overview
+    from .background_health import background_health
+    background = background_health(db)
     visible_stores=stores if auth['role']=='owner' else {k:v for k,v in stores.items() if k==store_id}
     return {'observed_at': datetime.now(timezone.utc).isoformat(), 'tasks': tasks, 'server_backup': backup,
+            'restore_check': restore,
             'generation_window': recent_generation(db, store_id), 'market_processes':overview(db,visible_stores),
             'running_jobs': len(running), 'queued_jobs': sum(j.status == 'queued' for j in rows),
-            'retry_jobs': sum((j.result or {}).get('retry_at', 0) > timestamp for j in rows),
+            'retry_jobs': sum(retry_pending(j.result or {}, timestamp) for j in rows),
             'sync_incidents': incidents,
-            'needs_attention': bool(incidents or scheduler.get('state') == 'error')}
+            'background_health': background,
+            'needs_attention': bool(incidents or scheduler.get('state') == 'error' or background['status'] != 'ok')}
 

@@ -36,7 +36,7 @@ def scope_conditions(state):
             product = Review.product_id.in_(rule.get('product_ids') or [target])
         elif scope.casefold() == 'brand' and target.isascii():
             product = select(Product.id).where(Product.id == Review.product_id,
-                func.lower(func.trim(Product.brand)) == target.strip().casefold()).exists()
+                func.lower(func.trim(Product.brand)) == target.strip().casefold()).correlate(Review).exists()
         else:
             # Curated categories can match product metadata across marketplaces;
             # don't incorrectly narrow them to a marketplace's literal category.
@@ -145,6 +145,17 @@ def rebase_library_audits(db, scopes, version=None):
     """
     from .db import ReviewLibraryAuditRow
     version = version or policy_version(db)
+    minion_rows = db.execute(select(ReviewLibraryAuditRow, Review, Product)
+        .join(Job, Job.id == ReviewLibraryAuditRow.job_id)
+        .join(Review, Review.id == ReviewLibraryAuditRow.review_id)
+        .join(Product, Product.id == Review.product_id)
+        .where(Job.kind == 'review_minion', Review.is_answered == False,
+               ReviewLibraryAuditRow.status != 'removed',
+               *scope_conditions({'rule_scopes': scopes}))).all()
+    for row, review, product in minion_rows:
+        if affected(db, review, product, {'rule_scopes': scopes}):
+            row.status, row.retry_at, row.attempts = 'retry', 0, 0
+            row.input_key, row.template_id, row.verification_progress = '', '', None
     for job in db.scalars(select(Job).where(Job.kind=='review_library_audit',
             Job.status.in_(('queued','running')), Job.cancel_requested==False).with_for_update()):
         state = dict(job.result or {})

@@ -1,8 +1,9 @@
 import asyncio
+import time
 from unittest.mock import AsyncMock
 
 from app.db import Draft, Job, Product, Publication, Review, ReviewLibraryAuditRow, Session, StoreProfile, set_setting
-from app.review_minions import enqueue, run_step
+from app.review_minions import enqueue, run_step, candidate
 
 
 def test_minion_routes_only_unpublished_safe_content_failures_and_remembers_result(monkeypatch):
@@ -44,6 +45,45 @@ def test_minion_routes_only_unpublished_safe_content_failures_and_remembers_resu
         assert db.get(Job, job_id).result['verified'] == 1
         assert db.get(ReviewLibraryAuditRow, (job_id, 'safe')).status == 'verified'
         assert db.get(Publication, 'reservation').status == 'answer_pending'
+        db.get(Draft, 'safe').revision += 1
+        db.commit()
+        assert candidate(db, db.get(Job, job_id), time.time()) == 'safe'
+
+
+def test_failed_minion_self_recovers_but_explicit_stop_remains():
+    with Session() as db:
+        store = StoreProfile(id='owner', provider='wb', name='Shop')
+        jid = 'review_minion:owner'
+        enqueue(db, store)
+        job = db.get(Job, jid)
+        job.status = 'failed'
+        job.result = {**job.result, 'failure_attempts': 2,
+            'finished_at': '2020-01-01T00:00:00+00:00', 'verified': 7}
+        db.commit()
+        enqueue(db, store)
+        assert job.status == 'queued' and job.result['verified'] == 7 and 'failure_attempts' not in job.result
+        job.status, job.cancel_requested = 'cancelled', True
+        db.commit()
+        enqueue(db, store)
+        assert job.status == 'cancelled'
+
+
+def test_cancelling_active_minion_finishes_job(monkeypatch):
+    from app.main import execute_job
+    jid = 'review_minion:owner'
+    with Session() as db:
+        enqueue(db, StoreProfile(id='owner', provider='wb', name='Shop'))
+        db.commit()
+
+    async def cancel(job_id, session_factory):
+        with session_factory() as db:
+            db.get(Job, job_id).cancel_requested = True
+            db.commit()
+
+    monkeypatch.setattr('app.review_minions.run_step', cancel)
+    asyncio.run(execute_job(jid))
+    with Session() as db:
+        assert db.get(Job, jid).status == 'cancelled'
 
 
 def test_read_only_reconciliation_survives_generic_cancel(client):

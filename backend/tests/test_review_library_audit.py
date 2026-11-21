@@ -29,6 +29,40 @@ async def good(answer,review,product,rules,facts,assess,**kwargs):
     return answer,{'checked':True,'passed':True,'issues':[],'fingerprint':fingerprint(rules)}
 
 
+def test_minion_resumes_unpublished_repair_before_approving(monkeypatch):
+    from app.review_library_audit import inspect_review
+    from app.review_minions import enqueue
+
+    jid, rid = 'review_minion:wb', 'r-wb'
+    with Session() as db:
+        seed(db)
+        draft = db.get(Draft, 'd-wb')
+        draft.edits, draft.original = [], draft.text
+        enqueue(db, db.get(StoreProfile, 'wb'))
+        db.commit()
+    replacement = 'Добрый день! Спасибо, что поделились впечатлением.'
+    group_proof = {'passed': False, 'checked': False, 'continuation': True}
+    monkeypatch.setattr('app.services.assess_reply', lambda review, product, reply, facts:
+        {'passed': reply == replacement, 'issues': [] if reply == replacement else ['Содержание']})
+
+    async def repair(review, product, rules, facts, assess, *, generation_seconds, resume):
+        if resume:
+            assert resume['text'] == replacement and resume['proof'] == group_proof
+        proof = {'passed': True, 'checked': True, 'issues': []} if resume else group_proof
+        return replacement, {'passed': bool(resume), 'owner_rules': proof,
+            'automatic_repair': {'contextual_generation': True}}
+
+    monkeypatch.setattr('app.auto_review_repair.repair', repair)
+    first = asyncio.run(inspect_review(jid, rid, Session, live_minion=True))
+    assert first['status'] == 'retry' and first['continuation']
+    with Session() as db:
+        assert db.get(Draft, 'd-wb').text != replacement
+    assert asyncio.run(inspect_review(jid, rid, Session, live_minion=True))['status'] == 'verified'
+    with Session() as db:
+        assert db.get(Draft, 'd-wb').text == replacement
+        assert db.get(Review, rid).status == 'draft_ready'
+
+
 def test_bounded_slices_rotate_markets_and_resume_saved_positions(monkeypatch):
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
     with Session() as db:seed(db);jid=start(db).id;db.commit()

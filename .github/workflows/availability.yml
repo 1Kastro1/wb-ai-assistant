@@ -28,6 +28,9 @@ jobs:
                  --output /dev/null 'https://assistant.blackmindworks.com/' \
                && curl --fail --silent --show-error --location --max-time 20 \
                  'https://assistant.blackmindworks.com/api/health' \
+                 | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' \
+               && curl --fail --silent --show-error --location --max-time 20 \
+                 'https://assistant.blackmindworks.com/api/health/background' \
                  | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
               exit 0
             fi
@@ -50,7 +53,7 @@ jobs:
           if [ "$CHECK_OUTCOME" = failure ]; then
             if [ -z "$issue" ]; then
               gh issue create --title "$title" \
-                --body "Внешняя проверка сайта и /api/health не прошла три раза. Проверьте компьютер или сервер, приложение и Cloudflare Tunnel. Журнал: https://github.com/$GH_REPO/actions/workflows/availability.yml"
+                --body "Внешняя проверка сайта, API или фоновой обработки не прошла три раза. Проверьте приложение, планировщик, модель и Cloudflare Tunnel. Журнал: https://github.com/$GH_REPO/actions/workflows/availability.yml"
             fi
             exit 1
           fi

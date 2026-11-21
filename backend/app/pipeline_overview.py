@@ -1,8 +1,7 @@
 """Store aggregates and durable campaign progress; no buyer bodies or prompts."""
 from sqlalchemy import select, func, case, and_
 from .db import Review, Draft, Publication, Job, GenerationOutcome, setting
-from .attention_queue import personal_condition, automatic_publication
-from .automation_schedule import normalize_schedule
+from .attention_queue import personal_condition, automatic_publication, publication_schedule, supported_review
 from .read_cache import cached_read
 from datetime import datetime, timezone, timedelta
 
@@ -13,7 +12,7 @@ def overview(db, stores):
 
 
 def _overview(db,stores):
-    schedule=normalize_schedule(setting(db,'automation_schedule',{}))
+    schedule, publication_block = publication_schedule(db)
     personal=personal_condition(schedule)
     unanswered=Review.is_answered == False
     free=Publication.id.is_(None)
@@ -36,12 +35,12 @@ def _overview(db,stores):
         'negative_ready':and_(negative,ready),'negative_personal':and_(negative,attention),
         'negative_published':and_(negative,sent),'safety':and_(attention,Review.risk!='NORMAL'),
         'content':and_(attention,Draft.quality_attention==True),
-        'reconciliation':and_(unanswered,Publication.status.in_(('uncertain','mismatch')))}
+        'reconciliation':and_(unanswered,Publication.status.in_(('uncertain','mismatch'))),
+        'rejected':and_(unanswered,Publication.status=='rejected')}
     columns=[func.sum(case((condition,1),else_=0)).label(key) for key,condition in flags.items()]
     rows=db.execute(select(Review.wb_account_id,*columns).outerjoin(Draft,Draft.review_id==Review.id)
         .outerjoin(Publication,Publication.review_id==Review.id).where(Review.wb_account_id.in_(stores),
-            Review.marketplace.in_(('wb','yandex','ozon')),
-            ~and_(Review.marketplace=='ozon',func.trim(Review.text)==''))
+            supported_review())
         .group_by(Review.wb_account_id)).mappings().all()
     counts={r['wb_account_id']:{k:int(r[k] or 0) for k in flags} for r in rows}
     movements=dict(db.execute(select(Review.wb_account_id,func.max(GenerationOutcome.created_at))
@@ -94,5 +93,6 @@ def _overview(db,stores):
                 'verification':bool(setting(db,'assistant_enabled',True)),
                 'publication':automatic_publication(schedule,store.provider)},
             'auto_publication':automatic_publication(schedule,store.provider),
+            'publication_block':publication_block,
             'auto_negative':automatic_publication(schedule,store.provider,rating=1)})
     return result

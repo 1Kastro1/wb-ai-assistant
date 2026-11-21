@@ -17,7 +17,8 @@ rotation=plan
 case "${1:---prepare-only}" in
   --prepare-only) ;;
   --rotate) rotation=apply ;;
-  *) printf 'Use --prepare-only or --rotate\n' >&2; exit 2 ;;
+  --verify-restore) exec bash "$(dirname "$0")/verify-postgres-restore.sh" "${2:?Specify the PostgreSQL dump}" ;;
+  *) printf 'Use --prepare-only, --rotate or --verify-restore DUMP\n' >&2; exit 2 ;;
 esac
 retention=${2:-/usr/local/lib/wb-ai-assistant/backup_retention.py}
 test -f "$retention"

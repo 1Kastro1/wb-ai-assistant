@@ -7,7 +7,8 @@ from app.generation_control import record_outcome,batch_context
 def seed(db):
     set_setting(db,'automation_schedule',{'enabled':True,'drafts_enabled':True,'publication_enabled':True,
         'publication_low_ratings':True,'publication_all_low_ratings':True,
-        'publication_markets':{'wb':True,'ozon':True,'yandex':True}})
+        'publication_markets':{'wb':True,'ozon':True,'yandex':True},
+        'publication_authorized_by':'owner','publication_authorization':'fixture'})
     db.add(Product(id='p',name='Товар'));db.flush()
     cases=[('negative',1,'manual_review',False,'NORMAL',{'passed':True,'owner_rules':{'checked':True,'passed':True}}),
         ('technical',5,'manual_review',False,'NORMAL',{'passed':False,'owner_rules':{'technical_error':True,'checked':False,'passed':False}}),
@@ -26,9 +27,12 @@ def seed(db):
     db.commit()
 
 
-def test_counts_separate_negative_approval_personal_decisions_and_outages(client):
+def test_counts_separate_negative_approval_personal_decisions_and_outages(client, monkeypatch):
+    monkeypatch.setattr('app.config.REAL_PUBLISH', True)
     with Session() as db:
         seed(db)
+        set_setting(db, 'test_mode', False)
+        db.commit()
         data=queue_overview(db,{'role':'owner'},'owner')
         store=next(x for x in data['market_processes'] if x['id']=='owner')
         assert store['counts']['ready']==1 and store['counts']['negative_ready']==1
@@ -40,8 +44,15 @@ def test_counts_separate_negative_approval_personal_decisions_and_outages(client
         assert 'cancel' not in [t['id'] for t in data['tasks']]
     result=client.get('/work-queue?view=attention').json()
     assert {r['id'] for r in result['items']}=={'danger','content'}
+    result=client.get('/reviews/page?attention=true').json()
+    assert result['total']==2 and {r['id'] for r in result['items']}=={'danger','content'}
     negative=next(r for r in client.get('/work-queue?view=all').json()['items'] if r['id']=='negative')
     assert negative['auto_publication'] and not negative['manual']
+    with Session() as db:
+        db.add(Publication(id='rejected',review_id='negative',action_id='old',status='rejected'))
+        db.commit()
+    result=client.get('/reviews/page?attention=true').json()
+    assert result['total']==3 and {r['id'] for r in result['items']}=={'danger','content','negative'}
 
 
 def test_empty_store_and_employee_scope_are_preserved(client):

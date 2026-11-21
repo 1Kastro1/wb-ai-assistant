@@ -1,6 +1,21 @@
 """Personal decisions are separate from recoverable verification outages."""
 from sqlalchemy import and_, or_, func, select
-from .db import Review, Draft, Publication
+from .db import Review, Draft, Publication, setting
+
+
+def publication_schedule(db):
+    from .automation_schedule import normalize_schedule
+    from .scheduled_publication import blocked_reason
+    schedule = normalize_schedule(setting(db, 'automation_schedule', {}))
+    reason = blocked_reason(db, schedule) if schedule['enabled'] and schedule['publication_enabled'] else ''
+    if schedule['enabled'] and schedule['publication_enabled'] and not schedule.get('publication_authorization'):
+        reason = reason or 'Владелец должен включить и сохранить автоматическую выгрузку.'
+    return ({**schedule, 'publication_enabled': False} if reason else schedule), reason
+
+
+def supported_review():
+    return and_(Review.marketplace.in_(('wb', 'yandex', 'ozon')),
+        ~and_(Review.marketplace == 'ozon', func.trim(Review.text) == ''))
 
 
 def automatically_checked():
@@ -20,7 +35,7 @@ def personal_condition(schedule):
         allowed=[p for p in ('wb','yandex','ozon') if schedule.get('publication_markets',{}).get(p,True)]
         low_requires_person=~Review.marketplace.in_(allowed)
     return func.coalesce(or_(Review.manual == True, Review.safety_critical == True, Review.risk != 'NORMAL',
-        Review.id.in_(select(Publication.review_id).where(Publication.status.in_(('uncertain','mismatch')))),
+        Review.id.in_(select(Publication.review_id).where(Publication.status.in_(('uncertain','mismatch','rejected')))),
         and_(~pending, or_(Draft.quality_attention == True,
             and_(Review.status == 'manual_review', func.coalesce(Draft.quality_passed, False) == False))),
         and_(low_requires_person, ~Review.marketplace.like('%_question'), Review.rating.between(1,3), ~automatically_checked())),False)
