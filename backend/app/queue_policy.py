@@ -31,7 +31,7 @@ def queue_ordering():
     # Its next checkpoint refreshes last_served_at, so other work still runs.
     overdue_send = Job.kind.in_(('wb_publish_send', 'scheduled_publication', 'publication_reconcile')) & (served < cutoff)
     generation_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts','review_library_audit')),
+    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts','review_library_audit','review_minion')),
         (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
             Job.result['policy_regeneration'].as_boolean() == True,
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))

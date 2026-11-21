@@ -28,8 +28,9 @@ def _overview(db,stores):
     current=datetime.now(moscow)
     midnight=current.replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc).isoformat()
     tomorrow=(current.replace(hour=0,minute=0,second=0,microsecond=0)+timedelta(days=1)).astimezone(timezone.utc).isoformat()
+    published_today=and_(sent,Publication.confirmed_at>=midnight,Publication.confirmed_at<tomorrow)
     flags={'unanswered':unanswered,'ready':ready,'personal':attention,'technical':technical,'pending':pending,
-        'published':sent,'published_today':and_(sent,Publication.confirmed_at>=midnight,Publication.confirmed_at<tomorrow),
+        'published':sent,'published_today':published_today,'negative_published_today':and_(negative,published_today),
         'awaiting_moderation':Publication.status=='answer_pending',
         'technical_stopped':and_(technical,Draft.quality['owner_rules']['retryable'].as_boolean()==False),
         'negative_ready':and_(negative,ready),'negative_personal':and_(negative,attention),
@@ -79,10 +80,14 @@ def _overview(db,stores):
     result=[]
     from .pipeline_metrics import delivery_latency
     for sid,store in stores.items():
+        minion = db.get(Job, 'review_minion:' + sid)
+        minion_state = (minion.result or {}) if minion else {}
         result.append({'id':sid,'provider':store.provider,'name':store.name,
             'counts':counts.get(sid,{k:0 for k in flags}),'refresh':latest.get(sid),
             'last_progress_at':movements.get(sid),
             'delivery_latency':delivery_latency(db,sid),
+            'minion':{'status': minion.status, 'message': minion_state.get('message', ''),
+                'verified': minion_state.get('verified', 0), 'needs_person': minion_state.get('needs_person', 0)} if minion else None,
             'completed_stages':stages.get(sid,{}),
             'enabled':{'sync':bool(schedule['enabled'] and schedule.get('reviews_sync_enabled')),
                 'generation':bool(schedule['enabled'] and schedule.get('drafts_enabled')),
