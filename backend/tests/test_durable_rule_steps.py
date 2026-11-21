@@ -57,6 +57,28 @@ def test_healthy_progress_never_approves_a_later_violation(monkeypatch):
     assert failed['issues']==['Не подтверждён факт']
 
 
+def test_minion_repair_checks_the_same_proposal_in_durable_groups(monkeypatch):
+    from app.auto_review_repair import repair
+    from app.integrations import ollama
+
+    args = inputs()
+    args['review'].safety_critical = False
+    monkeypatch.setattr('app.review_cases.specific_review_case', lambda *_: None)
+    monkeypatch.setattr('app.safety.safe_fallback_reply', lambda *_, **__: args['reply'])
+    monkeypatch.setattr('app.owner_reply_policy.rule_groups', lambda rules: [[r] for r in rules])
+    model = AsyncMock(return_value=PASS)
+    monkeypatch.setattr(ollama, 'structured', model)
+    values = {k: args[k] for k in ('review', 'product', 'rules', 'facts', 'assess')}
+    previous = None
+    for completed in (1, 2, 3):
+        reply, quality = asyncio.run(repair(**values, generation_seconds=150, resume=previous))
+        proof = quality['owner_rules']
+        assert proof['verified_groups'] == completed and quality['passed'] == (completed == 3)
+        assert model.await_count == completed
+        assert model.await_args.kwargs['timeout_seconds'] >= 240
+        previous = {'text': reply, 'proof': proof, 'generated': False}
+
+
 def test_timeout_preserves_completed_steps_but_does_not_certify_them_as_whole_approval(monkeypatch):
     from app.integrations import ollama
     monkeypatch.setattr('app.owner_reply_policy.rule_groups',lambda rules:[[r] for r in rules])
