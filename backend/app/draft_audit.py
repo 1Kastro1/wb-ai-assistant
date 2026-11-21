@@ -310,6 +310,11 @@ async def _recheck_one(job_id, session_factory=Session):
             job.result,job.status=state,'queued'
             db.commit()
             return
+        transferred = False
+        if retry:
+            from .review_minions import handoff
+            transferred = handoff(db, draft, review) is not None
+            retry = not transferred
         if retry and scan:
             if not state.get('technical_scan'):
                 from .rule_retry import enqueue
@@ -328,7 +333,8 @@ async def _recheck_one(job_id, session_factory=Session):
         if scan:
             state.update(cursor_id=did, check_retries=0, retry_at=0)
         total = max(cursor + 1, state.get('total', 0)) if scan else len(ids)
-        state['message'] = f'Проверка правил: {cursor + 1} из {total}'
+        state['message'] = ('Черновик передан миньону' if transferred else
+            f'Проверка правил: {cursor + 1} из {total}')
         job.result = state
         job.progress = min(99 if scan else 100, round(100 * (cursor + 1) / max(1, total)))
         job.status = 'queued' if scan else 'completed' if cursor + 1 >= len(ids) else 'queued'

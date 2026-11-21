@@ -144,6 +144,11 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
             resume = (audit_previous.verification_progress or {}).get('_minion_pending_repair') if live_minion and audit_previous else None
             if not can_repair or (resume and resume['original_key'] != key):
                 resume = None
+            # A timeout before any rule group passed can go straight to a
+            # replacement. Keep real partial proof when the saved reply is
+            # already close to a final verdict.
+            direct_repair = (live_minion and can_repair and saved_proof.get('technical_error')
+                and not (saved_proof.get('group_progress') or {}).get('completed'))
             pending_repair = None
             if can_repair and not cached:
                 matched=load_template(db,review,product,rules,facts,assess)
@@ -155,7 +160,7 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
             if templates_only and not learned:return {'status':'unmatched'}
             template_reused=bool(learned) and not cached
             if learned:checked,verdict=learned
-            elif resume:checked,verdict=answer,{'passed':False}
+            elif resume or direct_repair:checked,verdict=answer,{'checked':True,'passed':False,'issues':defects}
             elif defects:
                 # A known local failure is sufficient to reject a saved reply.
                 # Never spend a model timeout proving a reply already ineligible.

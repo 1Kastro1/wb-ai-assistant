@@ -256,7 +256,8 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
                 between_task = asyncio.create_task(between_reviews())
             from .queue_policy import other_waiting
             with session_factory() as db:
-                yield_due = not single and time.monotonic() - slice_started >= BATCH_SLICE_SECONDS and other_waiting(db, job_id)
+                yield_due = not single and other_waiting(db, job_id,
+                    priority_only=time.monotonic() - slice_started < BATCH_SLICE_SECONDS)
             if yield_due and not active and between_task is None:
                 yielded = True
                 break

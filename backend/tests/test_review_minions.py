@@ -3,7 +3,7 @@ import time
 from unittest.mock import AsyncMock
 import pytest
 
-from app.db import Draft, Job, Product, Publication, Review, ReviewLibraryAuditRow, Session, StoreProfile, set_setting
+from app.db import Account, Draft, Job, Product, Publication, Review, ReviewLibraryAuditRow, Session, StoreProfile, set_setting
 from app.review_minions import enqueue, run_step, candidate
 
 
@@ -106,6 +106,46 @@ def test_active_minion_owns_interrupted_text_check_instead_of_store_scan():
     with Session() as db:
         assert db.get(Job, scan_id).status == 'completed'
         assert candidate(db, db.get(Job, 'review_minion:owner'), time.time()) == 'r'
+
+
+def test_timeout_wakes_minion_with_priority_instead_of_store_scan(monkeypatch):
+    from app.queue_policy import next_job
+    from app.rule_retry import enqueue as enqueue_recheck
+
+    with Session() as db:
+        set_setting(db, 'review_minions_enabled', True)
+        set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True})
+        store = StoreProfile(id='owner', provider='wb', name='Shop')
+        db.add_all([store, Account(id='owner', encrypted_token='unused'), Product(id='p', name='Product')])
+        db.flush()
+        for day, rid in enumerate(('first', 'second', 'old-queue'), 1):
+            db.add(Review(id=rid, wb_review_id=rid, product_id='p', rating=3,
+                marketplace='wb', text='Не подошло', status='manual_review',
+                created_at=f'2026-11-0{day}'))
+            db.flush()
+            db.add(Draft(id=rid, review_id=rid, text='Спасибо!', original='Спасибо!',
+                quality={'passed': False, 'owner_rules': {'technical_error': True, 'failure_code': 'timeout'}}))
+        enqueue(db, store)
+        jid = 'review_minion:owner'
+        job = db.get(Job, jid)
+        job.result = {**job.result, 'retry_at': time.time() + 120}
+        db.add(Job(id='other', kind='drafts', result={}))
+        db.flush()
+        for rid in ('first', 'second'):
+            assert enqueue_recheck(db, db.get(Draft, rid), db.get(Review, rid)).id == jid
+        db.commit()
+        assert next_job(db).id == jid
+        assert candidate(db, job, time.time()) == 'second'
+    inspect = AsyncMock(return_value={'status': 'attention'})
+    monkeypatch.setattr('app.review_library_audit.inspect_review', inspect)
+    asyncio.run(run_step(jid))
+    with Session() as db:
+        assert next_job(db).id == jid
+        assert candidate(db, db.get(Job, jid), time.time()) == 'first'
+    asyncio.run(run_step(jid))
+    with Session() as db:
+        assert not db.get(Job, jid).result['handoff_at']
+        assert candidate(db, db.get(Job, jid), time.time()) == 'old-queue'
 
 
 def test_failed_minion_self_recovers_but_explicit_stop_remains():
