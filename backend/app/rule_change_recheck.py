@@ -36,7 +36,7 @@ def scope_conditions(state):
             product = Review.product_id.in_(rule.get('product_ids') or [target])
         elif scope.casefold() == 'brand' and target.isascii():
             product = select(Product.id).where(Product.id == Review.product_id,
-                func.lower(func.trim(Product.brand)) == target.strip().casefold()).exists()
+                func.lower(func.trim(Product.brand)) == target.strip().casefold()).correlate(Review).exists()
         else:
             # Curated categories can match product metadata across marketplaces;
             # don't incorrectly narrow them to a marketplace's literal category.
