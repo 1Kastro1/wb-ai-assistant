@@ -46,7 +46,7 @@ def jobs():
 
 
 def test_recent_approval_bypasses_archive_cursor_without_rewinding_it(client,ready,monkeypatch):
-    from app.db import now
+    from app.owner_reply_policy import attach_rule_quality
     enable(client,publication_questions=False)
     monkeypatch.setattr(automatic,'BATCH_SIZE',1)
     with Session() as db:
@@ -54,7 +54,7 @@ def test_recent_approval_bypasses_archive_cursor_without_rewinding_it(client,rea
         jid=job.id;cursor=['1999-01-01','already-scanned']
         job.result={**job.result,'cursor':cursor}
         draft=db.get(Draft,'ownerreview')
-        draft.quality={**draft.quality,'owner_rules':{'checked':True,'passed':True,'checked_at':now()}}
+        draft.quality=attach_rule_quality(dict(draft.quality),{'checked':True,'passed':True,'issues':[]})
         db.commit()
     asyncio.run(automatic.run_step(jid))
     assert [item[1] for item in ready]==['ownerreview']
@@ -62,6 +62,23 @@ def test_recent_approval_bypasses_archive_cursor_without_rewinding_it(client,rea
         assert db.get(Job,jid).result['cursor']==cursor
         assert db.get(Job,jid).result['ready_cursor'][1]=='ownerreview'
         assert db.scalar(select(Publication).where(Publication.review_id=='ownerreview')).confirmed_at
+
+
+def test_old_dated_reply_approved_before_job_creation_keeps_live_publication_priority(client,ready,monkeypatch):
+    from app.owner_reply_policy import attach_rule_quality
+    with Session() as db:
+        review=db.get(Review,'ownerreview');review.created_at='2020-01-01'
+        draft=db.get(Draft,'ownerreview')
+        draft.quality=attach_rule_quality(dict(draft.quality),{'checked':True,'passed':True,'issues':[]})
+        approval=draft.quality['owner_rules']['checked_at'];db.commit()
+    enable(client,publication_questions=False)
+    monkeypatch.setattr(automatic,'BATCH_SIZE',1)
+    with Session() as db:
+        job=db.scalar(select(Job).where(Job.kind==automatic.KIND,Job.result['account_id'].as_string()=='owner'))
+        assert job.created_at>approval
+        job.result={**job.result,'cursor':['1999-01-01','old']};jid=job.id;db.commit()
+    asyncio.run(automatic.run_step(jid))
+    assert [row[1] for row in ready]==['ownerreview']
 
 
 def test_owner_can_publish_verified_positive_reviews_during_archive_audit(client, ready):

@@ -423,6 +423,13 @@ def attach_rule_quality(quality, rule_quality):
         text_issues = [issue for issue in quality.get('issues', []) if issue not in previous.get('issues', [])]
     quality['text_issues'] = list(text_issues)
     rule_quality = dict(rule_quality)
+    if (quality.get('passed') is True and rule_quality.get('passed') is True
+            and rule_quality.get('checked') is True and not rule_quality.get('technical_error')
+            and not rule_quality.get('issues') and not rule_quality.get('violations')):
+        # A new draft can reuse a proven template. Record this validated save
+        # event so publication sees it independently of the archive-date cursor.
+        from .db import now
+        rule_quality['checked_at'] = now()
     rule_quality['status'] = ('verified' if rule_quality.get('passed') else
                               'blocked' if rule_quality.get('retryable') is False else
                               'error' if rule_quality.get('technical_error') else

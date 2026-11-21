@@ -21,6 +21,27 @@ def test_new_review_schedule_is_independent_from_running_archive():
         assert not enqueue_generation(db,schedule,store,'drafts',time.time()+7200)
 
 
+def test_receipt_boundary_retains_unresolved_old_dated_reviews_across_scheduled_attempts():
+    from app.automation_schedule import enqueue_generation
+    current=time.time()
+    received=datetime.fromtimestamp(current-2*86400,timezone.utc).isoformat()
+    with Session() as db:
+        store=StoreProfile(id='shop',provider='wb',name='Shop');db.add(store)
+        db.add(Product(id='p',name='Product'));db.flush()
+        db.add(Review(id='late',wb_review_id='late',wb_account_id='shop',product_id='p',rating=5,
+            text='Good',created_at='2020-01-01',received_at=received));db.commit()
+        schedule={'enabled':True,'drafts_enabled':True,'drafts_hours':2}
+        assert enqueue_generation(db,schedule,store,'drafts',current)
+        db.flush()
+        first=db.scalar(select(Job).where(Job.kind=='drafts'))
+        assert first.result['received_since']==received
+        first.status='completed';db.commit()  # saved checkpoint, no draft after an outage
+        assert enqueue_generation(db,schedule,store,'drafts',current+2*86400)
+        db.flush()
+        second=db.scalar(select(Job).where(Job.kind=='drafts',Job.status=='queued'))
+        assert second.result['received_since']==received
+
+
 def test_newly_received_old_review_is_generated_and_receipt_survives_sync():
     from app.integrations import upsert_market_review
     from app.batch_processing import run_draft_batch

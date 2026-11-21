@@ -73,3 +73,15 @@ def test_continuous_fresh_batches_cannot_starve_archive_or_confirmed_sends():
             job.result={**job.result,'last_served_at':current.isoformat()};db.commit()
         assert picked=={'archive','send'}
         assert next_job(db).id=='fresh'
+
+
+def test_complete_validated_save_has_an_approval_event_but_pending_or_failed_check_does_not():
+    from app.owner_reply_policy import attach_rule_quality
+    proof={'passed':True,'checked':True,'issues':[],'checked_at':'2000-01-01'}
+    result=attach_rule_quality({'passed':True},proof)
+    assert result['owner_rules']['checked_at']>'2000-01-01'
+    assert proof['checked_at']=='2000-01-01'  # the source template proof stays intact
+    for blocked in ({'passed':False,'checked':False,'issues':[]},
+                    {'passed':False,'checked':False,'technical_error':True,'issues':['timeout']}):
+        result=attach_rule_quality({'passed':True},blocked)
+        assert 'checked_at' not in result['owner_rules'] and not result['passed']

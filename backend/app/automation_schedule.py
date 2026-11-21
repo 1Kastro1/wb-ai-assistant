@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from sqlalchemy import select, func
-from .db import Job, StoreProfile, Account, setting
+from .db import Job, StoreProfile, Account, Review, setting
 
 DEFAULTS = {'enabled': False, 'reviews_hours': 3, 'questions_hours': 3,
             'products_hours': 24, 'backup_hours': 24, 'drafts_enabled': False,
@@ -69,7 +69,13 @@ def enqueue_generation(db, schedule, store, kind, current):
     result.update(fresh_reviews=True)
     if kind == 'drafts':
         result['since'] = (datetime.fromtimestamp(current, timezone.utc) - timedelta(days=int(schedule.get('drafts_days', 7)))).isoformat()
-        result['received_since'] = datetime.fromtimestamp(last or current-86400, timezone.utc).isoformat()
+        # Receipt belongs to the live lane until a draft exists. Advancing this
+        # boundary on each scheduled attempt would strand a late, old-dated
+        # review after an outage or a concurrent import changed its text.
+        if not schedule.get('fresh_received_since'):
+            schedule['fresh_received_since'] = db.scalar(select(func.min(Review.received_at)).where(
+                Review.received_at > '')) or datetime.fromtimestamp(current-86400, timezone.utc).isoformat()
+        result['received_since'] = schedule['fresh_received_since']
         archive_audit=db.scalar(select(Job.id).where(Job.kind=='review_library_audit',
             Job.status.in_(('queued','running')),Job.cancel_requested==False).limit(1))
         if schedule.get('drafts_all_history') and not refreshing and not archive_audit and not pending(db, kind, store.id, archive=True):
