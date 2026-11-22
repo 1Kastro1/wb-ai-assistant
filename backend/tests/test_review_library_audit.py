@@ -103,6 +103,45 @@ def test_minion_timeout_without_proof_repairs_before_retrying_original(monkeypat
         assert db.get(Draft, 'd-wb').revision == 8
 
 
+def test_minion_corrects_rejected_repair_with_same_independent_checks(monkeypatch):
+    from app.review_library_audit import inspect_review
+    from app.review_minions import enqueue
+
+    jid, rid = 'review_minion:wb', 'r-wb'
+    with Session() as db:
+        seed(db)
+        draft = db.get(Draft, 'd-wb')
+        draft.edits, draft.original = [], draft.text
+        draft.quality = {'passed': False, 'owner_rules': {'technical_error': True}}
+        enqueue(db, db.get(StoreProfile, 'wb'))
+        db.commit()
+    generic = 'Добрый день! Благодарим за отзыв.'
+    corrected = 'Добрый день! Спасибо, что рассказали о своём опыте.'
+    issue = 'Ответить на сообщение покупателя по существу'
+    partial = {'checked': False, 'passed': False, 'continuation': True}
+    approved = {'checked': True, 'passed': True, 'issues': []}
+    metadata = {'contextual_generation': True}
+    prepare = AsyncMock(side_effect=[
+        (generic, {'passed': False, 'owner_rules': {'checked': True, 'passed': False, 'issues': [issue]}}),
+        (corrected, {'passed': False, 'owner_rules': partial, 'automatic_repair': metadata}),
+        (corrected, {'passed': True, 'owner_rules': approved, 'automatic_repair': metadata}),
+    ])
+    monkeypatch.setattr('app.auto_review_repair.repair', prepare)
+    monkeypatch.setattr('app.services.assess_reply', lambda *_: {'passed': True, 'issues': []})
+    monkeypatch.setattr('app.owner_reply_policy.local_issues', lambda *_: [])
+    first = asyncio.run(inspect_review(jid, rid, Session, live_minion=True))
+    assert first['status'] == 'retry' and first['continuation']
+    assert prepare.await_args.kwargs['rejected'] == {'text': generic, 'issues': [issue]}
+    with Session() as db:
+        assert db.get(Draft, 'd-wb').revision == 7
+    assert asyncio.run(inspect_review(jid, rid, Session, live_minion=True))['status'] == 'verified'
+    assert prepare.await_args.kwargs['resume']['corrected'] is True
+    assert prepare.await_args.kwargs['resume']['proof'] == partial
+    with Session() as db:
+        draft = db.get(Draft, 'd-wb')
+        assert (draft.text, draft.revision) == (corrected, 8)
+
+
 def test_bounded_slices_rotate_markets_and_resume_saved_positions(monkeypatch):
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',good)
     with Session() as db:seed(db);jid=start(db).id;db.commit()
