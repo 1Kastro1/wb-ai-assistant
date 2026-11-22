@@ -1,6 +1,7 @@
 """Specific owner-approved replies; technical statements remain conditional."""
 import re
-from .reply_policy import analyze_customer_message, quantity_shortage, complaint_text
+from .reply_policy import (analyze_customer_message, quantity_shortage, complaint_text, opened_packaging,
+                           packaging_wear, wb_pickup_refusal_applies)
 
 HELLA = 'https://www.hella.com/partnerworld/us/Product-range/Lighting/Bulbs-3277/'
 BREMBO = 'https://asia.bremboparts.com/america/en/support/car/maintenance/noises-and-vibrations-113941'
@@ -34,6 +35,15 @@ def specific_review_case(review, product):
 
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
+    if (set(analysis['complaints']) == {'PACKAGING_ISSUE'} and analysis['sentiment'] == 'negative'
+            and not analysis['is_question'] and (opened_packaging(faults) or packaging_wear(faults))):
+        wear = packaging_wear(faults)
+        answer = ('Извините за состояние упаковки и потёртости, которые Вы заметили на товаре. '
+                  'Мы отправляем только новые товары.' if wear else 'Извините, что коробка оказалась вскрытой.')
+        if wb_pickup_refusal_applies(review):
+            answer += (' Если в пункте выдачи до получения заказа Вы обнаружите, что товар повреждён'
+                       ' или не соответствует заказу, Вы можете отказаться от его получения.')
+        return result('packaging_wear' if wear else 'opened_packaging', answer)
     if ('ламп' in name and re.search(r'мощност|нагрузк|(?:там|есть)\s+и?\s*55', text)
             and re.search(r'\?|разниц\w*\s+не\s+замет', text)
             and not re.search(r'перестал\w*\s+работ|не\s+работ|дым|плав|сгор', text)):

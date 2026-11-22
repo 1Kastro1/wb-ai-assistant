@@ -178,6 +178,48 @@ class OwnerReviewCases(unittest.TestCase):
             review=SimpleNamespace(text=text,rating=1,risk='NORMAL')
             self.assertNotEqual((specific_review_case(review,product) or {}).get('key'),'positive_low_rating')
 
+    def test_opened_wiper_box_does_not_imply_a_size_or_fitment_issue(self):
+        from app.reply_policy import analyze_customer_message, semantic_reply_issues
+        from app.review_cases import specific_review_case
+        with self.factory() as db:
+            db.add(StoreProfile(id='owner', name='Магазин', provider='wb'))
+            product = Product(id='wiper', name='Щётка стеклоочистителя 700 мм каркасная')
+            db.add(product)
+            db.flush()
+            review = Review(id='box', wb_review_id='box', product_id=product.id, marketplace='wb',
+                            wb_account_id='owner', text='Коробка вскрытая с двух сторон ,отказ !!!', rating=1)
+            db.add(review)
+            db.commit()
+            self.assertEqual(analyze_customer_message(review.text, 1)['complaints'], ['PACKAGING_ISSUE'])
+            with patch('app.services.ollama.reply_variants', new=AsyncMock(side_effect=AssertionError('unexpected generation'))):
+                reply = asyncio.run(generate_draft(db, review.id))['text']
+            self.assertIn('коробка оказалась вскрытой', reply)
+            self.assertIn('отказаться от его получения', reply)
+            self.assertEqual(semantic_reply_issues(review, product, reply), [])
+            bad_reply = 'Щётка не соответствует длине 700 мм. Коробка вскрыта. Проверьте крепление.'
+            self.assertEqual(len(semantic_reply_issues(review, product, bad_reply)), 2)
+            review.text = 'Коробка была вскрыта, но заказ уже забрала.'
+            self.assertNotIn('отказаться', specific_review_case(review, product)['answer'])
+            review.text = 'Коробка не вскрыта. Упаковка целая.'
+            self.assertEqual(analyze_customer_message(review.text, 5)['complaints'], [])
+
+    def test_packaging_wear_reply_acknowledges_marks_and_states_store_policy(self):
+        from types import SimpleNamespace
+        from app.reply_policy import semantic_reply_issues
+        from app.review_cases import specific_review_case
+        product = SimpleNamespace(name='Фильтр масляный NITTO', category='')
+        review = SimpleNamespace(text='Я уверен, что этот фильтр появился со скидкой как раз по причине того, '
+                                     'что упаковка стала не товарного вида. Было бы честно, если бы предупредили '
+                                     'о виде упаковки! Ну и фото самого фильтра — на резинке потёртости.',
+                                 rating=3, marketplace='wb', risk='NORMAL')
+        reply = specific_review_case(review, product)['answer']
+        self.assertIn('потёртости', reply)
+        self.assertIn('Мы отправляем только новые товары', reply)
+        self.assertIn('отказаться от его получения', reply)
+        self.assertEqual(semantic_reply_issues(review, product, reply), [])
+        self.assertTrue(any('только новые' in issue for issue in semantic_reply_issues(
+            review, product, 'Сожалеем из-за состояния упаковки и потёртостей.')))
+
     def test_followup_cases_keep_context_on_regeneration(self):
         from types import SimpleNamespace
         from app.reply_policy import analyze_customer_message
