@@ -195,6 +195,15 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                 from .auto_review_repair import repair
                 options = {'generation_seconds': 150, 'resume': resume} if live_minion else {}
                 repaired=await repair(review,product,rules,facts,assess,**options)
+                corrected = bool(resume and resume.get('corrected'))
+                if live_minion and repaired and not corrected and not technical_check(repaired[1]):
+                    value, repaired_quality = repaired
+                    proof = repaired_quality.get('owner_rules') or {}
+                    if (repaired_quality.get('passed') is not True or proof.get('passed') is not True
+                        or proof.get('issues')):
+                        corrected = True
+                        repaired = await repair(review, product, rules, facts, assess, generation_seconds=150,
+                            rejected={'text': value, 'issues': repaired_quality.get('issues') or proof.get('issues') or defects})
                 if repaired:
                     value,repaired_quality=repaired
                     proof=repaired_quality.get('owner_rules') or {}
@@ -206,7 +215,11 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
                         if not live_minion:
                             return {'status':'retry','issues':repaired_quality.get('issues',[])}
                         pending_repair = {'text':value, 'proof':proof, 'original_key':key,
-                            'generated':repaired_quality['automatic_repair']['contextual_generation']}
+                            'generated':repaired_quality['automatic_repair']['contextual_generation'], 'corrected':corrected}
+                    elif live_minion:
+                        # Explain the failed replacement while keeping the original draft.
+                        verdict = {**verdict, 'passed': False, 'issues': repaired_quality.get('issues') or
+                            proof.get('issues') or verdict.get('issues') or ['Исправленный ответ не прошёл проверку правил']}
             db.rollback()
             review=db.scalar(select(Review).where(Review.id==rid).with_for_update())
             product=db.get(Product,review.product_id) if review else None

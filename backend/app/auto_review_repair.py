@@ -2,7 +2,8 @@
 VERSION = 'automatic-review-repair-2026-11-12-v1'
 
 
-async def repair(review, product, rules, facts, assess, *, local_only=False, generation_seconds=None, resume=None):
+async def repair(review, product, rules, facts, assess, *, local_only=False, generation_seconds=None, resume=None,
+                 rejected=None):
     from .rule_execution import positive_template, untried_template
     from .review_cases import specific_review_case
     from .safety import safe_fallback_reply
@@ -23,7 +24,7 @@ async def repair(review, product, rules, facts, assess, *, local_only=False, gen
     generated=False
     if resume:
         candidate, generated = resume['text'], resume['generated']
-    if not resume and not local_only and not assess(candidate).get('passed'):
+    if not resume and not local_only and (rejected or not assess(candidate).get('passed')):
         # Do not spend a long semantic check proving that a generic fallback
         # already fails local content checks. Generate one contextual repair,
         # then run the ordinary independent rule/fact verification below.
@@ -38,7 +39,8 @@ async def repair(review, product, rules, facts, assess, *, local_only=False, gen
             'Используй только переданные подтверждённые сведения. Это заготовка: полные правила проверяются отдельно.',
             {'buyer_message':review.text,'rating':review.rating, 'product':product.name,
                 'required_style':{key:context_constraints(rules,review)[key] for key in ('greeting','greetings','signature')},
-                'previous_answer':candidate,'content_issues':assess(candidate).get('issues',[])},
+                'previous_answer':rejected['text'] if rejected else candidate,
+                'content_issues':rejected['issues'] if rejected else assess(candidate).get('issues',[])},
             select_rules(rules,review,product)[0], facts)
         options = {'timeout_seconds': generation_seconds} if generation_seconds else {}
         budget = GenerationBudget(generation_seconds) if generation_seconds else GenerationBudget()
