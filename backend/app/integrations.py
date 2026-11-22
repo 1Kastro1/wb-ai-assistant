@@ -452,13 +452,28 @@ def upsert_market_review(db, store, external_id, product_external_id, product_na
     product = db.get(Product, product_id) or Product(id=product_id, name=product_name or str(product_external_id), brand=brand or '', category='', marketplace=store.provider)
     db.add(product)
     db.flush()
-    row = db.scalar(select(Review).where(Review.wb_account_id == store.id, Review.wb_review_id == str(external_id)))
+    lookup = select(Review).where(Review.wb_account_id == store.id, Review.wb_review_id == str(external_id))
+    row = db.scalar(lookup.with_for_update() if answer is None else lookup)
     if not row:
         row = Review(id=f'{store.id}:{external_id}', wb_account_id=store.id, wb_review_id=str(external_id), product_id=product_id, status='unanswered', marketplace=store.provider)
     row.text, row.rating, row.created_at = mask_vin(text or ''), int(rating or 0), str(created_at or now())
     if sections is not None and sections:
         row.sections = sections
-    row.is_answered, row.existing_answer = bool(answered), mask_vin(answer or '')
+    if answer is None:
+        # A list response can indicate that comments exist, but cannot replace
+        # seller reply text previously confirmed by the comments endpoint.
+        from .db import Publication
+        from .publication_reconciliation import account_identity, key
+        publication = db.scalar(select(Publication).where(Publication.review_id == row.id))
+        confirmed = bool(publication and publication.status == 'published' and publication.confirmed_at)
+        if confirmed and not row.existing_answer:
+            attempt = setting(db, key(publication), {})
+            if (attempt.get('review_id') == row.id and attempt.get('external_id') == row.wb_review_id
+                    and attempt.get('action_id') == publication.action_id and attempt.get('identity') == account_identity(db, store)):
+                row.existing_answer = mask_vin(attempt.get('text') or '')
+        row.is_answered = bool(answered or row.existing_answer or confirmed)
+    else:
+        row.is_answered, row.existing_answer = bool(answered), mask_vin(answer)
     for key, value in classify(row.text, product.category).items():
         setattr(row, key, value)
     row.status = 'published' if row.is_answered else ('manual_review' if row.manual else ('draft_ready' if db.scalar(select(Draft).where(Draft.review_id == row.id)) else 'unanswered'))
@@ -699,7 +714,7 @@ class YandexProvider:
                 content = '\n'.join(str(description.get(k) or '') for k in ('advantages','disadvantages','comment')).strip()
                 statistics = item.get('statistics') or {}
                 from .review_sections import review_sections
-                upsert_market_review(db, store, item.get('feedbackId'), identifiers.get('offerId') or 'unknown', identifiers.get('offerId'), '', statistics.get('rating'), content, item.get('createdAt'), bool(statistics.get('commentsCount')), sections=review_sections(description, 'yandex'))
+                upsert_market_review(db, store, item.get('feedbackId'), identifiers.get('offerId') or 'unknown', identifiers.get('offerId'), '', statistics.get('rating'), content, item.get('createdAt'), bool(statistics.get('commentsCount')), answer=None, sections=review_sections(description, 'yandex'))
                 total += 1
             db.commit()
             if progress: progress(min(95, 5 + total // 50))
