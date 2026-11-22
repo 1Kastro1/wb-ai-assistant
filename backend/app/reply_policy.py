@@ -160,6 +160,30 @@ def packaging_artwork_mismatch(text):
         r'(?:не соответств\w*|отлича\w*)[^.!?]{0,120}(?:фото|изображен|заставк|картинк)',value))
 
 
+def opened_packaging(text):
+    value = ' '.join(complaint_text(text).split())
+    package = r'(?:коробк\w*|упаковк\w*)'
+    opened = r'вскрыт\w*'
+    return bool(re.search(
+        rf'\b(?:{package}(?:\s+(?:был\w*|уже|оказал\w*)){{0,3}}\s+{opened}|{opened}\s+{package})\b',
+        value))
+
+
+def packaging_wear(text):
+    value = complaint_text(text)
+    value = re.sub(r'\b(?:нет|без|не заметил\w*)\s+потертост\w*', '', value)
+    return bool(re.search(r'\b(?:упаковк\w*|коробк\w*)[^.!?\n]{0,75}\b(?:не\s*товарн\w*|помят\w*|поврежд\w*)', value)
+                and re.search(r'\bпотертост\w*\b', value))
+
+
+def wb_pickup_refusal_applies(review):
+    """Refusal advice applies before a customer accepts a WB order."""
+    buyer = (review.text or '').lower().replace('ё', 'е')
+    received = re.sub(r'\bне\s+(?:забрал\w*|выкупил\w*|получил\w*)', '', buyer)
+    return (getattr(review, 'marketplace', '') == 'wb'
+            and not re.search(r'\b(?:забрал\w*|выкупил\w*|уже\s+получил\w*|распаковал\w*\s+дома)\b', received))
+
+
 def analyze_customer_message(text, rating=None):
     """Conservative internal hints; the complete buyer text remains model input."""
     value = ' '.join(complaint_text(strip_other_product_comparisons(text or '')).split())
@@ -168,6 +192,8 @@ def analyze_customer_message(text, rating=None):
             return any(not re.search(r'(?<!\w)(?:не|без)\s*$', value[:match.start()]) for match in re.finditer(r'(?<!\w)' + re.escape(marker), value))
         return bool(re.search(r'(?<!\w)' + re.escape(marker), value)) if marker.startswith('не ') else marker in value
     complaints = [kind for kind, markers in COMPLAINT_PATTERNS.items() if any(matches(x) for x in markers)]
+    if (opened_packaging(value) or packaging_wear(value)) and 'PACKAGING_ISSUE' not in complaints:
+        complaints.append('PACKAGING_ISSUE')
     if rating is not None and rating <= 3 and re.fullmatch(r'коротк\w*[.!\s]*', value):
         complaints.append('SIZE_ISSUE')
     extra = {
@@ -278,6 +304,14 @@ def semantic_reply_issues(review, product, reply):
         issues.append('совет по чистящей химии не относится к этому товару')
     if set(analysis['complaints']) == {'PACKAGING_ISSUE'} and re.search(r'повреждение (?:полученного )?товара|товар оказался поврежд', text):
         issues.append('не подменять повреждение упаковки повреждением товара')
+    if set(analysis['complaints']) == {'PACKAGING_ISSUE'} and (opened_packaging(buyer) or packaging_wear(buyer)):
+        if re.search(r'\b(?:длин\w*|размер\w*|креплен\w*|совместим\w*|не\s+подош\w*)\b|\d+\s*мм\b', text):
+            issues.append('не приписывать покупателю жалобу на размер, крепление или совместимость')
+        if packaging_wear(buyer) and not re.search(r'\b(?:отправля\w*|прода\w*)\s+только\s+нов\w*\s+товар\w*\b', text):
+            issues.append('при жалобе на потёртости и состояние упаковки сообщить, что магазин отправляет только новые товары')
+        if wb_pickup_refusal_applies(review) and not analysis['is_question'] and not analysis['buyer_asks_about_money']:
+            if not re.search(r'\b(?:пвз|пункт\w* выдачи)\b', text) or not re.search(r'\bотказ(?:аться|\w* от получени\w*)', text):
+                issues.append('при вскрытой упаковке объяснить, что в ПВЗ до получения можно отказаться от повреждённого или не соответствующего заказу товара')
     if analysis.get('resolved') and re.search(r'пришлите|приложите|фотограф|через полученный заказ|повторно описывать', text):
         issues.append('учесть, что покупатель уже решил проблему; не добавлять требования')
     if not buyer.strip() and re.search(r'по инструкции|распылите|дозировк|время выдержки|«.{60}', text):
