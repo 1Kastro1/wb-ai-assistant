@@ -190,6 +190,30 @@ def test_ozon_finds_submitted_comment_not_newer_unrelated_reply(monkeypatch):
     assert value == {'state': 'answer_pending', 'text': 'saved'}
 
 
+def test_yandex_review_list_recovers_and_preserves_verified_seller_text(monkeypatch):
+    reserve('yandex')
+    with Session() as db:
+        review, publication = db.get(Review, 'store'), db.get(Publication, 'store')
+        recovery.record_outcome(db, publication, review, {'state': 'published'})
+        answer = review.existing_answer
+        review.existing_answer = ''  # The old reviews sync discarded the text.
+        db.get(Draft, 'store').text = 'Новый черновик, который никогда не отправляли'
+        db.commit()
+    monkeypatch.setattr(integrations, 'decrypt_secret', lambda _: 'test-token')
+    feedback = {'feedbackId': 12345, 'identifiers': {'offerId': 'offer'}, 'description': {},
+                'statistics': {'rating': 5, 'commentsCount': 1}}
+    mock = AsyncMock(return_value={'result': {'feedbacks': [feedback]}})
+    monkeypatch.setattr(integrations.guard, 'request', mock)
+    for count in (1, 0):
+        feedback['statistics']['commentsCount'] = count
+        with Session() as db:
+            assert asyncio.run(integrations.yandex.sync_reviews(db, 'store')) == 1
+            review = db.get(Review, 'store')
+            assert review.existing_answer == answer
+            assert review.is_answered and review.status == 'published'
+    assert all(call.args == ('yandex', 'reviews') for call in mock.await_args_list)
+
+
 def test_yandex_reads_all_pages_and_uses_selected_store_credentials(monkeypatch):
     jid = reserve('yandex')
     seen = []
