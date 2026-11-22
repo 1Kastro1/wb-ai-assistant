@@ -19,7 +19,7 @@ CASES = [{"name":"Лампа H1 галогенная 12В 55Вт 3200K","brand":
  {'name':'Ароматизатор Air Spencer A9','brand':'EIKOSHA','rating':2,'text':'Очень слабый запах','contains':['дефлектор','держател'],'excludes':['возврат']},
  {'name':'Меловой ароматизатор SAMURAI MAN A-37','brand':'EIKOSHA','rating':1,'text':'Перестала пахнуть через неделю','contains':['через неделю','Меловая основа','температуры','движения воздуха','дефлектор','держател'],'excludes':['Уточните','возврат']},
  {'name':'Меловой ароматизатор A-37','brand':'EIKOSHA','rating':2,'text':'Аромат пропал через пять дней','contains':['перестал ощущаться','Меловая основа','дефлектор'],'excludes':['через неделю','Уточните']},
- {'name':'Сменный картридж GIGA V-90','brand':'EIKOSHA','rating':2,'text':'Запах исчез через неделю','contains':['GIGA','корпус'],'excludes':['Меловая основа','разместить баночку']},
+ {'name':'Сменный картридж для авто MARINE SQUASH V-91','brand':'EIKOSHA','rating':2,'text':'Отсутствие долгого запаха, выветрился буквально за неделю','contains':['GIGA','корпус','горячим обдувом'],'excludes':['Меловая основа','разместить баночку','гарантировать','по отзыву']},
  {'name':'Ароматизатор Air Spencer A9','brand':'EIKOSHA','rating':2,'text':'Запах не понравился','contains':['индивидуально','другую композицию'],'excludes':['возврат']},
  {'name':'Свеча зажигания BP6HS для Citroen','brand':'NGK','rating':3,'text':'Заказал свечи зажигания производитель нжк япония, пришли х/з','contains':['ПВЗ','отказаться'],'excludes':['Ваши сомнения','производитель полученного товара был понятен']},
  {'name':'Эко средство для мытья полов 1л, аромат кедра','brand':'KANGAROO','rating':2,'text':'Крышка без заводской защиты. Одета криво, часть протекла, запах кислый, липкая (возможно подменили)','contains':['протечку','запах','крышки','ПВЗ'],'excludes':['поддержк','подмен','провер','фотограф']},
@@ -219,6 +219,16 @@ class OwnerReviewCases(unittest.TestCase):
         self.assertEqual(semantic_reply_issues(review, product, reply), [])
         self.assertTrue(any('только новые' in issue for issue in semantic_reply_issues(
             review, product, 'Сожалеем из-за состояния упаковки и потёртостей.')))
+
+    def test_publication_checks_catch_internal_guarantee_wording(self):
+        from types import SimpleNamespace
+        from app.reply_policy import semantic_reply_issues
+        review = SimpleNamespace(text='Запах исчез через неделю', rating=2)
+        product = SimpleNamespace(name='Сменный картридж GIGA', category='')
+        issue = 'убрать служебную оговорку о гарантии по отзыву'
+        self.assertIn(issue, semantic_reply_issues(review, product, 'Гарантировать его по отзыву нельзя.'))
+        self.assertIn(issue, semantic_reply_issues(review, product, 'По отзыву нельзя гарантировать срок.'))
+        self.assertNotIn(issue, semantic_reply_issues(review, product, 'Интенсивность аромата зависит от условий использования.'))
 
     def test_followup_cases_keep_context_on_regeneration(self):
         from types import SimpleNamespace

@@ -285,6 +285,9 @@ def semantic_reply_issues(review, product, reply):
     buyer = (review.text or '').lower().replace('ё', 'е')
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower().replace('ё', 'е')
     issues = conversational_issues(reply)
+    if re.search(r'\bгарантировать\b[^.!?\n]{0,45}\bпо отзыву\s+(?:нельзя|невозможно)\b'
+                 r'|\bпо отзыву\b[^.!?\n]{0,30}\b(?:нельзя|невозможно)\s+гарантировать\b', text):
+        issues.append('убрать служебную оговорку о гарантии по отзыву')
     if untested_review(buyer) and re.search(
             r'(?:рады|приятно)[^.!?]{0,90}(?:оценили качество|покупка.*понрав|товар.*(?:понрав|подош)|установка.*успеш|довольны работой|оправдал.*ожидан|результат.*порадовал)'
             r'|(?:покупка|товар|аромат)\s+и дальше\s+радует|поделились опытом', text):
