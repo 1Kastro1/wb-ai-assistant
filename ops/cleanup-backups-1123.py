@@ -20,6 +20,19 @@ def data_folder():
 def inventory(module,keep,data):
     result=module.plan(ROOT,keep,data)
     cutoff=module.stamp_time(keep)
+    planned={row['path'] for row in result['files']}
+    # Historical before-PR folders used uppercase T/Z as well as lowercase.
+    # Keep code patches and dependency metadata; only the named database dump
+    # is a backup. The installed legacy planner recognizes lowercase only.
+    for folder in ROOT.iterdir():
+        if not re.fullmatch(r'before-pr\d+-\d{8}T\d{6}Z',folder.name,re.I):continue
+        if folder.is_symlink() or not folder.is_dir():raise RuntimeError('Unexpected before-update folder')
+        path=folder/'postgres.dump'
+        if not path.exists() or str(path) in planned:continue
+        info=module.regular(path)
+        assert path.resolve().parent.parent==ROOT.resolve()
+        if info.st_mtime>=cutoff:raise RuntimeError('Newer before-update dump must be preserved')
+        result['files'].append({'path':str(path),'bytes':info.st_size,'mtime_ns':info.st_mtime_ns,'inode':info.st_ino,'device':info.st_dev})
     for path in data.iterdir():
         if not SNAPSHOTS.fullmatch(path.name):continue
         info=module.regular(path)
