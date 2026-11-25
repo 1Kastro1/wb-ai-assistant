@@ -105,6 +105,9 @@ async def step(job_id, session_factory=Session, limit=500):
             job.result, job.status = state, 'queued'
             job.progress = min(99, round(100 * state['checked'] / max(1, state.get('total', 0))))
             db.commit()
+            if verified:
+                from .scheduled_publication import handoff_verified_draft
+                handoff_verified_draft(db, review, draft)
             served += 1
         await asyncio.sleep(0)
         if time.monotonic() - started >= 10:
