@@ -192,8 +192,13 @@ def rebase_library_audits(db, scopes, version=None):
         if touched:
             state['policy_rewind_stage'] = min([state.get('stage', 0), *touched,
                                                 state.get('policy_rewind_stage', state.get('stage', 0))])
-            state.update(stages=stages, retry_at=0, template_done=False,
-                         template_cursor='', template_scans={}, policy_updated_at=now(),
+            touched_keys = {str(index) for index in touched}
+            template_scans = {key: cursor for key, cursor in (state.get('template_scans') or {}).items()
+                              if key not in touched_keys}
+            if state.get('template_stage') in touched:
+                state.update(template_done=False, template_cursor='')
+            state.update(stages=stages, retry_at=0, template_scans=template_scans,
+                         policy_updated_at=now(),
                          message='Изменились правила. Затронутые ответы поставлены на проверку.')
         state['policy_version'] = version
         job.result=state
