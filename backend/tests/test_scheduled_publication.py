@@ -354,3 +354,42 @@ def test_all_markets_can_be_paused_and_unknown_provider_is_rejected(client,ready
     assert client.patch('/settings/schedule',json={'publication_markets':{'unknown':True}}).status_code==400
     stores=client.get('/stores').json()['items']
     assert all(s['publication_state']=='disabled' for s in stores)
+
+
+@pytest.mark.parametrize('store', ['owner', 'oz', 'ya'])
+def test_recheck_delivers_exact_low_rating_revision_without_waiting_for_schedule(client, ready, store, monkeypatch):
+    from app.draft_audit import recheck_step
+    from app.owner_reply_policy import fingerprint
+    from app.pipeline_metrics import approval_delivery_latency
+    from app.safety import rule_reply
+
+    enable(client, publication_reviews=False, publication_questions=False,
+           publication_low_ratings=True, publication_all_low_ratings=True)
+    rid = store + 'review'
+    with Session() as db:
+        for job in db.scalars(select(Job)):
+            job.status = 'completed'
+        review, draft = db.get(Review, rid), db.get(Draft, rid)
+        review.rating, review.status = 2, 'manual_review'
+        review.text = 'Не оправдало ожиданий'
+        draft.text = draft.original = rule_reply(review, db.get(Product, review.product_id))
+        draft.quality = {'passed': False}
+        db.add(Job(id='check-low', kind='draft_recheck', result={
+            'account_id': store, 'draft_ids': [draft.id], 'check_only': True}))
+        db.commit()
+
+    async def verify(text, review, product, rules, facts, assess, **kwargs):
+        return text, {'fingerprint': fingerprint(rules), 'checked': True, 'passed': True, 'issues': []}
+
+    monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules', verify)
+    monkeypatch.setattr(services, 'assess_reply', lambda *_a, **_k: {'passed': True, 'issues': []})
+    asyncio.run(recheck_step('check-low'))
+    with Session() as db:
+        job = db.scalar(select(Job).where(Job.kind == automatic.KIND, Job.status == 'queued'))
+        assert job is not None and job.result['priority_reviews'] == {rid: 9}
+        assert job.result['priority_only']
+        send_id = job.id
+    asyncio.run(automatic.run_step(send_id))
+    assert [call[1] for call in ready] == [rid]
+    with Session() as db:
+        assert approval_delivery_latency(db, store)['samples'] == 1
