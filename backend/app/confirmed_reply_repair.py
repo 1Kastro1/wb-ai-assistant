@@ -7,6 +7,15 @@ from .safety import mask_vin, validate_reply
 RATING = 'Ответ ошибочно благодарит за высокую оценку при оценке 1–3★.'
 ADAPTER = 'Ответ не упоминает крепление, о котором спросил покупатель.'
 BLOCKED = 'Сначала исправьте подтверждённую ошибку в ответе.'
+UNCHECKED = 'Исправленный ответ ещё не прошёл повторную проверку.'
+
+
+def repair_pending(quality):
+    return (quality or {}).get('confirmed_repair', {}).get('status') == 'pending'
+
+
+def repair_unverified(quality):
+    return (quality or {}).get('confirmed_repair', {}).get('status') in ('pending', 'blocked')
 
 
 def normalized(text):
@@ -73,13 +82,19 @@ async def repair(review, product, reply, quality, rules, facts, assess, *, prote
             content = assess(candidate)
             if content.get('passed') is True and not confirmed_issue(review, candidate):
                 checked, verdict = await enforce_owner_rules(
-                    candidate, review, product, rules, facts, assess, check_only=True)
+                    candidate, review, product, rules, facts, assess, check_only=True, group_limit=1)
                 if checked == candidate:
                     checked_quality = attach_rule_quality(content, verdict)
                     if (checked_quality.get('passed') is True and verdict.get('checked') is True
                             and checked_quality['owner_rules'].get('checked_at')):
                         checked_quality['confirmed_repair'] = {**audit, 'status': 'rechecked'}
                         return checked, checked_quality
+                    if ((verdict.get('continuation') or verdict.get('technical_error'))
+                            and not verdict.get('violations') and verdict.get('retryable') is not False):
+                        checked_quality['passed'] = False
+                        checked_quality['confirmed_repair'] = {**audit, 'status': 'pending'}
+                        return checked, checked_quality
+                    audit['issues'] = list(verdict.get('issues') or [])
         except (ValueError, TimeoutError):
             pass
     return reply, {**quality, 'passed': False, 'confirmed_repair': audit,

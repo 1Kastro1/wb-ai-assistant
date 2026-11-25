@@ -146,9 +146,11 @@ def eligibility_reason(db, review, draft, schedule):
         from .publication_reconciliation import can_retry
         if not can_retry(db, publication, review):
             return 'Публикация уже выполнялась или ожидает безопасного повтора.'
-    from .confirmed_reply_repair import BLOCKED, confirmed_issue
+    from .confirmed_reply_repair import BLOCKED, UNCHECKED, confirmed_issue, repair_unverified
     if confirmed_issue(review, draft.text):
         return BLOCKED
+    if repair_unverified(draft.quality):
+        return UNCHECKED
     quality = draft.quality or {}
     if quality.get('passed') is not True or quality.get('text_issues'):
         return 'Сначала завершите проверку текста.'

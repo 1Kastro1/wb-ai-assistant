@@ -919,6 +919,11 @@ async def generate_question_draft(db, question, instruction=''):
         draft = Draft(id=str(uuid4()), review_id=question.id, text=reply, original=reply, model=model, quality=quality)
         db.add(draft)
     question.status = 'draft_ready' if quality['passed'] else 'manual_review'
+    from .confirmed_reply_repair import repair_pending
+    if repair_pending(quality):
+        from .rule_retry import enqueue
+        db.flush()
+        enqueue(db, draft, question, confirmed_repair=True)
     record_outcome(db, question, draft)
     db.commit()
     return public(draft)
@@ -1242,7 +1247,11 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     review.status = 'manual_review' if review.manual or not quality['passed'] or model.startswith('safety-fallback') else 'draft_ready'
     from .rule_retry import technical_check, enqueue
     from .generation_control import batch_context
-    if (technical_check(quality) or (repaired_empty_reply and not quality['owner_rules'].get('checked'))) and not (batch_context.get() or {}).get('suppress_rule_retry'):
+    from .confirmed_reply_repair import repair_pending
+    if repair_pending(quality):
+        db.flush()
+        enqueue(db, draft, review, confirmed_repair=True)
+    elif (technical_check(quality) or (repaired_empty_reply and not quality['owner_rules'].get('checked'))) and not (batch_context.get() or {}).get('suppress_rule_retry'):
         db.flush()
         context=batch_context.get() or {}
         interactive = bool(context.get('interactive'))
@@ -1315,10 +1324,11 @@ def propose_publish(db, review_ids):
                 raise ValueError(restriction)
             excluded.append(rid)
             continue
-        from .confirmed_reply_repair import BLOCKED, confirmed_issue
-        if confirmed_issue(review, draft.text):
+        from .confirmed_reply_repair import BLOCKED, UNCHECKED, confirmed_issue, repair_unverified
+        defect = confirmed_issue(review, draft.text)
+        if defect or repair_unverified(draft.quality):
             if len(ids) == 1:
-                raise ValueError(BLOCKED)
+                raise ValueError(BLOCKED if defect else UNCHECKED)
             excluded.append(rid)
             continue
         is_question = review.marketplace.endswith('_question')
@@ -1402,9 +1412,11 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
         draft = db.scalar(select(Draft).where(Draft.id == item['draft_id']).with_for_update().execution_options(populate_existing=True))
         if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
-        from .confirmed_reply_repair import BLOCKED, confirmed_issue
+        from .confirmed_reply_repair import BLOCKED, UNCHECKED, confirmed_issue, repair_unverified
         if confirmed_issue(review, draft.text):
             raise ValueError(BLOCKED)
+        if repair_unverified(draft.quality):
+            raise ValueError(UNCHECKED)
         from .publication_constraints import publication_restriction
         restriction = publication_restriction(review)
         if restriction:

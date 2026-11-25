@@ -23,8 +23,8 @@ def test_confirmed_defect_is_repaired_and_exact_new_text_checked(
     assess = (lambda answer: assess_question_answer(review, product, answer)) if not rating else (
         lambda answer: assess_reply(review, product, answer, []))
 
-    async def check(candidate, *_args, check_only):
-        assert check_only and candidate != before and detail in candidate
+    async def check(candidate, *_args, check_only, group_limit):
+        assert check_only and group_limit == 1 and candidate != before and detail in candidate
         return candidate, {'passed': True, 'checked': True, 'issues': [], 'proof': 'fresh'}
 
     checker = AsyncMock(side_effect=check)
@@ -58,11 +58,23 @@ def test_observation_and_protected_answers_do_not_trigger_unverified_rewrites(mo
     check.assert_not_awaited()
 
 
-def test_saved_question_recheck_replaces_only_the_checked_revision(client):
+@pytest.mark.parametrize('deferred', [False, True])
+def test_saved_question_recheck_replaces_only_the_checked_revision(client, monkeypatch, deferred):
     from app.db import Draft, Job, Product, Review, Session
     from app.draft_audit import recheck_step
     from app.rule_retry import enqueue
     from app.services import propose_publish
+
+    if deferred:
+        async def start(candidate, *_args, **_opts):
+            return candidate, {'passed': False, 'checked': False, 'continuation': True,
+                               'group_progress': {'completed': [0]}, 'issues': ['Проверка продолжается']}
+        monkeypatch.setattr('app.confirmed_reply_repair.enforce_owner_rules', start)
+
+        async def finish(candidate, *_args, previous_check, **_opts):
+            assert previous_check['group_progress']['completed'] == [0]
+            return candidate, {'passed': True, 'checked': True, 'issues': []}
+        monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules', finish)
 
     text = 'Добрый день! Спасибо за вопрос. Недостаточно подтверждённых данных.'
     with Session() as db:
@@ -82,6 +94,15 @@ def test_saved_question_recheck_replaces_only_the_checked_revision(client):
         db.commit()
         job_id = job.id
     asyncio.run(recheck_step(job_id))
+    if deferred:
+        with Session() as db:
+            draft = db.get(Draft, 'adapter')
+            assert draft.revision == 2 and 'Valt 5.1' in draft.text
+            assert draft.quality['confirmed_repair']['status'] == 'pending'
+            assert db.get(Job, job_id).result['repair_revision'] == 2
+            with pytest.raises(ValueError, match='ещё не прошёл'):
+                propose_publish(db, ['adapter'])
+        asyncio.run(recheck_step(job_id))
     with Session() as db:
         draft = db.get(Draft, 'adapter')
         assert draft.revision == 2 and draft.original == text and 'Valt 5.1' in draft.text

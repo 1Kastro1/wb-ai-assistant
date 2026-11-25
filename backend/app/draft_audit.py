@@ -155,7 +155,7 @@ def automatic_check_condition():
 
 async def _recheck_one(job_id, session_factory=Session):
     from .services import assess_reply, assess_question_answer, trusted_product_facts, review_verified_facts
-    from .confirmed_reply_repair import confirmed_issue, repair
+    from .confirmed_reply_repair import confirmed_issue, repair, repair_pending, repair_unverified
     from .owner_reply_rules import matching_owner_rules, owner_business_facts
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     with session_factory() as db:
@@ -229,6 +229,7 @@ async def _recheck_one(job_id, session_factory=Session):
             from .rule_execution import verification_key
             input_key = verification_key(draft.text, review, product, rules, facts)
             previous = (draft.quality or {}).get('owner_rules') or {}
+            continuing_repair = repair_unverified(draft.quality)
             issue = confirmed_issue(review, draft.text)
             if state.get('rule_change') or (check_only and not issue and not state.get('manual_check')
                     and previous.get('input_key') == input_key):
@@ -243,7 +244,7 @@ async def _recheck_one(job_id, session_factory=Session):
                          or bool(question and (draft.quality or {}).get('fitment')))
             repaired_quality = None
             learned = None
-            if check_only and not issue and not question and not protected:
+            if check_only and not issue and not continuing_repair and not question and not protected:
                 from .learned_reply_templates import load_template
                 learned = load_template(db, review, product, rules, facts, assess, exact_answer=draft.text)
             if issue:
@@ -258,7 +259,8 @@ async def _recheck_one(job_id, session_factory=Session):
                     assess, protected=review.risk != 'NORMAL' or bool(question and (draft.quality or {}).get('fitment')),
                     check_seconds=MANUAL_RULE_CHECK_SECONDS if state.get('manual_check') else
                         AUTO_RULE_CHECK_SECONDS if check_only else OWNER_RULE_CHECK_SECONDS,
-                    check_only=check_only, previous_check=previous, group_limit=1 if check_only else None,
+                    check_only=check_only or continuing_repair, previous_check=previous,
+                    group_limit=1 if check_only or continuing_repair else None,
                     allow_fast_positive=check_only)
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
@@ -273,7 +275,7 @@ async def _recheck_one(job_id, session_factory=Session):
                 return False
             checked = assess(answer)
             if answer != draft.text and (protected or not checked['passed'] or
-                    (check_only and not repaired_quality)):
+                    ((check_only or continuing_repair) and not repaired_quality)):
                 verdict = {**verdict, 'passed': False, 'checked': False,
                            'issues': ['Предложенный вариант требует ручной проверки; исходный текст сохранён']}
                 answer = draft.text
@@ -293,6 +295,8 @@ async def _recheck_one(job_id, session_factory=Session):
                 quality = {**(draft.quality or {}), **repaired_quality}
                 if answer != expected[1]:
                     quality.pop('reply_supervisor', None)
+                    quality['owner_rules'] = checkpoint_verdict(
+                        quality['owner_rules'], {}, final_key, now())
                 else:
                     # A failed repair must not keep retrying the original
                     # defect as though it were a transient checker outage.
@@ -301,6 +305,12 @@ async def _recheck_one(job_id, session_factory=Session):
                 verdict = checkpoint_verdict(verdict, previous, final_key, now(),
                     manual=bool(state.get('manual_check') and not state.get('check_retries')))
                 quality = attach_rule_quality(fresh_quality, verdict)
+                if continuing_repair:
+                    audit = draft.quality['confirmed_repair']
+                    if quality['passed'] and quality['owner_rules'].get('checked_at') and verdict.get('checked') is True:
+                        quality['confirmed_repair'] = {**audit, 'status': 'rechecked'}
+                    elif not technical_check(quality):
+                        quality['confirmed_repair'] = {**audit, 'status': 'blocked'}
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
             review.status = 'manual_review' if review.manual or not quality['passed'] else 'draft_ready'
@@ -308,7 +318,7 @@ async def _recheck_one(job_id, session_factory=Session):
                 from .learned_reply_templates import remember_template
                 remember_template(db, review, product, rules, facts, draft)
             db.commit()
-            if repaired_quality and answer != expected[1] and quality['passed']:
+            if (repaired_quality or continuing_repair) and quality['confirmed_repair']['status'] == 'rechecked':
                 from .scheduled_publication import queue_minion_reply
                 queue_minion_reply(db, rid, draft.revision)
                 db.commit()
@@ -328,9 +338,17 @@ async def _recheck_one(job_id, session_factory=Session):
         from .rule_retry import technical_check
         draft = db.get(Draft, did) if did else None
         review = db.get(Review, rid) if rid else None
-        retry = bool(check_only and draft and review and not review.is_answered and review.status != 'publishing'
+        pending_repair = bool(draft and repair_pending(draft.quality))
+        retry = bool((check_only or pending_repair) and draft and review and not review.is_answered and review.status != 'publishing'
                      and (not state.get('rule_change') or attempted)
                      and technical_check(draft.quality))
+        if pending_repair:
+            if scan:
+                from .rule_retry import enqueue
+                enqueue(db, draft, review, state.get('requested_by', ''), confirmed_repair=True)
+                retry = False
+            else:
+                state.update(repair_revision=draft.revision, check_only=True)
         continuation=bool(retry and (draft.quality or {}).get('owner_rules',{}).get('continuation'))
         if continuation:
             state.update(check_retries=0,retry_at=0,last_served_at=now(),updated_at=now(),
@@ -339,7 +357,7 @@ async def _recheck_one(job_id, session_factory=Session):
             db.commit()
             return
         transferred = False
-        if retry:
+        if retry and not pending_repair:
             from .review_minions import handoff
             transferred = handoff(db, draft, review) is not None
             retry = not transferred
