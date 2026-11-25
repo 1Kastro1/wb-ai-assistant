@@ -83,8 +83,13 @@ def _overview(db,stores):
             'usage':state.get('usage',{}),'last_progress_at':state.get('last_progress_at'),
             'started_at':job.created_at,'finished_at':state.get('finished_at')}
     result=[]
-    from .pipeline_metrics import delivery_latency
+    from .pipeline_metrics import approval_delivery_latency, delivery_latency
     for sid,store in stores.items():
+        deliveries = db.scalars(select(Job.result).where(
+            Job.kind == 'scheduled_publication', Job.status.in_(('queued', 'running')),
+            Job.cancel_requested == False, Job.result['account_id'].as_string() == sid))
+        queued_approvals = len({review_id for state in deliveries
+                                for review_id in (state or {}).get('priority_reviews', {})})
         minion = db.get(Job, 'review_minion:' + sid)
         minion_state = (minion.result or {}) if minion else {}
         negative_mode = low_rating_publication_mode(schedule, store.provider)
@@ -94,6 +99,8 @@ def _overview(db,stores):
             'counts':counts.get(sid,{k:0 for k in flags}),'refresh':latest.get(sid),
             'last_progress_at':movements.get(sid),
             'delivery_latency':delivery_latency(db,sid),
+            'approval_delivery_latency':approval_delivery_latency(db,sid),
+            'queued_approvals':queued_approvals,
             'minion':{'status': minion.status, 'message': minion_state.get('message', ''),
                 'wait_reason': minion_state.get('wait_reason', ''), 'retry_at': minion_state.get('retry_at', 0),
                 'verified': minion_state.get('verified', 0), 'needs_person': minion_state.get('needs_person', 0)} if minion else None,
