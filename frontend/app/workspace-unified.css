@@ -147,3 +147,14 @@
  .shell .sidebar:not(.is-collapsed) nav{margin-top:6px}
  .shell .sidebar nav button{min-height:44px}
 }
+
+
+/* Shared navigation and surface treatment across the workspace. */
+.shell .main>.workspace-header{border-bottom:1px solid #e1e6f0;background:#fcfcfe}
+.shell .workspace-breadcrumb .crumb{font-weight:650;color:#26213c}
+.shell .sidebar nav button:hover:not([aria-current="page"]){background:#ffffff10}
+.shell .sidebar nav button[aria-current="page"]{box-shadow:inset 3px 0 0 #d9c8ff}
+.shell .main>.body>section,.shell .main>.body>div{min-width:0}
+.shell .main>.body>.reviews-workspace,.shell .main>.body>.questions-workspace,
+.shell .main>.body>.products-workspace,.shell .main>.body>.settings-workspace{scroll-margin-top:84px}
+@media(max-width:600px){.shell .main>.body{padding-inline:12px}.shell .main>.body h1{font-size:24px}}
