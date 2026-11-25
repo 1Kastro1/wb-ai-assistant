@@ -57,6 +57,32 @@ def guidance(issues):
     return instructions or [DEFAULT_GUIDANCE]
 
 
+def case_regressions(db, rule, product_id):
+    """Compare the proposed local requirements on up to twelve verified replies."""
+    from .owner_reply_policy import local_issues
+    from .owner_reply_rules import matching_owner_rules
+    from .shared_marketplaces import equivalent_products
+
+    products = {p.id: p for p in equivalent_products(db, db.get(Product, product_id))}
+    if not products:
+        return 0, 0
+    active = list(db.scalars(select(Memory).where(Memory.enabled == True).order_by(Memory.id)))
+    proposed = sorted([*active, rule], key=lambda item: item.id)
+    examples = db.execute(select(Review, Draft).join(Draft, Draft.review_id == Review.id).where(
+        Review.product_id.in_(products), Review.marketplace.in_(('wb', 'ozon', 'yandex')),
+        Draft.quality_passed == True, Draft.quality_pending == False, Draft.quality_technical == False,
+        Draft.quality['owner_rules']['checked'].as_boolean() == True,
+    ).order_by(Draft.quality['owner_rules']['checked_at'].as_string().desc(), Draft.id).limit(12)).all()
+    conflicts = 0
+    for example, draft in examples:
+        product = products[example.product_id]
+        previous = matching_owner_rules(db, product, rule_rows=active)
+        next_rules = matching_owner_rules(db, product, rule_rows=proposed)
+        if set(local_issues(draft.text, next_rules, example)) - set(local_issues(draft.text, previous, example)):
+            conflicts += 1
+    return len(examples), conflicts
+
+
 def suggest_case_rule(db, row, review):
     """Buyer content never becomes an instruction or an automatic approval."""
     if row.status != 'attention' or not review or category(row.issues) != 'content':
@@ -102,6 +128,11 @@ def suggest_case_rule(db, row, review):
             and info.get('automatic_suggestion') and not info.get('updated_at')
             and not info.get('auto_activated_at')):
         from .rule_change_recheck import snapshot, rule_changed
+        examples, conflicts = case_regressions(db, rule, review.product_id)
+        info = {**info, 'case_examples': examples, 'case_conflicts': conflicts}
+        if conflicts:
+            set_setting(db, 'memory-meta:' + mid, info)
+            return rule
         before = snapshot(rule)
         rule.enabled = True
         db.flush()
