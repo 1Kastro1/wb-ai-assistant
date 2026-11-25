@@ -220,6 +220,9 @@ async def _recheck_one(job_id, session_factory=Session):
                 return False
             product = db.get(Product, review.product_id)
             question = review.marketplace.endswith('_question')
+            from .rule_change_recheck import affected, needs_verification
+            if state.get('rule_change') and not affected(db, review, product, state):
+                return False
             rules = matching_owner_rules(db, product, for_questions=question)
             def current_facts():
                 return (trusted_product_facts(db, product) + owner_business_facts(product, rules)
@@ -233,8 +236,7 @@ async def _recheck_one(job_id, session_factory=Session):
             issue = confirmed_issue(review, draft.text)
             if state.get('rule_change') or (check_only and not issue and not state.get('manual_check')
                     and previous.get('input_key') == input_key):
-                from .rule_change_recheck import should_check
-                if not should_check(db, draft, review, product, state, rules):
+                if not needs_verification(db, draft, review, product, rules, input_key=input_key):
                     return False
             if (check_only and not issue and not state.get('manual_check') and previous.get('input_key') == input_key
                     and previous.get('retry_at', 0) > time.time()):
@@ -318,10 +320,9 @@ async def _recheck_one(job_id, session_factory=Session):
                 from .learned_reply_templates import remember_template
                 remember_template(db, review, product, rules, facts, draft)
             db.commit()
-            if (repaired_quality or continuing_repair) and quality['confirmed_repair']['status'] == 'rechecked':
-                from .scheduled_publication import queue_minion_reply
-                queue_minion_reply(db, rid, draft.revision)
-                db.commit()
+            if quality['passed']:
+                from .scheduled_publication import handoff_verified_draft
+                handoff_verified_draft(db, review, draft)
             from .db import setting
             if not question and not quality['passed'] and not verdict.get('technical_error') and not technical_check(quality) and setting(db,'auto_case_rules_enabled',False):
                 from types import SimpleNamespace
