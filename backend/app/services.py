@@ -779,6 +779,8 @@ def assess_question_answer(question, product, answer, sources=None, owner_rules=
 
 
 async def generate_question_draft(db, question, instruction=''):
+    from .skill_engine import ReplySkills
+    skills = ReplySkills(db, 'question')
     question_started = time.monotonic()
     web_seconds = model_seconds = 0.0
     fallback_reason = ''
@@ -790,11 +792,13 @@ async def generate_question_draft(db, question, instruction=''):
     expected_revision = existing.revision if existing else None
     memories = matching_owner_rules(db, product, for_questions=True)
     context_memories, _ = select_rules(memories, question, product)
-    verified_facts = trusted_product_facts(db, product)
+    verified_facts = skills.run('product_knowledge', trusted_product_facts, db, product)
     verified_facts += owner_business_facts(product, memories)
     sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
     analysis = analyze_customer_message(question.text)
-    intent = question_intent(question.text)
+    intent = skills.run('question_classifier', question_intent, question.text)
+    def assess(value):
+        return skills.run('quality_control', assess_question_answer, question, product, value, sources, owner_rules=memories)
     assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not analysis['buyer_asks_about_money'] else None
     if assortment:
         sources.extend(assortment['sources']);intent=assortment['intent']
@@ -838,7 +842,8 @@ async def generate_question_draft(db, question, instruction=''):
     uses_model = not analysis['buyer_asks_about_money'] and not voltage and not fitment and not assortment
     model_started = time.monotonic()
     try:
-        candidates = [official_support_reply()] if analyze_customer_message(question.text)['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await GenerationBudget(QUESTION_GENERATION_SECONDS).run(lambda: ollama.reply_variants(messages, 1))
+        candidates = [official_support_reply()] if analysis['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await skills.run_async(
+            'model_generation', GenerationBudget(QUESTION_GENERATION_SECONDS).run, lambda: ollama.reply_variants(messages, 1))
     except Exception as error:
         fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
         candidates = []
@@ -858,7 +863,7 @@ async def generate_question_draft(db, question, instruction=''):
         model = 'catalog-fitment-1.1'
     elif assortment and not analysis['buyer_asks_about_money']:
         reply = validate_reply(mask_vin(assortment['answer']))
-        quality = assess_question_answer(question, product, reply, sources, owner_rules=memories)
+        quality = assess(reply)
         # Exact catalog matches establish relevance even when Russian inflections differ.
         if assortment['product_ids'] and 'ответить именно на заданный вопрос' in quality['issues']:
             quality['issues'].remove('ответить именно на заданный вопрос')
@@ -874,21 +879,22 @@ async def generate_question_draft(db, question, instruction=''):
         quality['selection_note'] = f'Выбран лучший из {len(passed_candidates)} проверенных вариантов'
     else:
         reply = validate_reply(safe_question_fallback(question, product, intent))
-        quality = assess_question_answer(question, product, reply, sources, owner_rules=memories)
+        quality = assess(reply)
         quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
         model = 'question-safety-1.0'
-    adjusted, rule_quality = await enforce_owner_rules(
+    adjusted, rule_quality = await skills.run_async('policy_checker', enforce_owner_rules,
         reply, question, product, memories, verified_facts,
-        lambda value: assess_question_answer(question, product, value, sources, owner_rules=memories),
+        assess,
         protected=bool(fitment), instruction=instruction)
     if adjusted != reply:
         reply = validate_reply(mask_vin(adjusted))
         if not fitment:
-            rechecked = assess_question_answer(question, product, reply, sources, owner_rules=memories)
+            rechecked = assess(reply)
             rechecked['passed'] = bool(quality['passed'] and rechecked['passed'])
             quality.update(rechecked)
     attach_rule_quality(quality, rule_quality)
     route = 'fallback' if model.startswith('question-safety') else 'model' if uses_model else 'rules'
+    skills.save(quality, model, route)
     quality['timing'] = {'total_seconds': round(time.monotonic() - question_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     quality['candidates_evaluated'] = len(checked)
     quality['policy_version'] = POLICY_VERSION
@@ -940,6 +946,7 @@ async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip
 
 
 async def _generate_draft(db, review_id, instruction='', *, fast_only=False, retry_outages=False, recovery=False):
+    from .skill_engine import ReplySkills
     generation_started = time.monotonic()
     requested_instruction = instruction
     web_seconds = model_seconds = 0.0
@@ -957,9 +964,11 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     initial_draft = db.scalar(select(Draft).where(Draft.review_id == review_id))
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
+    skills = ReplySkills(db, 'review')
+    intent = skills.run('review_classifier', review_intent, review.text)
     specific_case = specific_review_case(review, product)
     memories = matching_owner_rules(db, product)
-    verified_facts = review_verified_facts(db, review, product, memories)
+    verified_facts = skills.run('product_knowledge', review_verified_facts, db, review, product, memories)
     context_memories, _ = select_rules(memories, review, product)
     generation_revision = initial_draft.revision if initial_draft else 0
     from .learned_reply_templates import load_template, remember_template, similar_candidate, same_answer
@@ -1005,14 +1014,14 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     comparison_texts = []
     candidates_evaluated = max(1, len(rule_candidates))
     selection_note = f'Выбран лучший из {len(rule_candidates)} проверенных вариантов' if len(rule_candidates) > 1 else 'Использован проверенный сценарий ответа'
-    if instruction.strip() and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents and not specific_case:
+    if instruction.strip() and review.risk == 'NORMAL' and intent not in structured_intents and not specific_case:
         # Directed improvements should reach the model even when a local rule exists.
         reply = None
     elif initial_draft and reply and reply.strip() != initial_draft.text.strip():
         # Deterministic safety replies rotate too, so regeneration remains useful
         # even while the local model is unavailable.
         forced_model = 'safety-rules-1.1'
-    elif initial_draft and review.risk == 'NORMAL' and review_intent(review.text) not in structured_intents and not specific_case:
+    elif initial_draft and review.risk == 'NORMAL' and intent not in structured_intents and not specific_case:
         issues = (previous_quality or {}).get('issues') or ['сделать ответ заметно лучше и содержательнее']
         instruction = (instruction + ' ' if instruction else '') + 'Это повторная генерация. Не повторяй прежний черновик. Исправь замечания: ' + '; '.join(issues) + '.'
         if not review.text.strip() and review.rating >= 4:
@@ -1043,7 +1052,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             reply = 'Здравствуйте! Описанные симптомы требуют проверки тормозной системы специалистом до дальнейшей эксплуатации. По отзыву установить причину невозможно. Пожалуйста, обратитесь в сервис.'
         elif review.risk == 'CAUTION':
             reply = 'Здравствуйте! Причины скрипа бывают разными; по отзыву определить их нельзя. Рекомендуем проверить тормозную систему и установку в сервисе.'
-        elif review.rating >= 4 and review_intent(review.text) == 'POSITIVE_EXPERIENCE' and not product_usage_reply(review, product, verified_facts):
+        elif review.rating >= 4 and intent == 'POSITIVE_EXPERIENCE' and not product_usage_reply(review, product, verified_facts):
             reply = 'Здравствуйте! Спасибо за высокую оценку! Рады, что аромат вам понравился. Пользуйтесь с удовольствием!'
         else:
             reply = product_usage_reply(review, product, verified_facts, generation_revision) or reply
@@ -1075,7 +1084,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         from .owner_reply_policy import context_constraints
         messages = draft_messages(generation_policy(), {
             'buyer_message': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating),
-            'detected_intent': review_intent(review.text), 'rating': review.rating, 'product': product.name,
+            'detected_intent': intent, 'rating': review.rating, 'product': product.name,
             'required_style': {key: context_constraints(memories, review)[key] for key in ('greeting','greetings','signature')},
             'previous_draft': initial_draft.text if initial_draft else '',
             'previous_quality_issues': (previous_quality or {}).get('issues', []),
@@ -1091,7 +1100,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         # request, not a prerequisite for every ordinary review.
         candidate_target = MIN_AI_CANDIDATES if re.search(r'(?:три|3)\s+(?:разн\w*\s+)?(?:ответ|вариант)', requested_instruction, re.I) else 1
         try:
-            seed_candidates = await budget.run(lambda: ollama.reply_variants(messages, candidate_target))
+            seed_candidates = await skills.run_async('model_generation', budget.run, lambda: ollama.reply_variants(messages, candidate_target))
         except Exception as error:
             from .batch_processing import transient
             model_outage = transient(error)
@@ -1104,7 +1113,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             if model_unavailable:
                 break
             try:
-                last_candidate = seed_candidates[attempt] if attempt < len(seed_candidates) else await budget.run(lambda: ollama.chat(attempt_messages))
+                last_candidate = seed_candidates[attempt] if attempt < len(seed_candidates) else await skills.run_async(
+                    'model_generation', budget.run, lambda: ollama.chat(attempt_messages))
                 checked_candidate = validate_reply(mask_vin(last_candidate))
                 candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates], verified_facts)
                 repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
@@ -1164,7 +1174,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if learned and reply == learned[0]:
         rule_quality = learned[1]
     else:
-        reply, rule_quality = await enforce_owner_rules(
+        reply, rule_quality = await skills.run_async('policy_checker', enforce_owner_rules,
             reply, review, product, memories, verified_facts,
             lambda value: assess_reply(review, product, value, verified_facts),
             protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
@@ -1184,7 +1194,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         reply = apply_review_signature(safe_fallback_reply(review, product, facts=verified_facts), memories)
         rule_quality = saved_rule_quality(reply, memories, changed=True, review=review)
         model = 'safety-fallback-1.2'
-    quality = attach_rule_quality(assess_reply(review, product, reply, verified_facts), rule_quality)
+    quality = attach_rule_quality(skills.run('quality_control', assess_reply, review, product, reply, verified_facts), rule_quality)
     if initial_draft and review.risk == 'NORMAL' and not specific_case and same_answer(formatted(reply), previous_text):
         # An unchanged fallback or verifier rewrite is not a new variant. Keep
         # the existing draft/revision/verdict instead of reporting fake success.
@@ -1196,6 +1206,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     quality['policy_version'] = POLICY_VERSION
     quality['unverified_sources_count'] = len(web_sources)
     route = 'fallback' if model.startswith('safety-fallback') else 'model' if model.split(' · ')[0] == MODEL else 'rules'
+    skills.save(quality, model, route)
     quality['timing'] = {'total_seconds': round(time.monotonic() - generation_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     # Generation may have awaited Ollama while another request published the review.
     db.refresh(review)

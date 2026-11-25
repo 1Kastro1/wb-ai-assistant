@@ -695,6 +695,28 @@ class Performance(Payload):
     mode: str
 
 
+class SkillEngineSettings(Payload):
+    enabled: bool
+
+
+@app.get('/ai-skills')
+def ai_skills(auth: OWNER, db: DB):
+    from .skill_engine import ENABLED, catalog
+
+    enabled = bool(setting(db, ENABLED, False))
+    return {'enabled': enabled, 'skills': catalog(active=enabled),
+            'model': MODEL, 'performance_mode': setting(db, 'performance_mode', 'normal')}
+
+
+@app.patch('/ai-skills')
+def set_ai_skills(body: SkillEngineSettings, auth: OWNER, db: DB):
+    from .skill_engine import ENABLED
+
+    set_setting(db, ENABLED, body.enabled)
+    db.commit()
+    return ai_skills(auth, db)
+
+
 @app.get('/settings/performance')
 def performance_get(auth: AUTH, db: DB):
     return {'mode':setting(db,'performance_mode','normal')}
