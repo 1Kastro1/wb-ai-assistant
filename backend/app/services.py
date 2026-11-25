@@ -926,6 +926,8 @@ async def generate_question_draft(db, question, instruction=''):
         enqueue(db, draft, question, confirmed_repair=True)
     record_outcome(db, question, draft)
     db.commit()
+    from .scheduled_publication import handoff_verified_draft
+    handoff_verified_draft(db, question, draft)
     return public(draft)
 
 
@@ -1262,6 +1264,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         remember_template(db, review, product, memories, verified_facts, draft)
     record_outcome(db, review, draft)
     db.commit()
+    from .scheduled_publication import handoff_verified_draft
+    handoff_verified_draft(db, review, draft)
     return public(draft)
 
 
