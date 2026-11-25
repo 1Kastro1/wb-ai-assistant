@@ -16,7 +16,7 @@ def delivery_latency(db, store_id):
 
 def approval_delivery_latency(db, store_id):
     verified_at = Setting.value['verified_at'].as_string()
-    rows = db.execute(select(verified_at, Publication.confirmed_at)
+    rows = db.execute(select(verified_at, Publication.confirmed_at).select_from(Review)
         .join(Publication, Publication.review_id == Review.id)
         .join(Setting, Setting.key == literal('publication-attempt:') + Publication.id)
         .where(Review.wb_account_id == store_id, Review.marketplace.in_(('wb', 'ozon', 'yandex')),
