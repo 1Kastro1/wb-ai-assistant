@@ -29,7 +29,7 @@ def account_identity(db, store):
             'connection': hashlib.sha256(str(token).encode()).hexdigest()}
 
 
-def prepare_attempt(db, publication, review, item):
+def prepare_attempt(db, publication, review, item, *, verified_at=None):
     previous = setting(db, key(publication), {})
     store = db.get(StoreProfile, review.wb_account_id)
     if not store or store.provider != review.marketplace.removesuffix('_question'):
@@ -38,7 +38,7 @@ def prepare_attempt(db, publication, review, item):
         'review_id': review.id, 'external_id': review.wb_review_id,
         'marketplace': review.marketplace, 'text': item['text'],
         'revision': item['revision'], 'draft_id': item['draft_id'],
-        'action_id': publication.action_id, 'attempted_at': now(),
+        'action_id': publication.action_id, 'attempted_at': now(), 'verified_at': verified_at,
         'attempt_number': int(previous.get('attempt_number', 0)) + 1,
         'previous_action_ids': list(previous.get('previous_action_ids', [])) +
             ([previous['action_id']] if previous.get('action_id') else [])})
