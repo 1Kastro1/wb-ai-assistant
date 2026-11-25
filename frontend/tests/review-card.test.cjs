@@ -32,6 +32,28 @@ test('store-specific product panels have distinct sibling keys on every marketpl
 });
 const Card=loadComponent(path.join(__dirname,'../app/ReviewCard.tsx')).default;
 
+test('review and question cards show recorded fallback stages without implying publication',()=>{
+ const Question=loadComponent(path.join(__dirname,'../app/QuestionCard.tsx')).default;
+ const draft={id:'draft',text:'Уточните модель товара.',revision:1,quality:{passed:false,skill_engine:{
+  version:'1.0.0',model:'question-safety-1.0',route:'fallback',passed:false,steps:[
+   {id:'model_generation',version:'1.0.0',elapsed_ms:500,calls:2,status:'error'},
+   {id:'policy_checker',version:'1.0.0',elapsed_ms:12,calls:1,status:'completed'},
+  ],
+ }}};
+ const reviewHtml=render({generationError:'Открыть',review:{draft}});
+ const question={id:'question',text:'Подойдёт ли?',product:{name:'Щётка'},marketplace:'wb_question',draft};
+ const questionHtml=renderToStaticMarkup(React.createElement(Question,{question,generationError:'Открыть'}));
+ for(const html of [reviewHtml,questionHtml]){
+  assert.match(html,/Этапы подготовки ответа \(2\)/);
+  assert.match(html,/Резервный сценарий/);
+  assert.match(html,/Генерация моделью · ошибка/);
+  assert.match(html,/вызовов: 2/);
+  assert.match(html,/При подготовке требовалась проверка/);
+  assert.doesNotMatch(html,/Отправлено/);
+ }
+ assert.doesNotMatch(render({generationError:'Открыть'}),/Этапы подготовки ответа/);
+});
+
 test('complaint products are full accessible buttons with exact identity, counts and keyboard focus',()=>{
  const Problems=loadComponent(path.join(__dirname,'../app/ProblemProducts.tsx')).default;
  const html=renderToStaticMarkup(React.createElement(Problems,{products:[{id:'exact-product',name:'Kangaroo Profoam',brand:'KANGAROO',negative:12,average:2.2}],loading:false,onSelect(){},onAttention(){}}));
