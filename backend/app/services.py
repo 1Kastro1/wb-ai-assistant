@@ -1463,7 +1463,9 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
             else:
                 publication = Publication(id=str(uuid4()), review_id=review.id, action_id=action.id, status='in_flight', scheduled_job_id=scheduled_job_id or '')
                 db.add(publication)
-            prepare_attempt(db, publication, review, item)
+            proof = (draft.quality or {}).get('owner_rules') or {}
+            approved_at = proof.get('checked_at') if scheduled_config is not None else None
+            prepare_attempt(db, publication, review, item, verified_at=approved_at)
             review.status = 'publishing'
     action.status = 'executing'
     db.commit()
