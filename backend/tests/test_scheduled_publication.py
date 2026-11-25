@@ -361,7 +361,6 @@ def test_recheck_delivers_exact_low_rating_revision_without_waiting_for_schedule
     from app.draft_audit import recheck_step
     from app.owner_reply_policy import fingerprint
     from app.pipeline_metrics import approval_delivery_latency
-    from app.safety import rule_reply
 
     enable(client, publication_reviews=False, publication_questions=False,
            publication_low_ratings=True, publication_all_low_ratings=True)
@@ -372,7 +371,7 @@ def test_recheck_delivers_exact_low_rating_revision_without_waiting_for_schedule
         review, draft = db.get(Review, rid), db.get(Draft, rid)
         review.rating, review.status = 2, 'manual_review'
         review.text = 'Не оправдало ожиданий'
-        draft.text = draft.original = rule_reply(review, db.get(Product, review.product_id))
+        draft.text = draft.original = 'Добрый день! Спасибо за отзыв. Сожалеем, что покупка не оправдала Ваших ожиданий.'
         draft.quality = {'passed': False}
         db.add(Job(id='check-low', kind='draft_recheck', result={
             'account_id': store, 'draft_ids': [draft.id], 'check_only': True}))
