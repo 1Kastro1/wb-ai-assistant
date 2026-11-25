@@ -894,6 +894,8 @@ async def generate_question_draft(db, question, instruction=''):
             quality.update(rechecked)
     attach_rule_quality(quality, rule_quality)
     route = 'fallback' if model.startswith('question-safety') else 'model' if uses_model else 'rules'
+    from .reply_supervisor import observe
+    await observe(skills, question, reply, verified_facts, quality)
     skills.save(quality, model, route)
     quality['timing'] = {'total_seconds': round(time.monotonic() - question_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     quality['candidates_evaluated'] = len(checked)
@@ -1206,6 +1208,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     quality['policy_version'] = POLICY_VERSION
     quality['unverified_sources_count'] = len(web_sources)
     route = 'fallback' if model.startswith('safety-fallback') else 'model' if model.split(' · ')[0] == MODEL else 'rules'
+    if not fast_only:
+        from .reply_supervisor import observe
+        await observe(skills, review, reply, verified_facts, quality)
     skills.save(quality, model, route)
     quality['timing'] = {'total_seconds': round(time.monotonic() - generation_started, 3), 'web_seconds': round(web_seconds, 3), 'model_seconds': round(model_seconds, 3), 'route': route, 'fallback_reason': (fallback_reason or 'quality') if route == 'fallback' else ''}
     # Generation may have awaited Ollama while another request published the review.
