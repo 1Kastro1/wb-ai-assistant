@@ -1,5 +1,6 @@
 type Step = {id: string; version: string; elapsed_ms: number; calls: number; status: string};
 type Trace = {version: string; model: string; route: string; passed: boolean; steps: Step[]};
+type Supervisor = {model: string; status: 'clear' | 'attention' | 'unavailable'; issues?: string[]};
 
 const names: Record<string, string> = {
   review_classifier: 'Классификация отзыва',
@@ -8,6 +9,7 @@ const names: Record<string, string> = {
   model_generation: 'Генерация моделью',
   quality_control: 'Проверка качества',
   policy_checker: 'Проверка правил магазина',
+  reply_supervisor: 'Независимая проверка',
 };
 const routes: Record<string, string> = {
   fallback: 'Резервный сценарий',
@@ -15,7 +17,7 @@ const routes: Record<string, string> = {
   rules: 'Программный сценарий',
 };
 
-export default function SkillTrace({trace}: {trace?: Trace}) {
+export default function SkillTrace({trace, supervisor}: {trace?: Trace; supervisor?: Supervisor}) {
   if (!Array.isArray(trace?.steps) || !trace.steps.length) return null;
   const steps = trace.steps;
   return <details>
@@ -30,5 +32,10 @@ export default function SkillTrace({trace}: {trace?: Trace}) {
         {' · '}{step.elapsed_ms} мс{step.calls > 1 ? ` · вызовов: ${step.calls}` : ''}
       </li>)}
     </ul>
+    {supervisor && <div>
+      <p>Независимая проверка · {supervisor.model} · режим наблюдения</p>
+      <p>{supervisor.status === 'clear' ? 'Замечаний нет' : supervisor.status === 'attention' ? 'Есть замечания' : 'Результат недоступен'}</p>
+      {Boolean(supervisor.issues?.length) && <ul>{supervisor.issues?.map(issue => <li key={issue}>{issue}</li>)}</ul>}
+    </div>}
   </details>;
 }

@@ -38,11 +38,17 @@ REGISTRY = {skill.id: skill for skill in (
     Skill('policy_checker', 'Проверка правил магазина', 'Применяет правила и проверяет исправленный текст.',
           'Проверка', 'Действующий механизм проверки правил магазина', ('Ответ', 'Правила'), ('Результат проверки',),
           ('product_knowledge',)),
+    Skill('reply_supervisor', 'Независимая проверка', 'Ищет ошибки в проверенных ответах на вопросы и сложные отзывы.',
+          'Дополнительная проверка', 'Отдельная локальная модель Ollama, режим наблюдения', ('Обращение', 'Ответ', 'Факты'),
+          ('Замечания',), ('quality_control', 'policy_checker'), required=False),
 )}
 
 
 def catalog(active):
-    return [{**asdict(skill), 'active': active} for skill in REGISTRY.values()]
+    from .model_router import ModelRouter
+
+    return [{**asdict(skill), 'active': active and (skill.id != 'reply_supervisor' or ModelRouter.supervisor_available())}
+            for skill in REGISTRY.values()]
 
 
 class ReplySkills:
