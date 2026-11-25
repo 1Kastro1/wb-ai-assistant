@@ -894,6 +894,9 @@ async def generate_question_draft(db, question, instruction=''):
             quality.update(rechecked)
     attach_rule_quality(quality, rule_quality)
     route = 'fallback' if model.startswith('question-safety') else 'model' if uses_model else 'rules'
+    from .confirmed_reply_repair import repair as repair_confirmed
+    reply, quality = await repair_confirmed(
+        question, product, reply, quality, memories, verified_facts, assess, protected=bool(fitment))
     from .reply_supervisor import observe
     await observe(skills, question, reply, verified_facts, quality)
     skills.save(quality, model, route)
@@ -1197,6 +1200,11 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         rule_quality = saved_rule_quality(reply, memories, changed=True, review=review)
         model = 'safety-fallback-1.2'
     quality = attach_rule_quality(skills.run('quality_control', assess_reply, review, product, reply, verified_facts), rule_quality)
+    from .confirmed_reply_repair import repair as repair_confirmed
+    reply, quality = await repair_confirmed(
+        review, product, reply, quality, memories, verified_facts,
+        lambda value: assess_reply(review, product, value, verified_facts),
+        protected=fast_only or review.risk != 'NORMAL' or review.safety_critical or review.manual)
     if initial_draft and review.risk == 'NORMAL' and not specific_case and same_answer(formatted(reply), previous_text):
         # An unchanged fallback or verifier rewrite is not a new variant. Keep
         # the existing draft/revision/verdict instead of reporting fake success.
@@ -1307,6 +1315,12 @@ def propose_publish(db, review_ids):
                 raise ValueError(restriction)
             excluded.append(rid)
             continue
+        from .confirmed_reply_repair import BLOCKED, confirmed_issue
+        if confirmed_issue(review, draft.text):
+            if len(ids) == 1:
+                raise ValueError(BLOCKED)
+            excluded.append(rid)
+            continue
         is_question = review.marketplace.endswith('_question')
         product = db.get(Product, review.product_id)
         rules = matching_owner_rules(db, product, for_questions=is_question)
@@ -1388,6 +1402,9 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
         draft = db.scalar(select(Draft).where(Draft.id == item['draft_id']).with_for_update().execution_options(populate_existing=True))
         if not review or not draft or draft.revision != item['revision'] or draft.text != item['text'] or review.is_answered or review.status == 'publishing':
             raise ValueError('Черновик или отзыв изменился; нужно новое подтверждение')
+        from .confirmed_reply_repair import BLOCKED, confirmed_issue
+        if confirmed_issue(review, draft.text):
+            raise ValueError(BLOCKED)
         from .publication_constraints import publication_restriction
         restriction = publication_restriction(review)
         if restriction:

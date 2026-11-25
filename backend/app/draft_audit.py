@@ -155,7 +155,8 @@ def automatic_check_condition():
 
 async def _recheck_one(job_id, session_factory=Session):
     from .services import assess_reply, assess_question_answer, trusted_product_facts, review_verified_facts
-    from .owner_reply_rules import matching_owner_rules
+    from .confirmed_reply_repair import confirmed_issue, repair
+    from .owner_reply_rules import matching_owner_rules, owner_business_facts
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     with session_factory() as db:
         job = db.get(Job, job_id); state = dict(job.result or {})
@@ -215,29 +216,41 @@ async def _recheck_one(job_id, session_factory=Session):
             if not review or not draft or review.is_answered or review.status == 'publishing':
                 return False
             expected = (draft.revision, draft.text, review.text, review.rating, review.product_id)
+            if state.get('repair_revision', draft.revision) != draft.revision:
+                return False
             product = db.get(Product, review.product_id)
             question = review.marketplace.endswith('_question')
             rules = matching_owner_rules(db, product, for_questions=question)
-            facts = trusted_product_facts(db, product) if question else review_verified_facts(db, review, product, rules)
+            def current_facts():
+                return (trusted_product_facts(db, product) + owner_business_facts(product, rules)
+                        if question else review_verified_facts(db, review, product, rules))
+            facts = current_facts()
             assess = (lambda value: assess_question_answer(review, product, value, facts, owner_rules=rules)) if question else (lambda value: assess_reply(review, product, value, facts))
             from .rule_execution import verification_key
             input_key = verification_key(draft.text, review, product, rules, facts)
             previous = (draft.quality or {}).get('owner_rules') or {}
-            if state.get('rule_change') or (check_only and not state.get('manual_check')
+            issue = confirmed_issue(review, draft.text)
+            if state.get('rule_change') or (check_only and not issue and not state.get('manual_check')
                     and previous.get('input_key') == input_key):
                 from .rule_change_recheck import should_check
                 if not should_check(db, draft, review, product, state, rules):
                     return False
-            if (check_only and not state.get('manual_check') and previous.get('input_key') == input_key
+            if (check_only and not issue and not state.get('manual_check') and previous.get('input_key') == input_key
                     and previous.get('retry_at', 0) > time.time()):
                 return False
             attempted = True
-            protected = manually_edited(draft)
+            protected = (manually_edited(draft) or review.manual or review.safety_critical or review.risk != 'NORMAL'
+                         or bool(question and (draft.quality or {}).get('fitment')))
+            repaired_quality = None
             learned = None
-            if check_only and not question and not protected:
+            if check_only and not issue and not question and not protected:
                 from .learned_reply_templates import load_template
                 learned = load_template(db, review, product, rules, facts, assess, exact_answer=draft.text)
-            if learned:
+            if issue:
+                answer, repaired_quality = await repair(
+                    review, product, draft.text, draft.quality or {}, rules, facts, assess, protected=protected)
+                verdict = repaired_quality.get('owner_rules') or {}
+            elif learned:
                 answer, verdict = learned
             else:
                 from .generation_budget import OWNER_RULE_CHECK_SECONDS, MANUAL_RULE_CHECK_SECONDS, AUTO_RULE_CHECK_SECONDS
@@ -256,15 +269,17 @@ async def _recheck_one(job_id, session_factory=Session):
             # Never apply a model rewrite to an employee's/manual answer, nor
             # allow a model repair that fails the independent semantic checks.
             if (rules != matching_owner_rules(db, product, for_questions=question)
-                    or facts != (trusted_product_facts(db, product) if question else review_verified_facts(db, review, product, rules))):
+                    or facts != current_facts()):
                 return False
             checked = assess(answer)
-            if answer != draft.text and (check_only or protected or not checked['passed']):
+            if answer != draft.text and (protected or not checked['passed'] or
+                    (check_only and not repaired_quality)):
                 verdict = {**verdict, 'passed': False, 'checked': False,
                            'issues': ['Предложенный вариант требует ручной проверки; исходный текст сохранён']}
                 answer = draft.text
             if answer != draft.text:
-                draft.edits = [*(draft.edits or []), {'old': draft.text, 'new': answer, 'at': now(), 'by': 'automation', 'reason': VERSION + '-rules'}]
+                draft.edits = [*(draft.edits or []), {'old': draft.text, 'new': answer, 'at': now(), 'by': 'automation',
+                    'reason': 'confirmed_reply_repair' if repaired_quality else VERSION + '-rules'}]
                 draft.text, draft.revision = answer, draft.revision + 1
             fresh_quality = {**(draft.quality or {}), **assess(answer)}
             fresh_quality.pop('text_issues', None)
@@ -274,9 +289,18 @@ async def _recheck_one(job_id, session_factory=Session):
             from .rule_retry import technical_check, retry_delay
             from .rule_retry import checkpoint_verdict
             final_key=verification_key(answer,review,product,rules,facts)
-            verdict = checkpoint_verdict(verdict, previous, final_key, now(),
-                manual=bool(state.get('manual_check') and not state.get('check_retries')))
-            quality = attach_rule_quality(fresh_quality, verdict)
+            if repaired_quality is not None:
+                quality = {**(draft.quality or {}), **repaired_quality}
+                if answer != expected[1]:
+                    quality.pop('reply_supervisor', None)
+                else:
+                    # A failed repair must not keep retrying the original
+                    # defect as though it were a transient checker outage.
+                    quality.pop('owner_rules', None)
+            else:
+                verdict = checkpoint_verdict(verdict, previous, final_key, now(),
+                    manual=bool(state.get('manual_check') and not state.get('check_retries')))
+                quality = attach_rule_quality(fresh_quality, verdict)
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
             review.status = 'manual_review' if review.manual or not quality['passed'] else 'draft_ready'
@@ -284,6 +308,10 @@ async def _recheck_one(job_id, session_factory=Session):
                 from .learned_reply_templates import remember_template
                 remember_template(db, review, product, rules, facts, draft)
             db.commit()
+            if repaired_quality and answer != expected[1] and quality['passed']:
+                from .scheduled_publication import queue_minion_reply
+                queue_minion_reply(db, rid, draft.revision)
+                db.commit()
             from .db import setting
             if not question and not quality['passed'] and not verdict.get('technical_error') and not technical_check(quality) and setting(db,'auto_case_rules_enabled',False):
                 from types import SimpleNamespace

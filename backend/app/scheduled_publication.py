@@ -146,6 +146,9 @@ def eligibility_reason(db, review, draft, schedule):
         from .publication_reconciliation import can_retry
         if not can_retry(db, publication, review):
             return 'Публикация уже выполнялась или ожидает безопасного повтора.'
+    from .confirmed_reply_repair import BLOCKED, confirmed_issue
+    if confirmed_issue(review, draft.text):
+        return BLOCKED
     quality = draft.quality or {}
     if quality.get('passed') is not True or quality.get('text_issues'):
         return 'Сначала завершите проверку текста.'
@@ -337,7 +340,15 @@ async def run_step(job_id, session_factory=Session):
             if not priority:
                 recover_positive_verdict(db, review, draft)
             reason = eligibility_reason(db, review, draft, schedule)
-            if not priority and reason and ('правил' in reason or 'проверку текста' in reason):
+            from .confirmed_reply_repair import BLOCKED
+            if reason == BLOCKED:
+                from .draft_audit import manually_edited
+                from .rule_retry import enqueue as enqueue_recheck
+                if not manually_edited(draft) and not db.scalar(
+                        select(Publication.id).where(Publication.review_id == review_id)):
+                    enqueue_recheck(db, draft, review, schedule.get('publication_authorized_by', ''),
+                                    confirmed_repair=True)
+            elif not priority and reason and ('правил' in reason or 'проверку текста' in reason):
                 from .rule_change_recheck import enqueue_draft
                 enqueue_draft(db, draft, review, actor_id=schedule.get('publication_authorized_by', ''))
             aid = None
