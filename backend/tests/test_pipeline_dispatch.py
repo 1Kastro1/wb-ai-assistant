@@ -1,5 +1,5 @@
 import asyncio
-from app.db import Session, Job
+from app.db import Session, Job, StoreProfile
 from app.pipeline_dispatch import run_slice, parallel_slice
 
 
@@ -85,3 +85,30 @@ def test_complete_validated_save_has_an_approval_event_but_pending_or_failed_che
                     {'passed':False,'checked':False,'technical_error':True,'issues':['timeout']}):
         result=attach_rule_quality({'passed':True},blocked)
         assert 'checked_at' not in result['owner_rules'] and not result['passed']
+
+
+def test_publication_slices_overlap_across_markets_but_not_within_a_market():
+    stores = {'first': 'wb', 'another-wb': 'wb', 'ozon': 'ozon', 'yandex': 'yandex'}
+    with Session() as db:
+        db.add_all(StoreProfile(id=store, name=store, provider=provider)
+                   for store, provider in stores.items())
+        db.add_all(Job(id=store, kind='scheduled_publication', result={'account_id': store})
+                   for store in stores)
+        db.add(Job(id='yandex-backoff', kind='scheduled_publication', priority=1,
+                   result={'account_id': 'yandex', 'retry_at': 4102444800}))
+        db.commit()
+
+    async def scenario():
+        started = set()
+        all_started = asyncio.Event()
+
+        async def execute(job_id):
+            started.add(job_id)
+            if len(started) == 3:
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=2)
+
+        await run_slice('first', execute)
+        assert started == {'first', 'ozon', 'yandex'}
+
+    asyncio.run(scenario())
