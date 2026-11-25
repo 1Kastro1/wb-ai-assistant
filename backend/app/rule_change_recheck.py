@@ -61,16 +61,24 @@ def should_check(db, draft, review, product, state, rules=None):
             review.status in ('publishing', 'published') or not affected(db, review, product, state)):
         return False
     from .owner_reply_rules import matching_owner_rules
-    from .owner_reply_policy import fingerprint, saved_rule_quality
     rules = matching_owner_rules(db, product, review.marketplace.endswith('_question')) if rules is None else rules
+    return needs_verification(db, draft, review, product, rules)
+
+
+def needs_verification(db, draft, review, product, rules, *, input_key=None):
+    from .owner_reply_policy import fingerprint, saved_rule_quality
     verdict = (draft.quality or {}).get('owner_rules') or {}
     if verdict.get('fingerprint') != fingerprint(rules):
         return True
     if verdict.get('input_key'):
-        from .rule_execution import verification_key
-        from .services import trusted_product_facts, review_verified_facts
-        facts=trusted_product_facts(db,product) if review.marketplace.endswith('_question') else review_verified_facts(db,review,product,rules)
-        if verdict['input_key']!=verification_key(draft.text,review,product,rules,facts):
+        if input_key is None:
+            from .owner_reply_rules import owner_business_facts
+            from .rule_execution import verification_key
+            from .services import trusted_product_facts, review_verified_facts
+            facts = (trusted_product_facts(db, product) + owner_business_facts(product, rules)
+                     if review.marketplace.endswith('_question') else review_verified_facts(db, review, product, rules))
+            input_key = verification_key(draft.text, review, product, rules, facts)
+        if verdict['input_key'] != input_key:
             return True
     # An unchanged, completed verdict (including a content violation) doesn't
     # improve by sending the same text through another verification scan.
@@ -182,11 +190,12 @@ def rebase_library_audits(db, scopes, version=None):
             row.status='retry';row.retry_at=0;row.input_key='';row.template_id='';row.verification_progress=None
             touched.append(index)
         if touched:
-            state['policy_rewind_stage']=min([state.get('stage',0),*touched,
-                                             state.get('policy_rewind_stage',state.get('stage',0))])
-        state.update(policy_version=version,stages=stages,retry_at=0,
-            template_done=False,template_cursor='',template_scans={},policy_updated_at=now(),
-            message='Правила обновлены: затронутые ответы поставлены на новую проверку; отправка не включалась.')
+            state['policy_rewind_stage'] = min([state.get('stage', 0), *touched,
+                                                state.get('policy_rewind_stage', state.get('stage', 0))])
+            state.update(stages=stages, retry_at=0, template_done=False,
+                         template_cursor='', template_scans={}, policy_updated_at=now(),
+                         message='Изменились правила. Затронутые ответы поставлены на проверку.')
+        state['policy_version'] = version
         job.result=state
         job.progress=min(99,round(state.get('checked',0)*100/max(1,state.get('total',1))))
 
