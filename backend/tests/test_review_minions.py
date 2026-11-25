@@ -233,3 +233,33 @@ def test_read_only_reconciliation_survives_generic_cancel(client):
     assert response.status_code == 409
     with Session() as db:
         assert db.get(Job, 'publication_reconcile:owner').status == 'queued'
+
+
+@pytest.mark.parametrize('learning_enabled', [True, False])
+def test_minion_content_findings_use_existing_case_learning(monkeypatch, learning_enabled):
+    with Session() as db:
+        set_setting(db, 'review_minions_enabled', True)
+        set_setting(db, 'auto_case_rules_enabled', learning_enabled)
+        set_setting(db, 'automation_schedule', {'enabled': True, 'drafts_enabled': True})
+        db.add(Product(id='learning-product', name='Product'))
+        db.flush()
+        db.add(Review(id='learning-review', wb_review_id='learning-review',
+                      product_id='learning-product', marketplace='wb', rating=3,
+                      text='Не подошёл', status='manual_review'))
+        db.flush()
+        db.add(Draft(id='learning-draft', review_id='learning-review', text='Спасибо!',
+                     original='Спасибо!', quality={'passed': False, 'text_issues': ['Нет ответа по существу']}))
+        enqueue(db, StoreProfile(id='owner', provider='wb', name='Shop'))
+        db.commit()
+
+    inspect = AsyncMock(return_value={'status': 'attention', 'issues': ['Нет ответа по существу']})
+    findings = []
+
+    def learn(db, row, review):
+        assert db.get(Job, row.job_id).status == 'queued'
+        findings.append((row.status, review.id))
+
+    monkeypatch.setattr('app.review_library_audit.inspect_review', inspect)
+    monkeypatch.setattr('app.library_workspace.suggest_case_rule', learn)
+    asyncio.run(run_step('review_minion:owner'))
+    assert findings == ([('attention', 'learning-review')] if learning_enabled else [])

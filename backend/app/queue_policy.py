@@ -15,7 +15,7 @@ def minion_handoff_pending():
         Job.result['continuation_pending'].as_boolean() == True)
 
 
-def next_job(db, kinds=None):
+def next_job(db, kinds=None, *, account_ids=None):
     statement = select(Job).where(Job.status == 'queued', Job.cancel_requested == False,
         func.coalesce(Job.result['retry_at'].as_float(), 0) <= time.time())
     # Archive inspection is ordinary resumable background work. Safe mode,
@@ -23,6 +23,8 @@ def next_job(db, kinds=None):
     # Never suppress checks needed by the publisher, or new-review imports.
     if kinds is not None:
         statement = statement.where(Job.kind.in_(kinds))
+    if account_ids is not None:
+        statement = statement.where(Job.result['account_id'].as_string().in_(account_ids))
     return db.scalar(statement.order_by(*queue_ordering()).limit(1))
 
 
