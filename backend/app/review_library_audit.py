@@ -307,6 +307,9 @@ async def inspect_review(job_id,rid,session_factory,*,templates_only=False, live
             elif audit_record is not None:
                 audit_record.verification_progress=None
             db.commit()
+            if tid and not was_published and draft and not live_minion:
+                from .scheduled_publication import handoff_verified_draft
+                handoff_verified_draft(db, review, draft)
             return {'status':('verified_reference' if was_published and replacement else 'verified') if tid else 'retry' if technical_check(quality) else
                 'technical_attention' if verdict.get('technical_error') and verdict.get('failure_code')=='retry_exhausted' else
                 'blocked' if verdict.get('technical_error') else 'attention',

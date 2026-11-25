@@ -8,6 +8,7 @@ from .db import Session, Setting, Job, User, StoreProfile, Account, Review, Draf
 KIND = 'scheduled_publication'
 PROVIDERS = ('wb', 'ozon', 'yandex')
 BATCH_SIZE = 200
+LIVE_BURST = 8
 FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions', 'publication_low_ratings', 'publication_all_low_ratings')
 
 
@@ -199,6 +200,9 @@ def enqueue(db, schedule, store, current, *, target=None):
         if target:
             active.result = {**active.result, 'priority_reviews': {**active.result.get('priority_reviews', {}), **target},
                 'has_priority_reviews': True}
+        elif (active.result or {}).get('priority_only'):
+            active.result = {**active.result, 'priority_only': False}
+            schedule[last_key] = current
         return False
     result = {
         'account_id': store.id, 'scheduled': True, 'authorization': schedule.get('publication_authorization'),
@@ -208,14 +212,14 @@ def enqueue(db, schedule, store, current, *, target=None):
         'message': 'Плановая выгрузка готовых ответов поставлена в очередь'}
     if target:
         result.update(priority_reviews=target, has_priority_reviews=True, priority_only=True,
-            message='Одобренный миньоном ответ готов к отправке')
+            message='Проверенный ответ готов к отправке')
     else:
         schedule[last_key] = current
     db.add(Job(id=str(uuid4()), kind=KIND, priority=180, max_attempts=3, result=result))
     return True
 
 
-def queue_minion_reply(db, review_id, revision):
+def queue_verified_reply(db, review_id, revision):
     row = db.scalar(select(Setting).where(Setting.key == 'automation_schedule').with_for_update()
         .execution_options(populate_existing=True))
     schedule = dict(row.value or {}) if row else {}
@@ -234,6 +238,18 @@ def queue_minion_reply(db, review_id, revision):
     if (store and db.get(Account, store.id) and market_enabled(schedule, store.provider)
         and not eligibility_reason(db, review, draft, schedule)):
         enqueue(db, schedule, store, time.time(), target={review_id: revision})
+
+
+# Existing callers and saved minion handoffs use the same admission path.
+queue_minion_reply = queue_verified_reply
+
+
+def handoff_verified_draft(db, review, draft):
+    """After the draft commit, queue its exact verified revision for delivery."""
+    proof = (draft.quality or {}).get('owner_rules') or {}
+    if review.status == 'draft_ready' and proof.get('checked_at') and proof.get('passed') is True:
+        queue_verified_reply(db, review.id, draft.revision)
+        db.commit()
 
 
 def consume_priority(job, review_id, revision):
@@ -302,7 +318,13 @@ async def run_step(job_id, session_factory=Session):
             if ready_cursor:
                 fresh=fresh.where(or_(checked_at>ready_cursor[0],and_(checked_at==ready_cursor[0],Review.id>ready_cursor[1])))
             from_ready = False
-            if priority:
+            archive = None
+            if not state.get('priority_only') and state.get('live_streak', 0) >= LIVE_BURST:
+                archive = db.scalar(candidate_query(state['account_id'], schedule, state.get('cursor')).limit(1))
+            if archive is not None:
+                priority = None
+                review = archive
+            elif priority:
                 pair = db.execute(candidates.add_columns(Draft)
                     .where(Review.id == priority[0], Draft.revision == priority[1])).one_or_none()
                 if pair is None:
@@ -380,6 +402,7 @@ async def run_step(job_id, session_factory=Session):
                 reason_key=reason[:160] if reason[:160] in reasons or len(reasons)<20 else 'Другие причины'
                 reasons[reason_key]=int(reasons.get(reason_key,0))+1
             job.result = {**job.result, 'cursor': state.get('cursor') if from_ready or priority else cursor,
+                'live_streak': min(LIVE_BURST, state.get('live_streak', 0) + 1) if from_ready or priority else 0,
                 'ready_cursor':ready_cursor, 'scanned': int((job.result or {}).get('scanned', 0)) + 1,
                 'processed': int((job.result or {}).get('scanned', 0)) + 1,
                 'published': int((job.result or {}).get('published', 0)) + int(outcome == 'published'),

@@ -7,3 +7,23 @@
 .server-work .process-details summary,.server-work .work-technical summary{min-height:44px;align-items:center;color:#593b8a;font-size:13px}
 .server-work summary:focus-visible,.server-work .process-counts button:focus-visible{outline:2px solid #6744ac;outline-offset:3px}
 @media(max-width:760px){.server-work .market-process{padding:16px}.server-work .process-stages small{line-height:1.4}}
+
+
+/* Marketplace cards keep the decision and delivery counts visible at a glance. */
+.server-work .market-processes{align-items:stretch;gap:16px}
+.server-work .market-process{display:flex;flex-direction:column;background:#fff;border:1px solid #e2e6ee;border-radius:18px;box-shadow:0 4px 14px #24344a08}
+.server-work .market-process-title b{color:#19243d;font-size:15px}
+.server-work .process-counts{padding:16px 0 13px;border-bottom:0;column-gap:9px}
+.server-work .process-counts strong,.server-work .process-delivery-strip strong{font-variant-numeric:tabular-nums;color:#242044}
+.server-work .process-delivery-strip{display:grid;grid-template-columns:1fr 1fr;border:1px solid #e6e0f1;border-radius:12px;background:#f7f5fb}
+.server-work .process-delivery-strip>div{display:flex;flex-direction:column;justify-content:space-between;gap:6px;padding:10px 12px}
+.server-work .process-delivery-strip>div+div{border-left:1px solid #e6e0f1}
+.server-work .process-delivery-strip span{font-size:12px;line-height:1.35;color:#594f69}
+.server-work .process-delivery-strip strong{font-size:18px;line-height:1.15}
+.server-work .process-stages{gap:8px}
+.server-work .process-stage-dot{margin-left:1px}
+.server-work .process-stages>div{min-height:26px}
+.server-work .process-details{margin-top:auto}
+.server-work .process-details>summary{align-items:center;min-height:32px;font-size:13px}
+.server-work .process-detail-section{background:#f6f7fa;border:1px solid #e9ebf0}
+@media(max-width:480px){.server-work .process-delivery-strip>div{padding:9px}.server-work .process-counts{column-gap:5px}.server-work .market-process{padding:16px}}
