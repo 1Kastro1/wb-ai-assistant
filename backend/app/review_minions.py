@@ -243,4 +243,18 @@ async def run_step(job_id, session_factory=Session):
             'last_progress_at': now(), 'wait_reason': 'cadence',
             'last_lane': 'retry' if same_revision else 'new',
             'message': 'Миньон завершил этап проверки'}
+        learn_case = row.status == 'attention' and bool(row.issues) and setting(db, 'auto_case_rules_enabled', False)
         db.commit()
+
+    if learn_case:
+        # A scoped policy change can queue a new audit. Save the minion's
+        # result first so it cannot overwrite that audit's updated state.
+        from .library_workspace import suggest_case_rule
+        with session_factory() as db:
+            draft = db.scalar(select(Draft).where(Draft.review_id == review_id))
+            review = db.get(Review, review_id)
+            if draft and draft.revision == checked_revision and review and not review.is_answered:
+                row = db.get(ReviewLibraryAuditRow, (job_id, review_id))
+                if row:
+                    suggest_case_rule(db, row, review)
+                    db.commit()
