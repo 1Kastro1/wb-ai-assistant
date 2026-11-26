@@ -230,7 +230,8 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
 
 async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=None,
                               allow_fast_positive=False, instruction='', local_only=False, check_only=False,
-                              defer_semantic=False, previous_check=None, group_limit=None):
+                              defer_semantic=False, previous_check=None, group_limit=None,
+                              background_heavy=False):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
@@ -322,14 +323,22 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
         result['semantic_groups'] = len(groups)
         try:
             # One deadline for the check, optional repair and recheck together.
-            from .generation_budget import GenerationBudget
-            from .generation_budget import OWNER_RULE_CHECK_SECONDS
-            budget = GenerationBudget(OWNER_RULE_CHECK_SECONDS if check_seconds is None else check_seconds)
+            from .generation_budget import GenerationBudget, OWNER_RULE_CHECK_SECONDS
+            from .model_context import request_tokens
+            from .rule_check_plan import prepare, request_json, step_deadline
+            minimum = OWNER_RULE_CHECK_SECONDS if check_seconds is None else check_seconds
+            budget = GenerationBudget(minimum)
             for attempt in range(2):
-                from .rule_check_plan import prepare, request_json, step_deadline
                 messages, payload, schema, groups = prepare(review, product, semantic, facts, adjusted,
                     protected=protected, check_only=check_only, style_rules=rules)
                 result['semantic_groups'] = len(groups)
+                if background_heavy and not check_only and groups:
+                    messages[-1]['content'] = request_json(payload, groups[0])
+                    if len(groups) > 1 or request_tokens(messages, schema) > 4096:
+                        result.update(checked=False, continuation=True, retryable=True,
+                                      technical_error=False, verified_groups=0)
+                        result['issues'].append('Проверка правил поставлена в очередь по этапам.')
+                        break
                 # Persist successful groups bound to every input and partition.
                 # Partial progress is never approval; all groups must pass.
                 from .model_router import ModelRouter
@@ -354,7 +363,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                         continue
                     messages[-1]['content'] = request_json(payload, group)
                     durable = bool(check_only and group_limit)
-                    seconds = step_deadline(messages, schema, check_seconds or OWNER_RULE_CHECK_SECONDS) if durable else check_seconds
+                    seconds = step_deadline(messages, schema, minimum) if durable else check_seconds
                     step_budget = GenerationBudget(seconds) if durable else budget
                     result['planned_timeout_seconds'] = seconds or OWNER_RULE_CHECK_SECONDS
                     check = await step_budget.run(lambda: ollama.structured(messages, schema, task='OWNER_RULES',

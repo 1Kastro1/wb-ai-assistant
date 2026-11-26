@@ -3,7 +3,7 @@ import asyncio
 from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
-from app.db import Session, Product, Review, Draft, Memory, Setting
+from app.db import Session, Product, Review, Draft, Job, Memory, Setting
 from app import services
 from app.reply_policy import analyze_customer_message, semantic_reply_issues
 from app.safety import review_intent
@@ -43,6 +43,27 @@ def seed(db, provider):
     db.commit()
 
 
+async def generate_and_check(db):
+    from app.draft_audit import _recheck_one
+
+    result = await services.generate_draft(db, 'buyer')
+    if not result['quality']['owner_rules'].get('continuation'):
+        return result
+    job = db.scalar(select(Job).where(Job.kind == 'draft_recheck', Job.status == 'queued',
+        Job.result['retry_draft_id'].as_string() == 'bad'))
+    assert job and job.result['target_revision'] == result['revision']
+    job_id = job.id
+    groups = result['quality']['owner_rules']['semantic_groups']
+    for _ in range(groups):
+        db.rollback()
+        await _recheck_one(job_id)
+        draft = db.get(Draft, 'bad')
+        result = {'text': draft.text, 'model': draft.model, 'quality': draft.quality}
+        if not draft.quality['owner_rules'].get('continuation'):
+            break
+    return result
+
+
 @pytest.mark.parametrize('provider', ['wb', 'ozon', 'yandex'])
 def test_new_variant_rotates_learns_and_reuses_only_success(client, monkeypatch, provider):
     from app.integrations import ollama
@@ -56,12 +77,12 @@ def test_new_variant_rotates_learns_and_reuses_only_success(client, monkeypatch,
     monkeypatch.setattr(ollama, 'reply_variants', no_generation)
     with Session() as db:
         seed(db, provider)
-        first = asyncio.run(services.generate_draft(db, 'buyer'))
+        first = asyncio.run(generate_and_check(db))
         assert first['quality']['passed'], first['quality']
         assert 'скользкой' in first['text'] and 'очистки' in first['text']
         assert 'покупка Вам понравилась' not in first['text']
         assert 'тип кожи' in first['text']
-        second = asyncio.run(services.generate_draft(db, 'buyer'))
+        second = asyncio.run(generate_and_check(db))
         assert second['quality']['passed'], second['quality']
         assert second['text'] != first['text']
         assert list(db.scalars(select(VerifiedReplyContext)))
@@ -76,7 +97,7 @@ def test_new_variant_rotates_learns_and_reuses_only_success(client, monkeypatch,
         assert load_template(db,r,p,rules,facts,assess) is None
         assert similar_candidate(db,r,p,rules,facts,assess)
         before=len(checks)
-        fresh=asyncio.run(services.generate_draft(db,'buyer'))
+        fresh=asyncio.run(generate_and_check(db))
         assert fresh['model']=='learned-candidate-1.0'
         assert fresh['quality']['passed']
         assert len(checks)>before  # similar is an example, not an inherited approval
@@ -89,7 +110,7 @@ def test_failed_verification_never_teaches_template(client, monkeypatch):
     monkeypatch.setattr(ollama,'structured',unavailable)
     with Session() as db:
         seed(db,'wb')
-        result=asyncio.run(services.generate_draft(db,'buyer'))
+        result=asyncio.run(generate_and_check(db))
         assert not result['quality']['passed']
         assert result['quality']['owner_rules']['technical_error']
         assert not list(db.scalars(select(VerifiedReplyContext)))

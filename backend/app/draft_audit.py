@@ -216,7 +216,7 @@ async def _recheck_one(job_id, session_factory=Session):
             if not review or not draft or review.is_answered or review.status == 'publishing':
                 return False
             expected = (draft.revision, draft.text, review.text, review.rating, review.product_id)
-            if state.get('repair_revision', draft.revision) != draft.revision:
+            if state.get('repair_revision', state.get('target_revision', draft.revision)) != draft.revision:
                 return False
             product = db.get(Product, review.product_id)
             question = review.marketplace.endswith('_question')
@@ -348,6 +348,7 @@ async def _recheck_one(job_id, session_factory=Session):
         review = db.get(Review, rid) if rid else None
         pending_repair = bool(draft and repair_pending(draft.quality))
         retry = bool((check_only or pending_repair) and draft and review and not review.is_answered and review.status != 'publishing'
+                     and ('target_revision' not in state or attempted)
                      and (not state.get('rule_change') or attempted)
                      and technical_check(draft.quality))
         if pending_repair:
@@ -408,4 +409,3 @@ if __name__ == '__main__':
                            result={'account_id': args.store, 'version': VERSION, 'message': 'Перепроверка сохранённых ответов'})
             db.add(existing); db.commit()
         print(existing.id, existing.status)
-

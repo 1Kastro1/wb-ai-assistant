@@ -18,7 +18,7 @@ from sqlalchemy import select, func, case, or_, not_, text as sql_text
 from .db import *
 from .safety import rule_reply, review_intent, safe_fallback_reply, validate_reply, mask_vin, cleaner_effectiveness_complaint, fresh_reply_variants
 from .integrations import ollama, wb, web_research, provider_for
-from .generation_budget import GenerationBudget
+from .generation_budget import GenerationBudget, cpu_request_seconds
 from .generation_control import exclusive_generation, FastPathUnavailable, GenerationBusy, ReviewSkipped, record_outcome
 from .owner_reply_rules import matching_owner_rules, owner_business_facts
 from .owner_reply_policy import enforce_owner_rules, attach_rule_quality, saved_rule_quality, constraints
@@ -826,10 +826,6 @@ async def generate_question_draft(db, question, instruction=''):
     for item in previous:
         if item.existing_answer:
             examples.append({'question': item.text, 'answer': item.existing_answer})
-    messages = [
-        {'role': 'system', 'content': (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')},
-        {'role': 'user', 'content': json.dumps({'question': question.text, 'internal_analysis': analyze_customer_message(question.text), 'question_type': intent, 'product': product.name, 'brand': product.brand, 'verified_facts': [{'text': fact.get('text',''), 'kind': fact.get('kind','')} for fact in verified_facts], 'similar_previous_answers': examples[:1], 'store_rules': context_memories, 'reply_style': shared_reply_style(db), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'), 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction}, ensure_ascii=False)},
-    ]
     candidates = []
     fitment = fitment_answer(db, question, product) if not assortment and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк|сошк|рулев|наконечник|шаров', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
     if fitment and fitment['status']=='NEEDS_CATALOG' and internet_fitment_enabled(db, question.wb_account_id):
@@ -848,8 +844,18 @@ async def generate_question_draft(db, question, instruction=''):
     uses_model = not (local_reply or analysis['buyer_asks_about_money'] or voltage or fitment or assortment)
     model_started = time.monotonic()
     try:
+        if uses_model:
+            from .model_context import draft_messages
+            system = (Path(__file__).parent / 'prompts/question_reply.md').read_text(encoding='utf-8')
+            messages = draft_messages(system, {
+                'question': question.text, 'internal_analysis': analysis, 'question_type': intent,
+                'product': product.name, 'brand': product.brand, 'similar_previous_answers': examples[:1],
+                'reply_style': shared_reply_style(db), 'learned_preferences': shared_counters(db, 'learned_edit_preferences:'),
+                'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction,
+            }, context_memories, [{'text': fact.get('text', ''), 'kind': fact.get('kind', '')} for fact in verified_facts])
+            seconds = cpu_request_seconds(messages, minimum=QUESTION_GENERATION_SECONDS)
         candidates = [] if local_reply else [official_support_reply()] if analysis['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await skills.run_async(
-            'model_generation', GenerationBudget(QUESTION_GENERATION_SECONDS).run, lambda: ollama.reply_variants(messages, 1))
+            'model_generation', GenerationBudget(seconds).run, lambda: ollama.reply_variants(messages, 1, timeout_seconds=seconds))
     except Exception as error:
         fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
         candidates = []
@@ -896,7 +902,8 @@ async def generate_question_draft(db, question, instruction=''):
     adjusted, rule_quality = await skills.run_async('policy_checker', enforce_owner_rules,
         reply, question, product, memories, verified_facts,
         assess,
-        protected=bool(fitment), instruction=instruction, local_only=bool(local_reply))
+        protected=bool(fitment), instruction=instruction, local_only=bool(local_reply),
+        background_heavy=uses_model, defer_semantic=fallback_reason in ('timeout', 'unavailable'))
     if adjusted != reply:
         reply = validate_reply(mask_vin(adjusted))
         if not fitment:
@@ -931,10 +938,11 @@ async def generate_question_draft(db, question, instruction=''):
         db.add(draft)
     question.status = 'draft_ready' if quality['passed'] else 'manual_review'
     from .confirmed_reply_repair import repair_pending
-    if repair_pending(quality):
-        from .rule_retry import enqueue
+    from .rule_retry import enqueue, technical_check
+    needs_repair = repair_pending(quality)
+    if needs_repair or technical_check(quality):
         db.flush()
-        enqueue(db, draft, question, confirmed_repair=True)
+        enqueue(db, draft, question, confirmed_repair=needs_repair, targeted=True)
     record_outcome(db, question, draft)
     db.commit()
     from .scheduled_publication import handoff_verified_draft
@@ -1117,13 +1125,15 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         attempt_messages = messages
         last_candidate = ''
         model_unavailable = False
-        budget = GenerationBudget()
+        seconds = cpu_request_seconds(messages)
+        budget = GenerationBudget(seconds)
         model_started = time.monotonic()
         # One usable answer is enough. Additional drafts are an explicit owner
         # request, not a prerequisite for every ordinary review.
         candidate_target = MIN_AI_CANDIDATES if re.search(r'(?:три|3)\s+(?:разн\w*\s+)?(?:ответ|вариант)', requested_instruction, re.I) else 1
         try:
-            seed_candidates = await skills.run_async('model_generation', budget.run, lambda: ollama.reply_variants(messages, candidate_target))
+            seed_candidates = await skills.run_async('model_generation', budget.run,
+                lambda: ollama.reply_variants(messages, candidate_target, timeout_seconds=seconds))
         except Exception as error:
             from .batch_processing import transient
             model_outage = transient(error)
@@ -1137,7 +1147,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
                 break
             try:
                 last_candidate = seed_candidates[attempt] if attempt < len(seed_candidates) else await skills.run_async(
-                    'model_generation', budget.run, lambda: ollama.chat(attempt_messages))
+                    'model_generation', budget.run, lambda: ollama.chat(attempt_messages, timeout_seconds=seconds))
                 checked_candidate = validate_reply(mask_vin(last_candidate))
                 candidate_quality = assess_candidate(review, product, checked_candidate, [*comparison_texts, *valid_candidates], verified_facts)
                 repeated = bool(initial_draft and checked_candidate.strip() == initial_draft.text.strip())
@@ -1201,8 +1211,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             reply, review, product, memories, verified_facts,
             lambda value: assess_reply(review, product, value, verified_facts),
             protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
-            local_only=fast_only, defer_semantic=model_outage,
-            check_seconds=None)
+            local_only=fast_only, defer_semantic=model_outage, background_heavy=True)
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still
@@ -1270,7 +1279,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         interactive = bool(context.get('interactive'))
         from .review_minions import handoff
         if not interactive or not handoff(db, draft, review):
-            enqueue(db, draft, review, context.get('requested_by', ''), manual=interactive)
+            enqueue(db, draft, review, context.get('requested_by', ''), manual=interactive,
+                    targeted=bool(quality['owner_rules'].get('continuation')))
     if not requested_instruction.strip():
         remember_template(db, review, product, memories, verified_facts, draft)
     record_outcome(db, review, draft)
