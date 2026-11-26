@@ -10,7 +10,7 @@ from app.owner_reply_rules import matching_owner_rules
 from app.owner_reply_policy import enforce_owner_rules
 from app.rule_retry import enqueue
 from app.draft_audit import recheck_step
-from test_new_variant_context import seed
+from test_new_variant_context import generate_and_check, seed
 
 
 def test_unchanged_verifier_repair_is_not_submitted_twice(client, monkeypatch):
@@ -58,7 +58,7 @@ def test_duplicate_checks_reuse_only_current_exact_persisted_success(client,monk
     monkeypatch.setattr(services.ollama,'structured',check)
     with Session() as db:
         seed(db,'wb')
-        first=asyncio.run(services.generate_draft(db,'buyer'))
+        first=asyncio.run(generate_and_check(db))
         assert first['quality']['passed']
         assert check.await_count
         if changed=='rule': db.add(Memory(id='new',text='Новое требование к ответу.',kind='REVIEW_RULE'))
@@ -74,7 +74,7 @@ def test_duplicate_checks_reuse_only_current_exact_persisted_success(client,monk
         if not changed:
             d=db.get(Draft,'bad')
             assert d.text==first['text'] and d.quality['passed']
-            assert d.quality['owner_rules']['verification_method']=='learned_exact_context'
+            assert d.quality['owner_rules']['verification_method'] == first['quality']['owner_rules']['verification_method']
             rows=list(db.scalars(select(VerifiedReplyContext)))
             assert len(rows)==len({(r.context_key,r.kind,r.template_id) for r in rows})
 

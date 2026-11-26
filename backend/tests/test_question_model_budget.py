@@ -26,21 +26,24 @@ def test_question_cold_start_has_a_finite_budget_without_generating_three_varian
                       wb_account_id='owner', marketplace='wb_question', rating=0, text='Из какого материала корпус?'))
         db.commit()
     calls = []
-    async def variants(messages, count):
+    planned = []
+    async def variants(messages, count, *, timeout_seconds):
         calls.append(count)
         assert len(messages[0]['content']) < 2500
         payload = __import__('json').loads(messages[1]['content'])
         assert payload['verified_facts'][0]['text'] == 'Материал корпуса: полипропилен'
         assert 'verified_at' not in payload['verified_facts'][0]
-        assert 'store_rules' in payload and 'owner_instruction' in payload
+        assert 'owner_rules' in payload and 'owner_instruction' in payload
+        assert timeout_seconds == planned[-1]
         return ['Здравствуйте! Корпус этого контейнера изготовлен из полипропилена, как указано в характеристиках товара.']
     real_budget = services.GenerationBudget
     def budget(seconds=30):
-        # Simulate a model that needs more than the previous 60-second budget
+        # Simulate a model that needs more than the former 105-second budget
         # for prompt evaluation, without sleeping in the regression suite.
-        assert 60 < seconds <= 105
+        assert 180 < seconds <= 600
+        planned.append(seconds)
         value = real_budget(seconds)
-        value.deadline -= 65
+        value.deadline -= 180
         return value
     monkeypatch.setattr(ollama, 'reply_variants', variants)
     monkeypatch.setattr(services, 'GenerationBudget', budget)
