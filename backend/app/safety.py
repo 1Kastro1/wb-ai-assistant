@@ -156,14 +156,13 @@ def cleaner_effectiveness_complaint(review, product):
 
 def rule_reply(review, product, revision=0, facts=None):
     analysis = analyze_customer_message(review.text, review.rating)
+    from .review_context import buyer_message
+    if not buyer_message(review).strip():
+        from .rule_execution import low_rating_body, positive_body
+        return 'Добрый день! ' + (positive_body(review, revision) if review.rating >= 4 else low_rating_body(review, revision))
     specific = specific_review_case(review, product)
     if specific:
         return specific['answer']
-    if not review.text.strip():
-        if review.rating >= 4:
-            from .rule_execution import positive_body
-            return 'Добрый день! ' + positive_body(review, revision)
-        return 'Здравствуйте! Спасибо за оценку. Нам искренне жаль, что товар не оправдал ваших ожиданий. Нам важно понять, что можно улучшить. Если будет возможность, дополните отзыв и расскажите, пожалуйста, что именно вас не устроило.'
     if review_intent(review.text) == 'WRONG_ITEM' and len(analysis['complaints']) <= 1:
         return 'Здравствуйте! Приносим искренние извинения за то, что вам пришёл не тот товар. Понимаем ваше разочарование: вы ожидали получить именно выбранный товар. Спасибо, что сообщили нам об этой ситуации.'
     if review.risk == 'HIGH':

@@ -163,10 +163,19 @@ def select_rules(rules, review, product):
 
 
 POSITIVE_BODIES = (
-    'Спасибо за высокую оценку! Пусть покупка радует Вас каждый день!',
-    'Спасибо, что оценили покупку! Желаем Вам приятных впечатлений от её использования!',
+    'Спасибо за высокую оценку! Хорошего Вам дня!',
+    'Спасибо, что оценили покупку! Пользуйтесь с удовольствием!',
     'Спасибо за Вашу оценку! Пусть покупка будет Вам полезна!',
 )
+
+LOW_RATING_BODIES = (
+    'Спасибо за оценку. Если сможете, расскажите, что Вас не устроило.',
+    'Благодарим за обратную связь. Подскажите, пожалуйста, чего Вам не хватило.',
+    'Спасибо, что оценили покупку. Будем признательны, если дополните отзыв подробностями.',
+)
+
+LEGACY_LOW_RATING = ('Добрый день! Спасибо за отзыв. Сожалеем, что покупка оставила такое впечатление. '
+                     'Подскажите, пожалуйста, что именно Вас не устроило? Это поможет нам ответить по существу.')
 
 # Previously generated, reviewed no-claims answers remain valid; published
 # replies and existing drafts must not be rewritten just to change their length.
@@ -174,6 +183,8 @@ PREVIOUS_RATING_BODIES = (
     'Спасибо за высокую оценку!',
     'Благодарим Вас за оценку покупки!',
     'Спасибо за Вашу оценку!',
+    'Спасибо за высокую оценку! Пусть покупка радует Вас каждый день!',
+    'Спасибо, что оценили покупку! Желаем Вам приятных впечатлений от её использования!',
 )
 
 SHORT_PRAISE_BODIES = (
@@ -212,13 +223,21 @@ def legacy_positive_template(answer, review, rules):
 
 def positive_body(review, revision=0):
     # Stable distribution across reviews; regeneration advances independently.
-    identity = str(getattr(review, 'id', '') or getattr(review, 'wb_review_id', ''))
-    seed = int(hashlib.sha256(identity.encode()).hexdigest()[:8], 16)
     bodies = SHORT_PRAISE_BODIES if (getattr(review, 'text', '') or '').strip() else POSITIVE_BODIES
     text = re.sub(r'\s+', ' ', (getattr(review, 'text', '') or '').casefold().replace('ё', 'е')).strip(' .!…\n\r\t')
     if text in {'приятный запах', 'приятный аромат', 'аромат приятный', 'запах приятный'}:
         bodies = SCENT_PRAISE_BODIES
+    return rotating_body(review, bodies, revision)
+
+
+def rotating_body(review, bodies, revision):
+    identity = str(getattr(review, 'id', '') or getattr(review, 'wb_review_id', ''))
+    seed = int(hashlib.sha256(identity.encode()).hexdigest()[:8], 16)
     return bodies[(seed + max(0, int(revision))) % len(bodies)]
+
+
+def low_rating_body(review, revision=0):
+    return rotating_body(review, LOW_RATING_BODIES, revision)
 
 
 def positive_template(review, rules, revision=0, *, product=None):
@@ -429,6 +448,9 @@ def verification_key(answer, review, product, rules, facts, instruction='', mode
             'review': fields(review, ('id', 'wb_account_id', 'wb_review_id', 'product_id', 'rating', 'text',
                                      'created_at', 'risk', 'manual', 'safety_critical', 'topics', 'marketplace')),
             'product': fields(product, ('id', 'name', 'brand', 'category', 'part_number', 'facts', 'marketplace'))}
+    from .review_context import context_proof, needs_context_check
+    if needs_context_check(review):
+        data['complete_review'] = context_proof(review, answer)
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 

@@ -45,6 +45,48 @@ def jobs():
     with Session() as db: return list(db.scalars(select(Job.id).where(Job.kind == automatic.KIND)))
 
 
+@pytest.mark.parametrize('store', ['owner', 'oz', 'ya'])
+def test_stale_buyer_update_is_checked_by_minion_before_publishing(client, ready, store, monkeypatch):
+    from app.db import ReviewLibraryAuditRow
+    from app.integrations import ollama
+    from app.owner_reply_policy import fingerprint
+    from app.review_context import context_proof
+    from app.review_minions import run_step
+
+    judge = AsyncMock(return_value={'compliant': True, 'violations': [], 'revised_answer': ''})
+    monkeypatch.setattr(ollama, 'structured', judge)
+    monkeypatch.setattr(services, 'assess_reply', lambda *_a, **_k: {'passed': True, 'issues': []})
+    enable(client, enabled=True, drafts_enabled=True, publication_questions=False)
+    rid = store + 'review'
+    minion = 'review_minion:' + store
+    with Session() as db:
+        set_setting(db, 'review_minions_enabled', True)
+        review, draft = db.get(Review, rid), db.get(Draft, rid)
+        review.text = 'Поначалу аромат показался слабым.'
+        draft.text = 'Добрый день! Спасибо за отзыв. Рады, что после перестановки аромат стал заметнее.'
+        draft.quality = {'passed': True, 'owner_rules': {'fingerprint': fingerprint([]), 'checked': True,
+            'passed': True, 'review_context_proof': context_proof(review, draft.text)}}
+        review.sections = {'supplement': 'Переставил ароматизатор, и запах стал заметнее.'}
+        job = db.scalar(select(Job).where(Job.kind == automatic.KIND,
+            Job.result['account_id'].as_string() == store))
+        job_id = job.id
+        db.commit()
+
+    asyncio.run(automatic.run_step(job_id))
+    assert ready == []
+    with Session() as db:
+        assert db.get(ReviewLibraryAuditRow, (minion, rid)).status == 'handoff'
+
+    asyncio.run(run_step(minion))
+    assert judge.await_count == 1
+    with Session() as db:
+        job = db.scalar(select(Job).where(Job.kind == automatic.KIND, Job.status == 'queued',
+            Job.result['account_id'].as_string() == store))
+        next_id = job.id
+    asyncio.run(automatic.run_step(next_id))
+    assert [call[1] for call in ready] == [rid]
+
+
 def test_stale_priority_batch_yields_instead_of_staying_running(client, ready, monkeypatch):
     from app.queue_policy import next_job
     enable(client, enabled=True)
@@ -378,7 +420,9 @@ def test_recheck_delivers_exact_low_rating_revision_without_waiting_for_schedule
         db.commit()
 
     async def verify(text, review, product, rules, facts, assess, **kwargs):
-        return text, {'fingerprint': fingerprint(rules), 'checked': True, 'passed': True, 'issues': []}
+        from app.review_context import context_proof
+        return text, {'fingerprint': fingerprint(rules), 'checked': True, 'passed': True,
+                      'issues': [], 'review_context_proof': context_proof(review, text)}
 
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules', verify)
     monkeypatch.setattr(services, 'assess_reply', lambda *_a, **_k: {'passed': True, 'issues': []})

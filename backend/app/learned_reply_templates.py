@@ -26,7 +26,8 @@ def context_key(review, product, rules, facts, *, praise_group=False, candidate_
         return None
     def fields(obj, names):
         return {name: getattr(obj, name, None) for name in names}
-    message = re.sub(r'\s+', ' ', review.text).strip()
+    from .review_context import buyer_message
+    message = re.sub(r'\s+', ' ', buyer_message(review)).strip()
     if equivalent_group:
         from .equivalent_reviews import message_group, VERSION as GROUP_VERSION
         group = message_group(review.text)
@@ -65,6 +66,7 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
     from .owner_reply_policy import saved_rule_quality, local_issues
     from .safety import validate_reply
     from .rule_execution import verified_positive_reply
+    from .review_context import context_current
     for kind in ('exact', 'positive', 'equivalent'):
         grouped = kind == 'positive'
         key = context_key(review, product, rules, facts, praise_group=grouped, equivalent_group=kind=='equivalent')
@@ -80,7 +82,8 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
             if exact_answer is not None and answer != exact_answer:
                 continue
             if (same_answer(answer, previous) or not verdict.get('checked') or not verdict.get('passed')
-                    or verdict.get('technical_error') or verdict.get('issues')):
+                    or verdict.get('technical_error') or verdict.get('issues')
+                    or not context_current(review, answer, verdict)):
                 continue
             try:
                 from .equivalent_reviews import message_group

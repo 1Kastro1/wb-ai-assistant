@@ -454,10 +454,12 @@ def assess_reply(review, product, reply, verified_facts=None):
     """Deterministic quality gate; it explains weaknesses without trusting the model to grade itself."""
     specific_case = specific_review_case(review, product)
     lowered = reply.lower().replace('ё', 'е')
-    review_words = set(WORDS.findall(review.text.lower()))
     reply_words = set(WORDS.findall(lowered))
     issues, score = [], 40
     from .reply_policy import has_reply_body
+    from .review_context import buyer_message, review_details
+    message = buyer_message(review)
+    review_words = set(WORDS.findall(message.lower()))
     if not has_reply_body(reply):
         issues.append('ответ пустой: нужны благодарность и ответ по существу, а не только приветствие и подпись')
     breakdown = {
@@ -468,7 +470,7 @@ def assess_reply(review, product, reply, verified_facts=None):
         'relevance': {'label': 'Соответствие отзыву', 'score': 0, 'max': 12},
         'resolution': {'label': 'Полезность решения', 'score': 0, 'max': 18},
     }
-    minimum_length = 25 if simple_positive(review) else 60 if review.rating >= 4 else 120
+    minimum_length = 25 if not message.strip() or simple_positive(review) else 60 if review.rating >= 4 else 120
     if minimum_length <= len(reply) <= 900:
         score += 15
         breakdown['substance']['score'] = 15
@@ -479,29 +481,29 @@ def assess_reply(review, product, reply, verified_facts=None):
         breakdown['courtesy']['score'] = 10
     else:
         issues.append('добавить благодарность')
-    if review.rating <= 3 and (any(x in lowered for x in ('жаль', 'извин', 'сожале')) or (specific_case or {}).get('key') == 'positive_low_rating'):
+    if (review.rating <= 3 and message.strip()
+            and (any(x in lowered for x in ('жаль', 'извин', 'сожале')) or (specific_case or {}).get('key') == 'positive_low_rating')):
         score += 10
         breakdown['empathy']['score'] = 10
-    elif review.rating <= 3:
+    elif review.rating <= 3 and message.strip():
         issues.append('признать проблему и проявить эмпатию')
     else:
         score += 10
         breakdown['empathy']['score'] = 10
     overlap = review_words & reply_words
-    analysis = analyze_customer_message(review.text, review.rating)
+    analysis = analyze_customer_message(message, review.rating)
     acknowledged = bool(analysis['complaints']) and not missing_complaints(analysis, reply)
-    simple_praise = len(review.text.split()) <= 5 and analysis['sentiment'] == 'positive' and not analysis['complaints']
-    if overlap or len(review_words) <= 1 or acknowledged or simple_praise or simple_positive(review) or _addresses_review_topic(review.text, reply) or (specific_review_case(review, product) or {}).get('answer') == reply:
+    simple_praise = len(message.split()) <= 5 and analysis['sentiment'] == 'positive' and not analysis['complaints']
+    if overlap or len(review_words) <= 1 or acknowledged or simple_praise or _addresses_review_topic(message, reply) or (specific_case or {}).get('answer') == reply:
         score += 12
         breakdown['relevance']['score'] = 12
     else:
         issues.append('ответить именно на содержание отзыва')
-    analysis = analyze_customer_message(review.text, review.rating)
-    if has_redundant_clarification(reply, review.text):
+    if has_redundant_clarification(reply, message):
         issues.append('не переспрашивать уже описанную проблему')
     for topic in missing_complaints(analysis, reply):
         issues.append('не учтено существенное замечание: ' + INTENT_LABELS.get(topic, topic))
-    intent = review_intent(review.text)
+    intent = review_intent(message)
     combined_cleaner_complaint = cleaner_effectiveness_complaint(review, product)
     if intent == 'AUTHENTICITY':
         if any(x in lowered for x in ('подлин', 'дистрибьютор', 'оригинал')):
@@ -543,7 +545,7 @@ def assess_reply(review, product, reply, verified_facts=None):
     if reply.strip().lower() in ('спасибо за отзыв!', 'спасибо за отзыв.', 'спасибо!'):
         score = min(score, 35)
         issues.append('слишком общий ответ')
-    if review.rating >= 4 and not analysis['complaints'] and intent in ('POSITIVE_EXPERIENCE', 'GENERAL') and (intent == 'POSITIVE_EXPERIENCE' or any(x in review.text.lower().replace('ё','е') for x in ('соответствует описанию', 'все подошло', 'все понравилось', 'работает отлично', 'хорошее качество'))):
+    if review.rating >= 4 and not analysis['complaints'] and not review_details(message) and intent in ('POSITIVE_EXPERIENCE', 'GENERAL') and (intent == 'POSITIVE_EXPERIENCE' or any(x in review.text.lower().replace('ё','е') for x in ('соответствует описанию', 'все подошло', 'все понравилось', 'работает отлично', 'хорошее качество'))):
         if any(x in lowered for x in ('жаль', 'сожале', 'извин', 'не оправдал', 'разочаровал', 'показался слаб', 'недостаточно выражен')) or re.search(r'(?<!\w)не\s+понравил', lowered):
             score = min(score, 70)
             issues.append('не трактовать положительный отзыв как жалобу')
@@ -1006,7 +1008,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         raise ValueError('Отзыв не найден или уже имеет ответ')
     if review.status == 'publishing':
         raise ValueError('Публикация уже выполняется')
-    expected_review_input = (review.text, review.rating, review.product_id)
+    from .review_context import buyer_message
+    expected_review_input = (buyer_message(review), review.sections, review.rating, review.product_id)
     initial_draft = db.scalar(select(Draft).where(Draft.review_id == review_id))
     expected_revision = initial_draft.revision if initial_draft else None
     product = db.get(Product, review.product_id)
@@ -1028,7 +1031,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         # An invalid old draft is a reason to repair it, not to block a new one.
         previous_text = initial_draft.text
     learned = load_template(db, review, product, memories, verified_facts,
-        lambda value: assess_reply(review, product, value, verified_facts), previous=previous_text) if not requested_instruction.strip() else None
+        lambda value: assess_reply(review, product, value, verified_facts), previous=previous_text
+    ) if buyer_message(review).strip() and not requested_instruction.strip() else None
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
     if local_positive and initial_draft:
         # Built-in praise already rotates instantly and receives a fresh local
@@ -1129,7 +1133,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         from .reply_policy import generation_policy
         from .owner_reply_policy import context_constraints
         messages = draft_messages(generation_policy(), {
-            'buyer_message': review.text, 'internal_analysis': analyze_customer_message(review.text, review.rating),
+            'buyer_message': buyer_message(review), 'internal_analysis': analyze_customer_message(buyer_message(review), review.rating),
             'detected_intent': intent, 'rating': review.rating, 'product': product.name,
             'required_style': {key: context_constraints(memories, review)[key] for key in ('greeting','greetings','signature')},
             'previous_draft': initial_draft.text if initial_draft else '',
@@ -1267,7 +1271,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     db.refresh(review)
     if review.is_answered or review.status == 'publishing':
         raise ValueError('Отзыв изменился во время генерации')
-    if (review.text, review.rating, review.product_id) != expected_review_input:
+    if (buyer_message(review), review.sections, review.rating, review.product_id) != expected_review_input:
         raise GenerationBusy('Данные отзыва обновлены синхронизацией; повторяем подготовку')
     draft = db.scalar(select(Draft).where(Draft.review_id == review_id).execution_options(populate_existing=True))
     if (draft.revision if draft else None) != expected_revision:

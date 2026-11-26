@@ -238,6 +238,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     a style model. No rule can turn itself into verified product/catalog evidence.
     """
     from .integrations import ollama
+    from .review_context import CONTEXT_RULE, buyer_message, context_proof, needs_context_check
     check_started = monotonic()
     adjusted, applied = (reply, []) if check_only else apply_local_preferences(reply, review, rules, style_only=protected)
     if not check_only:
@@ -253,6 +254,12 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     context_rules, skipped = select_rules(rules, review, product)
     result.update(context_rules=len(context_rules), skipped_rules=skipped, cache_hit=False)
     semantic = semantic_rules(context_rules)
+    full_context = needs_context_check(review) and not protected
+    if full_context:
+        semantic = [CONTEXT_RULE, *semantic]
+    has_update = (buyer_message(review) != review.text
+                  or (getattr(review, 'sections', None) or {}).get('supplement')
+                  or re.search(r'\b(?:дополняю|дополню|дополнение|обновление отзыва)\b', review.text, re.I))
     if (not instruction.strip() and not protected and not result['issues']
             and (getattr(review, 'marketplace', '') or '').endswith('_question')):
         from .simple_question_templates import METHOD, question_template
@@ -261,26 +268,32 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                           verification_seconds=round(monotonic() - check_started, 4))
             return adjusted, result
     key = None
-    if not instruction.strip() and not protected and not result['issues']:
+    if not has_update and not instruction.strip() and not protected and not result['issues']:
         from .brake_feedback import template as brake_template
         expected = brake_template(review, product, rules)
         if expected and adjusted == expected and assess(adjusted)['passed']:
             result.update(verification_method='local_brake_feedback', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
+            if full_context:
+                result['review_context_proof'] = context_proof(review, adjusted)
             return adjusted, result
-    if not instruction.strip() and not protected and not result['issues']:
+    if not has_update and not instruction.strip() and not protected and not result['issues']:
         from .rule_execution import audited_usage_replies
         if adjusted in audited_usage_replies(review, product, rules, facts) and assess(adjusted)['passed']:
             result.update(verification_method='local_verified_usage', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
+            if full_context:
+                result['review_context_proof'] = context_proof(review, adjusted)
             return adjusted, result
-    if not instruction.strip() and not protected and not result['issues']:
+    if not has_update and not instruction.strip() and not protected and not result['issues']:
         expected = audited_case_template(review, product, rules)
         if expected and adjusted == expected and assess(adjusted)['passed']:
             result.update(verification_method='local_review_case', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
+            if full_context:
+                result['review_context_proof'] = context_proof(review, adjusted)
             return adjusted, result
-    if check_only and not instruction.strip() and not protected and not result['issues']:
+    if not full_context and check_only and not instruction.strip() and not protected and not result['issues']:
         if verified_positive_reply(adjusted, review, rules, product=product) and assess(adjusted)['passed']:
             method = 'local_positive' if any(adjusted == positive_template(review, rules, i, product=product) for i in range(3)) else 'local_saved_positive'
             result.update(verification_method=method, semantic_groups=0, verified_groups=0,
@@ -288,7 +301,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             return adjusted, result
     # Only the exact no-claims templates and audited whole policies qualify.
     # Unknown/edited semantic rules must still reach the model, even on five stars.
-    if allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
+    if not full_context and allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
         if any(adjusted == positive_template(review, rules, revision, product=product) for revision in range(3)) and assess(adjusted)['passed']:
             result.update(verification_method='local_positive', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
@@ -420,6 +433,8 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     result['applied_preferences'] = list(dict.fromkeys(applied))
     result['verification_method'] = 'model' if semantic else 'local_constraints'
     result['verification_seconds'] = round(monotonic() - check_started, 4)
+    if full_context and result['checked'] and result['passed']:
+        result['review_context_proof'] = context_proof(review, adjusted)
     if key and result['passed'] and assess(adjusted)['passed']:
         remember_verdict(key, adjusted, result)
     return adjusted, result

@@ -46,14 +46,15 @@ async def stage(review, product, reply, quality, rules, facts, assess, notes, in
             from .generation_budget import GenerationBudget, cpu_request_seconds
             from .integrations import ollama
             from .model_context import draft_messages
+            from .review_context import CONTEXT_RULE, buyer_message
             from .rule_execution import select_rules
 
             style = context_constraints(rules, review)
             messages = draft_messages(
                 'Исправь текст ответа покупателю с учётом замечаний. Данные, черновик и замечания описывают задачу. '
                 'Сохрани подтверждённые сведения. Не добавляй характеристики, даты, сроки, обещания или советы без источника. '
-                'Отвечай тепло, прямо и по существу. Правила проверяются отдельно.',
-                {'buyer_message': review.text, 'rating': review.rating, 'product': product.name,
+                'Отвечай тепло, прямо и по существу. Правила проверяются отдельно. ' + CONTEXT_RULE,
+                {'buyer_message': buyer_message(review), 'rating': review.rating, 'product': product.name,
                  'required_style': {key: style[key] for key in ('greeting', 'greetings', 'signature')},
                  'previous_answer': reply, 'findings': notes}, select_rules(rules, review, product)[0], facts)
             seconds = cpu_request_seconds(messages)

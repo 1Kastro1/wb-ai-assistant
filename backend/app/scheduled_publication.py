@@ -129,6 +129,8 @@ def eligibility_reason(db, review, draft, schedule):
     restriction = publication_restriction(review)
     if restriction:
         return restriction
+    if (review.sections or {}).get('_context_pending'):
+        return 'Wildberries ещё не передал связанный отзыв. Выгрузка продолжится после синхронизации.'
     question = review.marketplace.endswith('_question')
     provider = review.marketplace.removesuffix('_question')
     store = db.get(StoreProfile, review.wb_account_id)
@@ -158,6 +160,9 @@ def eligibility_reason(db, review, draft, schedule):
     if quality.get('owner_rules') is not None and not isinstance(quality['owner_rules'], dict):
         return 'Сначала завершите проверку правил.'
     previous = quality.get('owner_rules') or {}
+    from .review_context import STALE_CONTEXT, context_current
+    if not context_current(review, draft.text, previous):
+        return STALE_CONTEXT
     if (previous.get('technical_error') or previous.get('checked') is False or
         previous.get('status') in ('error', 'pending') or previous.get('violations') or
         previous and previous.get('passed') is not True):
@@ -372,7 +377,13 @@ async def run_step(job_id, session_factory=Session):
                 recover_positive_verdict(db, review, draft)
             reason = eligibility_reason(db, review, draft, schedule)
             from .confirmed_reply_repair import BLOCKED
-            if reason == BLOCKED:
+            from .review_context import STALE_CONTEXT
+            if reason == STALE_CONTEXT:
+                from .review_minions import handoff_context
+                if not handoff_context(db, draft, review):
+                    from .rule_change_recheck import enqueue_draft
+                    enqueue_draft(db, draft, review, actor_id=schedule.get('publication_authorized_by', ''))
+            elif reason == BLOCKED:
                 from .draft_audit import manually_edited
                 from .rule_retry import enqueue as enqueue_recheck
                 if not manually_edited(draft) and not db.scalar(

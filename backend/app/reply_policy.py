@@ -280,11 +280,31 @@ def missing_complaints(analysis, reply):
 def semantic_reply_issues(review, product, reply):
     """Independent hard checks: a high courtesy score cannot hide a contradiction."""
     from .product_guidance import is_cleaner, positive_detail, untested_review
-    analysis = analyze_customer_message(review.text, review.rating)
+    from .review_context import buyer_message, review_details
+    message = buyer_message(review)
+    analysis = analyze_customer_message(message, review.rating)
     text = reply.lower().replace('ё', 'е')
-    buyer = (review.text or '').lower().replace('ё', 'е')
+    buyer = message.lower().replace('ё', 'е')
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower().replace('ё', 'е')
     issues = conversational_issues(reply)
+    details = review_details(message)
+    if 'wrong_scent' in details and (not re.search(r'не тот|другой|несоответств|пересорт', text)
+            or re.search(r'индивидуальн|чувствительност|услови\w* хранения|поможем.{0,30}замен', text)
+            or not re.search(r'поддержк|отказать', text)):
+        issues.append('признать пересорт и предложить подходящий шаг без предположений и обещания замены')
+    if 'wrong_scent' in details and re.search(r'дома\s+(?:вскрыл|открыл|обнаружил)', buyer) and not re.search(r'поддержк', text):
+        issues.append('для уже полученного заказа предложить поддержку маркетплейса')
+    if 'scent_improved' in details and (not re.search(r'заметнее|ярче|сильнее|лучше|явн', text)
+            or re.search(r'слабее.{0,30}ожидали|попробуйте.{0,30}(?:разместить|поставить|установить)', text)):
+        issues.append('учесть, что покупатель уже изменил размещение и аромат стал заметнее')
+    if 'scent_duration' in details and not re.search(r'срок|длительн|стойк|держ|хвата|месяц', text):
+        issues.append('ответить на замечание о сократившемся сроке действия аромата')
+    if 'scent_too_strong' in details and not re.search(r'сильн|интенсив|насыщен|резк|выражен', text):
+        issues.append('учесть замечание о слишком сильном аромате')
+    if re.search(r'\b(?:sincerely|unfortunately|regards|apologize)\b', text):
+        issues.append('убрать английские слова из русской фразы')
+    if re.search(r'легко\s+установил|установк\w*\s+прошла\s+легко', text) and not re.search(r'устано|закреп|смонт', buyer):
+        issues.append('не утверждать, что покупатель уже устанавливал товар')
     if re.search(r'\bгарантировать\b[^.!?\n]{0,45}\bпо отзыву\s+(?:нельзя|невозможно)\b'
                  r'|\bпо отзыву\b[^.!?\n]{0,30}\b(?:нельзя|невозможно)\s+гарантировать\b', text):
         issues.append('убрать служебную оговорку о гарантии по отзыву')
@@ -297,7 +317,7 @@ def semantic_reply_issues(review, product, reply):
             issues.append('не извиняться за неописанную протечку' if kind == 'LEAKAGE' else 'не придумывать повреждение упаковки')
     unmet_comparison = ('ламп' in name and analysis['is_question'] and bool(re.search(
         r'разниц\w*\s+не\s+(?:замет|увид)|не\s+(?:замет|увид)\w*\s+разниц', buyer)))
-    if buyer.strip() and not analysis['complaints'] and not unmet_comparison and analysis['sentiment'] == 'positive' and re.search(r'жаль|сожале|извин|не оправдал|не подош[её]л|не понравил|разочар', text):
+    if buyer.strip() and not analysis['complaints'] and not details and not unmet_comparison and analysis['sentiment'] == 'positive' and re.search(r'жаль|сожале|извин|не оправдал|не подош[её]л|не понравил|разочар', text):
         issues.append('не трактовать положительный отзыв как жалобу')
     if analysis['complaints'] and analysis['sentiment'] == 'negative' and re.search(r'рады, что (?:покупка|товар|аромат).*понравил', text):
         issues.append('не благодарить за довольство при жалобе')
@@ -365,8 +385,10 @@ def conversational_issues(reply):
 
 def generation_policy():
     """Concise preparation policy; complete owner rules are verified separately."""
+    from .review_context import CONTEXT_RULE
     return ('Пиши от имени продавца на русском языке, тепло, внимательно и уважительно, обращаясь на Вы. '
         'Пиши как внимательный человек в разговоре с покупателем: простые слова, короткие живые фразы, без отчётного тона. '
+        + CONTEXT_RULE + ' '
         'Обычно нужны 2–4 содержательных предложения: поблагодари за отзыв, отметь конкретный опыт покупателя '
         'и ответь на каждый существенный вопрос или замечание. Не оставляй только приветствие и подпись. '
         'В смешанном отзыве признай и достоинства, и проблему. Не определяй смысл только по звёздам. '
