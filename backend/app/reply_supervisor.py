@@ -36,6 +36,10 @@ SYSTEM = (
 async def observe(skills, inquiry, reply, facts, quality):
     if not skills.enabled or not ModelRouter.supervisor_available() or quality.get('passed') is not True:
         return
+    from .simple_question_templates import METHOD
+    method = (quality.get('owner_rules') or {}).get('verification_method', '')
+    if method in (METHOD, 'local_positive', 'local_saved_positive') or method.startswith('learned_'):
+        return
     if skills.kind == 'review' and inquiry.rating >= 4 and inquiry.risk == 'NORMAL':
         if 'model_generation' not in skills.steps:
             return

@@ -799,7 +799,13 @@ async def generate_question_draft(db, question, instruction=''):
     intent = skills.run('question_classifier', question_intent, question.text)
     def assess(value):
         return skills.run('quality_control', assess_question_answer, question, product, value, sources, owner_rules=memories)
-    assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not analysis['buyer_asks_about_money'] else None
+    from .simple_question_templates import question_template
+    local_reply = (skills.run('verified_template', question_template, question, product, memories, verified_facts)
+                   if not instruction.strip() else None)
+    local_quality = assess(local_reply) if local_reply else None
+    if local_quality and not local_quality['passed']:
+        local_reply = None
+    assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not local_reply and not analysis['buyer_asks_about_money'] else None
     if assortment:
         sources.extend(assortment['sources']);intent=assortment['intent']
     if not assortment and intent == 'применение' and not has_usage_instruction(verified_facts):
@@ -839,10 +845,10 @@ async def generate_question_draft(db, question, instruction=''):
     voltage = battery_voltage_answer(question, product)
     if voltage:
         sources.append(voltage['source'])
-    uses_model = not analysis['buyer_asks_about_money'] and not voltage and not fitment and not assortment
+    uses_model = not (local_reply or analysis['buyer_asks_about_money'] or voltage or fitment or assortment)
     model_started = time.monotonic()
     try:
-        candidates = [official_support_reply()] if analysis['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await skills.run_async(
+        candidates = [] if local_reply else [official_support_reply()] if analysis['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await skills.run_async(
             'model_generation', GenerationBudget(QUESTION_GENERATION_SECONDS).run, lambda: ollama.reply_variants(messages, 1))
     except Exception as error:
         fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
@@ -857,7 +863,10 @@ async def generate_question_draft(db, question, instruction=''):
         except ValueError:
             continue
     passed_candidates = [item for item in checked if item[1]['passed']]
-    if fitment and not analysis['buyer_asks_about_money']:
+    if local_reply:
+        reply, quality, model = local_reply, local_quality, 'question-template-1.0'
+        quality['selection_note'] = 'Использован проверенный шаблон для простого вопроса'
+    elif fitment and not analysis['buyer_asks_about_money']:
         reply = validate_reply(fitment['text'])
         quality = {'score':100 if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else 0,'passed':fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN'),'issues':[] if fitment['status'] in ('FIT','ALTERNATIVE','UNAVAILABLE','NEEDS_VIN') else ['Нужна проверка по каталогу'],'sources':fitment['sources'],'intent_label':intent,'fitment':fitment}
         model = 'catalog-fitment-1.1'
@@ -882,10 +891,12 @@ async def generate_question_draft(db, question, instruction=''):
         quality = assess(reply)
         quality['selection_note'] = 'Использован безопасный ответ без неподтверждённых сведений'
         model = 'question-safety-1.0'
+        if not verified_facts and not fallback_reason:
+            fallback_reason = 'missing_data'
     adjusted, rule_quality = await skills.run_async('policy_checker', enforce_owner_rules,
         reply, question, product, memories, verified_facts,
         assess,
-        protected=bool(fitment), instruction=instruction)
+        protected=bool(fitment), instruction=instruction, local_only=bool(local_reply))
     if adjusted != reply:
         reply = validate_reply(mask_vin(adjusted))
         if not fitment:
@@ -1293,6 +1304,9 @@ def edit_draft(db, draft_id, value, revision, actor_id='', learn_preferences=Tru
     product = db.get(Product, review.product_id)
     generation_timing = (draft.quality or {}).get('timing')
     previous_rule_quality = (draft.quality or {}).get('owner_rules')
+    from .simple_question_templates import METHOD as QUESTION_TEMPLATE
+    if value != old and (previous_rule_quality or {}).get('verification_method') == QUESTION_TEMPLATE:
+        previous_rule_quality = None
     rules = matching_owner_rules(db, product, for_questions=review.marketplace.endswith('_question'))
     if review.marketplace.endswith('_question'):
         sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in trusted_product_facts(db, product)]
@@ -1338,6 +1352,9 @@ def propose_publish(db, review_ids):
         is_question = review.marketplace.endswith('_question')
         product = db.get(Product, review.product_id)
         rules = matching_owner_rules(db, product, for_questions=is_question)
+        from .simple_question_templates import STALE, stale_question_template
+        if is_question and stale_question_template(db, review, draft, product, rules):
+            raise ValueError(STALE)
         rule_quality = saved_rule_quality(draft.text, rules, (draft.quality or {}).get('owner_rules'), review=review)
         if not rule_quality['passed']:
             raise ValueError('Перед публикацией проверьте правила магазина: ' + '; '.join(rule_quality['issues']))
@@ -1432,7 +1449,12 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
             reason = eligibility_reason(db, review, draft, scheduled_config)
             if reason:
                 raise ValueError(reason)
-        rules = matching_owner_rules(db, db.get(Product, review.product_id), for_questions=review.marketplace.endswith('_question'))
+        question = review.marketplace.endswith('_question')
+        product = db.get(Product, review.product_id)
+        rules = matching_owner_rules(db, product, for_questions=question)
+        from .simple_question_templates import STALE, stale_question_template
+        if question and stale_question_template(db, review, draft, product, rules):
+            raise ValueError(STALE)
         owner_approval = False
         if bulk_approval:
             from .bulk_publication import owner_approved_item

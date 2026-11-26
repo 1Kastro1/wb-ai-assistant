@@ -162,7 +162,11 @@ def eligibility_reason(db, review, draft, schedule):
         previous.get('status') in ('error', 'pending') or previous.get('violations') or
         previous and previous.get('passed') is not True):
         return 'Сначала завершите проверку правил.'
-    rules = matching_owner_rules(db, db.get(Product, review.product_id), for_questions=question)
+    product = db.get(Product, review.product_id)
+    rules = matching_owner_rules(db, product, for_questions=question)
+    from .simple_question_templates import STALE, stale_question_template
+    if question and stale_question_template(db, review, draft, product, rules):
+        return STALE
     if not saved_rule_quality(draft.text, rules, quality.get('owner_rules'), review=review)['passed']:
         return 'Сначала проверьте ответ по актуальным правилам.'
     if question and quality.get('fitment', {}).get('status') in ('NEEDS_CATALOG', 'CONFLICT'):

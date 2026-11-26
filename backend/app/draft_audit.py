@@ -246,10 +246,17 @@ async def _recheck_one(job_id, session_factory=Session):
                          or bool(question and (draft.quality or {}).get('fitment')))
             repaired_quality = None
             learned = None
+            from .simple_question_templates import METHOD, STALE, stale_question_template
+            stale_template = question and stale_question_template(db, review, draft, product, rules)
             if check_only and not issue and not continuing_repair and not question and not protected:
                 from .learned_reply_templates import load_template
                 learned = load_template(db, review, product, rules, facts, assess, exact_answer=draft.text)
-            if issue:
+            if stale_template:
+                from .owner_reply_policy import fingerprint
+                answer = draft.text
+                verdict = {'matched': len(rules), 'fingerprint': fingerprint(rules), 'checked': True,
+                           'passed': False, 'verification_method': METHOD, 'issues': [STALE], 'violations': [STALE]}
+            elif issue:
                 answer, repaired_quality = await repair(
                     review, product, draft.text, draft.quality or {}, rules, facts, assess, protected=protected)
                 verdict = repaired_quality.get('owner_rules') or {}
