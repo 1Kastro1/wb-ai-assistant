@@ -16,7 +16,11 @@ export function serverWorkGroups(tasks,now=Date.now()/1000,processes=[]){
   if(task.status==='running')stage.running++;
   else if(task.retry_at>now&&(task.retry_pending??true)){stage.retry++;stage.retry_at=stage.retry_at?Math.min(stage.retry_at,task.retry_at):task.retry_at;}
   else if(task.retry_at>now&&['idle','disabled'].includes(task.wait_reason))continue;
-  else stage.queued++;
+  else {
+   stage.queued++;
+   const since=Date.parse(task.last_served_at||task.created_at)/1000;
+   if(Number.isFinite(since))stage.waiting_since=Math.min(stage.waiting_since??since,since);
+  }
   group.stages[keyStage]=stage;
  }
  return [...groups.values()].sort((a,b)=>a.provider.localeCompare(b.provider));
@@ -25,7 +29,11 @@ export function serverWorkGroups(tasks,now=Date.now()/1000,processes=[]){
 export function stageStatus(group,key,now=Date.now()/1000){
  const s=group.stages[key];
  if(s?.running)return {label:'Выполняется',tone:'running'};
- if(s?.queued)return {label:'Ожидает очереди',tone:'waiting'};
+ if(s?.queued){
+  const minutes=Math.floor((now-(s.waiting_since??now))/60);
+  const age=minutes>=60?Math.floor(minutes/60)+' ч.':minutes+' мин.';
+  return {label:minutes>=10?'В очереди '+age:'Ожидает очереди',tone:'waiting'};
+ }
  if(s?.retry)return {label:'Повтор через '+Math.max(1,Math.ceil((s.retry_at-now)/60))+' мин.',tone:'retry'};
  if(group.enabled?.[key]===false)return {label:'Выключено',tone:'idle'};
  if(group.completed_stages?.[key])return {label:'Завершено',tone:'done'};
