@@ -74,3 +74,5 @@ def test_rating_only_templates_are_short_and_unique():
         replies.extend(rule_reply(review, product, revision) for revision in range(3))
     assert len(set(replies)) == len(replies) == 6
     assert max(map(len, replies)) < 110
+    assert all(any(phrase in reply for phrase in ('не устроило', 'не хватило', 'дополните отзыв'))
+               for reply in replies[:3])
