@@ -48,3 +48,14 @@ test('generation, checking and publication are separate stages without invented 
 test('committed reply progress wins over an older completed whole job',()=>{
  assert.equal(lastMovement({last_progress_at:'2026-11-03T17:55:00Z',tasks:[],completed_stages:{sync:{finished_at:'2026-11-03T10:00:00Z'}}}),'2026-11-03T17:55:00Z');
 });
+
+
+test('ages queued work per stage from its own last turn', () => {
+ const now=Date.parse('2026-11-26T12:30:00Z')/1000;
+ const [group]=serverWorkGroups([
+  {status:'queued',store_id:'oz',stage_key:'publication',created_at:'2026-11-26T10:00:00Z',last_served_at:'2026-11-26T12:12:00Z'},
+  {status:'queued',store_id:'oz',stage_key:'verification',created_at:'2026-11-26T12:29:00Z'}
+ ],now);
+ assert.equal(stageStatus(group,'publication',now).label,'В очереди 18 мин.');
+ assert.equal(stageStatus(group,'verification',now).label,'Ожидает очереди');
+});

@@ -72,3 +72,49 @@ def test_only_verified_dates_for_exact_inquiry_survive_conflict_and_certificate_
     assert production_date.confirmed_month(question, [record, {**record, 'date': '2025-09'}]) == ''
     assert not production_date.claim_issue(question, 'Месяц и год выпуска — 08.2025.', [record])
     assert production_date.claim_issue(question, 'Месяц и год выпуска — 08.2025.', [])
+
+
+def test_recheck_fixes_only_required_greeting_before_semantic_verification(client, monkeypatch):
+    from app.integrations import ollama
+    from app import services
+
+    # Scope this regression to formatting. Catalog/content scoring is covered
+    # by its own fixtures, including answers whose wording requires a rewrite.
+    monkeypatch.setattr(services, 'assess_reply', lambda *_a, **_k: {'passed': True, 'issues': []})
+
+    original = 'Здравствуйте. Спасибо за отзыв. Сожалеем, что результат Вас разочаровал.'
+    checker = AsyncMock(return_value={'compliant': True, 'violations': [], 'revised_answer': ''})
+    monkeypatch.setattr(ollama, 'structured', checker)
+    monkeypatch.setattr(ollama, 'reply_variants', AsyncMock(side_effect=AssertionError('format-only repair')))
+    with Session() as db:
+        db.add(Product(id='p', name='Автотовар'))
+        db.flush()
+        review = Review(id='r', wb_account_id='owner', wb_review_id='r', product_id='p',
+                        text='Не оправдал ожиданий', marketplace='yandex', rating=1)
+        db.add(review)
+        db.add(Memory(id='opening', text='Начинай ответ с «Здравствуйте!».',
+                      kind='REVIEW_RULE', enabled=True))
+        db.flush()
+        draft = Draft(id='d', review_id='r', text=original, original=original, quality={})
+        db.add(draft)
+        db.flush()
+        job_id = enqueue(db, draft, review, confirmed_repair=True).id
+        db.commit()
+
+    asyncio.run(recheck_step(job_id))
+    with Session() as db:
+        draft = db.get(Draft, 'd')
+        assert draft.text == original.replace('Здравствуйте.', 'Здравствуйте!', 1)
+        assert draft.quality['confirmed_repair']['status'] == 'pending'
+        assert not draft.quality['passed']
+    checker.assert_not_awaited()
+
+    for _ in range(4):
+        asyncio.run(recheck_step(job_id))
+        with Session() as db:
+            if db.get(Job, job_id).status == 'completed':
+                break
+    with Session() as db:
+        draft = db.get(Draft, 'd')
+        assert draft.quality['passed']
+        assert draft.quality['confirmed_repair']['status'] == 'rechecked'

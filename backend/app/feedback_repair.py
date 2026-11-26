@@ -2,8 +2,16 @@
 import re
 
 from .confirmed_reply_repair import normalized
-from .owner_reply_policy import apply_local_preferences, apply_signature, attach_rule_quality, context_constraints, fingerprint
+from .owner_reply_policy import apply_local_preferences, apply_signature, attach_rule_quality, context_constraints, fingerprint, local_issues
 from .safety import mask_vin, validate_reply
+
+
+def formatting_findings(reply, review, rules):
+    issues = local_issues(reply, rules, review)
+    if issues and all(issue.startswith('Не выполнено начало ответа: ')
+                      or issue == 'Не выполнена подпись ответа' for issue in issues):
+        return issues
+    return []
 
 
 def findings(quality, content, input_key=None):
@@ -23,7 +31,11 @@ async def stage(review, product, reply, quality, rules, facts, assess, notes, in
     audit = {'issue': notes[0], 'findings': notes, 'input_key': input_key, 'status': 'blocked'}
     try:
         buyer = normalized(review.text)
-        if single_request(review):
+        format_notes = formatting_findings(reply, review, rules)
+        if format_notes and set(notes) <= set(format_notes):
+            # Correct presentation without changing the buyer-facing substance.
+            candidate, _ = apply_local_preferences(reply, review, rules, style_only=True)
+        elif single_request(review):
             candidate = answer(review, product, facts)
         elif (not review.marketplace.endswith('_question') and review.rating >= 4
                 and re.fullmatch(r'\s*пока (?:вроде )?пахнет[, ]+посмотрим[, ]+(?:на ?сколько )?хватит[!. ]*', buyer)):
