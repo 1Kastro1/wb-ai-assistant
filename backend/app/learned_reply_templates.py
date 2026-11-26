@@ -135,12 +135,14 @@ def similar_candidate(db, review, product, rules, facts, assess, *, previous='')
 
 def remember_template(db, review, product, rules, facts, draft):
     from .owner_reply_policy import saved_rule_quality
+    from .review_context import context_current
     key = context_key(review, product, rules, facts)
     quality = draft.quality or {}
     verdict = quality.get('owner_rules') or {}
     if (not key or quality.get('passed') is not True or quality.get('text_issues') or
         verdict.get('checked') is not True or verdict.get('passed') is not True or
         verdict.get('technical_error') or verdict.get('issues') or
+        not context_current(review, draft.text, verdict) or
         not saved_rule_quality(draft.text,rules,verdict,review=review)['passed']):
         return False
     from .verified_reply_library import remember

@@ -231,7 +231,7 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
 async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=None,
                               allow_fast_positive=False, instruction='', local_only=False, check_only=False,
                               defer_semantic=False, previous_check=None, group_limit=None,
-                              background_heavy=False):
+                              background_heavy=False, require_review_context=False):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
@@ -254,12 +254,14 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     context_rules, skipped = select_rules(rules, review, product)
     result.update(context_rules=len(context_rules), skipped_rules=skipped, cache_hit=False)
     semantic = semantic_rules(context_rules)
-    full_context = needs_context_check(review) and not protected
-    if full_context:
-        semantic = [CONTEXT_RULE, *semantic]
-    has_update = (buyer_message(review) != review.text
+    raw_message = getattr(review, 'text', '') or ''
+    has_update = (buyer_message(review) != raw_message
                   or (getattr(review, 'sections', None) or {}).get('supplement')
-                  or re.search(r'\b(?:дополняю|дополню|дополнение|обновление отзыва)\b', review.text, re.I))
+                  or re.search(r'\b(?:дополняю|дополню|дополнение|обновление отзыва)\b', raw_message, re.I))
+    full_context = needs_context_check(review) and not protected
+    verify_context = full_context and (semantic or check_only or has_update or require_review_context)
+    if verify_context:
+        semantic = [CONTEXT_RULE, *semantic]
     if (not instruction.strip() and not protected and not result['issues']
             and (getattr(review, 'marketplace', '') or '').endswith('_question')):
         from .simple_question_templates import METHOD, question_template
@@ -433,7 +435,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     result['applied_preferences'] = list(dict.fromkeys(applied))
     result['verification_method'] = 'model' if semantic else 'local_constraints'
     result['verification_seconds'] = round(monotonic() - check_started, 4)
-    if full_context and result['checked'] and result['passed']:
+    if verify_context and result['checked'] and result['passed']:
         result['review_context_proof'] = context_proof(review, adjusted)
     if key and result['passed'] and assess(adjusted)['passed']:
         remember_verdict(key, adjusted, result)

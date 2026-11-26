@@ -33,11 +33,14 @@ def buyer_message(review):
 def needs_context_check(review):
     if getattr(review, 'marketplace', '') not in ('wb', 'ozon', 'yandex') or not buyer_message(review).strip():
         return False
+    from .equivalent_reviews import message_group
     from .rule_execution import simple_positive, UNTRIED_TEXTS
     if buyer_message(review) != (review.text or '') or (getattr(review, 'sections', None) or {}).get('supplement'):
         return True
     normalized = ' '.join(re.sub(r'[.!?,;…]', ' ', review.text.casefold().replace('ё', 'е')).split())
-    return not simple_positive(review) and normalized not in UNTRIED_TEXTS
+    # These groups enumerate equivalent *whole* messages. Their deterministic
+    # publication check still re-evaluates the actual text and outgoing reply.
+    return not simple_positive(review) and normalized not in UNTRIED_TEXTS and not message_group(review.text)
 
 
 def review_details(message):

@@ -59,7 +59,7 @@ async def repair(review, product, rules, facts, assess, *, local_only=False, gen
             options = {'check_only': True, 'group_limit': 1, 'previous_check': (resume or {}).get('proof')}
         answer, verdict = await enforce_owner_rules(candidate, review, product, rules, facts, assess,
             allow_fast_positive=True, check_seconds=MINION_RULE_CHECK_SECONDS if generation_seconds else AUTO_RULE_CHECK_SECONDS,
-            local_only=local_only, **options)
+            local_only=local_only, require_review_context=True, **options)
     except FastPathUnavailable:
         if local_only:return None
         raise
