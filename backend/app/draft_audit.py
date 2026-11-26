@@ -43,7 +43,7 @@ async def repair_step(job_id, session_factory=Session, limit=25):
             rid = db.scalar(select(Draft.review_id).where(Draft.id == did))
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
-            if not review or not draft or review.is_answered or review.status == 'publishing':
+            if not review or not draft or review.is_answered or review.status in ('publishing', 'published'):
                 continue
             if db.scalar(select(GenerationClaim.review_id).where(GenerationClaim.review_id == rid, GenerationClaim.expires_at > time.time())):
                 # Revisit the current cursor after the active generation finishes.
@@ -156,7 +156,7 @@ def automatic_check_condition():
 async def _recheck_one(job_id, session_factory=Session):
     from .services import assess_reply, assess_question_answer, trusted_product_facts, review_verified_facts
     from .confirmed_reply_repair import confirmed_issue, repair, repair_pending, repair_unverified
-    from .feedback_repair import findings, stage
+    from .feedback_repair import findings, formatting_findings, stage
     from .owner_reply_rules import matching_owner_rules, owner_business_facts
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     with session_factory() as db:
@@ -214,7 +214,7 @@ async def _recheck_one(job_id, session_factory=Session):
         nonlocal attempted
         with session_factory() as db:
             review, draft = db.get(Review, rid), db.get(Draft, did)
-            if not review or not draft or review.is_answered or review.status == 'publishing':
+            if not review or not draft or review.is_answered or review.status in ('publishing', 'published'):
                 return False
             expected = (draft.revision, draft.text, review.text, review.rating, review.product_id)
             if state.get('repair_revision', state.get('target_revision', draft.revision)) != draft.revision:
@@ -237,8 +237,16 @@ async def _recheck_one(job_id, session_factory=Session):
             issue = confirmed_issue(review, draft.text)
             protected = (manually_edited(draft) or review.manual or review.safety_critical or review.risk != 'NORMAL'
                          or bool(question and (draft.quality or {}).get('fitment')))
-            notes = (findings(draft.quality, assess(draft.text), input_key)
-                     if not protected and previous.get('input_key') == input_key else [])
+            notes = []
+            if not protected and not continuing_repair and not issue:
+                assessment = assess(draft.text)
+                if previous.get('input_key') == input_key:
+                    notes = findings(draft.quality, assessment, input_key)
+                if not notes and assessment.get('passed') is True:
+                    local = formatting_findings(draft.text, review, rules)
+                    repair_audit = (draft.quality or {}).get('confirmed_repair') or {}
+                    if local and repair_audit.get('input_key') != input_key:
+                        notes = local
             if not notes and (state.get('rule_change') or (check_only and not issue and not state.get('manual_check')
                     and previous.get('input_key') == input_key)):
                 if not needs_verification(db, draft, review, product, rules, input_key=input_key):
@@ -290,7 +298,7 @@ async def _recheck_one(job_id, session_factory=Session):
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
             if (not draft or not review or db.get(Job, job_id).cancel_requested or review.is_answered
-                    or review.status == 'publishing' or expected != (draft.revision, draft.text, review.text, review.rating, review.product_id)):
+                    or review.status in ('publishing', 'published') or expected != (draft.revision, draft.text, review.text, review.rating, review.product_id)):
                 return False
             # Never apply a model rewrite to an employee's/manual answer, nor
             # allow a model repair that fails the independent semantic checks.
