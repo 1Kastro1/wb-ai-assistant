@@ -1,4 +1,6 @@
 import asyncio
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -90,7 +92,13 @@ def test_changed_product_count_invalidates_the_saved_template(client, monkeypatc
 @pytest.mark.parametrize('message', ['товар в наличии?', 'Добрый вечер. Будет ещё в наличии?'])
 def test_stock_questions_use_no_claims_template(message):
     question = Review(marketplace='wb_question', text=message, risk='NORMAL')
-    answer = question_template(question, Product(name='Лампа'), [], [])
+    fixtures = Path(__file__).with_name('fixtures')
+    greeting = json.loads((fixtures / 'deduplicated_style_rules.json').read_text(encoding='utf-8'))['question']
+    rules = json.loads((fixtures / 'cleanup_policy_before.json').read_text(encoding='utf-8'))
+    returns = next(rule['text'] for rule in rules if rule['text'].startswith('Правила по возвратам и отказам'))
+    product = Product(name='Лампа')
+    answer = question_template(question, product, [greeting, returns], [])
     assert answer and 'в наличии' in answer
+    assert question_template(question, product, [greeting + ' Указывай остатки склада.'], []) is None
     question.text = message + ' Подойдёт ли на Весту?'
-    assert question_template(question, Product(name='Лампа'), [], []) is None
+    assert question_template(question, product, [greeting, returns], []) is None

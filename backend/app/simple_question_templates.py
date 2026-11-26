@@ -13,7 +13,9 @@ GENERAL_RULES = {
     'b9ad2f1d5e274f3ae6cc77e956944d3ea858339944c50d5b5a2a7f26126e86ba',  # Delivery and stock
     '4dfa25e8732faeb041b57049142d0e142fcaf6ac0a87d1393984b405bf239364',  # Package quantity and markings
     '93af82cf5218f3ff53d8de50b3c88591e6388bd00bb7710eeeb2ab152c7f6d50',  # Greeting and completeness
+    'c0b7d65f89d064fee256defe35e5d6063cc36a52db8b45cbcd66188ba70a369e',  # Both approved greetings
     'e607e2034c7488c65cf485cba51355fb0c9876f61904163ec4e6f674af5bbc8b',  # Evidence and safety
+    'd2d9b092cd84db9a0b92f42e9a73a19ffdbffce9081bacc1801773139fa575f1',  # Conditional returns policy
     '1ea72cffe4dda72bcba9104e5e200f9b9628e12bbd3b48d3c023324787c7ab35',  # Conditional compatibility
 }
 DELIVERY_RULES = GENERAL_RULES | {
