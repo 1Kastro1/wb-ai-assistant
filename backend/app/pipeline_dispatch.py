@@ -40,16 +40,16 @@ async def run_publication_group(job_id, execute, session_factory):
 async def run_slice(job_id, execute, session_factory=Session, poll_seconds=1):
     """Caller owns sync/maintenance locks until all child tasks have finished.
 
-    The existing generation batch already has its own safe concurrent I/O lane.
-    Its nested dispatcher must not be duplicated here. Audit/check model calls
-    used to hold the only consumer for up to the whole model deadline.
+    The dedicated I/O lane can deliver a committed answer even while the first
+    model call of a generation batch is pending. Disable nested dispatch from
+    the batch in this context so there is still only one caller taking I/O jobs.
     """
     with session_factory() as db:
         job = db.get(Job, job_id)
         kind = job.kind if job else None
     if kind == PUBLICATION:
         return await run_publication_group(job_id, execute, session_factory)
-    if kind not in MODEL_WORK:
+    if kind not in (*MODEL_WORK, 'drafts', 'question_drafts'):
         return await execute(job_id)
     token = parallel_slice.set(True)
     parent = asyncio.create_task(execute(job_id))

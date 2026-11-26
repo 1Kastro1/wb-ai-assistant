@@ -1,11 +1,13 @@
 import asyncio
+import pytest
 from app.db import Session, Job, StoreProfile
 from app.pipeline_dispatch import run_slice, parallel_slice
 
 
-def test_io_finishes_while_model_is_waiting_without_starting_second_model():
+@pytest.mark.parametrize('kind', ['draft_recheck', 'drafts', 'question_drafts'])
+def test_io_finishes_while_model_is_waiting_without_starting_second_model(kind):
     with Session() as db:
-        db.add_all([Job(id='model',kind='draft_recheck'),Job(id='model2',kind='draft_recheck'),
+        db.add_all([Job(id='model',kind=kind),Job(id='model2',kind='draft_recheck'),
             Job(id='sync',kind='reviews'),Job(id='send',kind='scheduled_publication')]);db.commit()
     async def scenario():
         io_finished=asyncio.Event();seen=[]
@@ -62,17 +64,18 @@ def test_continuous_fresh_batches_cannot_starve_archive_or_confirmed_sends():
     from app.queue_policy import next_job
     current=datetime.now(timezone.utc)
     old=(current-timedelta(minutes=10)).isoformat()
-    fresh=(current-timedelta(seconds=40)).isoformat()
+    fresh=(current-timedelta(seconds=90)).isoformat()
     with Session() as db:
         db.add_all([Job(id='archive',kind='review_library_audit',result={'last_served_at':old}),
             Job(id='send',kind='scheduled_publication',result={'last_served_at':old}),
             Job(id='fresh',kind='drafts',result={'fresh_reviews':True,'last_served_at':fresh})]);db.commit()
-        picked=set()
-        for _ in range(2):
-            job=next_job(db);picked.add(job.id)
+        assert next_job(db).id == 'fresh'
+        picked=[]
+        for _ in range(3):
+            job=next_job(db);picked.append(job.id)
             job.result={**job.result,'last_served_at':current.isoformat()};db.commit()
-        assert picked=={'archive','send'}
-        assert next_job(db).id=='fresh'
+        assert picked[0] == 'fresh'
+        assert set(picked[1:]) == {'archive','send'}
 
 
 def test_complete_validated_save_has_an_approval_event_but_pending_or_failed_check_does_not():

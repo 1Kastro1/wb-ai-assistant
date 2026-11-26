@@ -77,7 +77,9 @@ def positive_detail(text):
 
 
 def positive_review_reply(review, product, revision=0):
-    from .reply_policy import analyze_customer_message
+    from .reply_policy import analyze_customer_message, first_impression_reply
+    if concise := first_impression_reply(review, revision):
+        return concise
     analysis = analyze_customer_message(review.text, review.rating)
     if not review.text.strip() or review.rating < 4 or analysis['sentiment'] in ('negative', 'mixed') or analysis['is_question']:
         return None

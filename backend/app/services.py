@@ -456,10 +456,11 @@ def assess_reply(review, product, reply, verified_facts=None):
     lowered = reply.lower().replace('ё', 'е')
     reply_words = set(WORDS.findall(lowered))
     issues, score = [], 40
-    from .reply_policy import has_reply_body
+    from .reply_policy import has_reply_body, first_impression, FIRST_IMPRESSION_THANKS
     from .review_context import buyer_message, review_details
     message = buyer_message(review)
-    audited_praise = message == review.text and simple_positive(review)
+    short_first_impression = first_impression(review) and any(thanks in reply for thanks in FIRST_IMPRESSION_THANKS)
+    audited_praise = (message == review.text and simple_positive(review)) or short_first_impression
     review_words = set(WORDS.findall(message.lower()))
     if not has_reply_body(reply):
         issues.append('ответ пустой: нужны благодарность и ответ по существу, а не только приветствие и подпись')

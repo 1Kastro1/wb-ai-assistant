@@ -45,6 +45,26 @@ def jobs():
     with Session() as db: return list(db.scalars(select(Job.id).where(Job.kind == automatic.KIND)))
 
 
+def test_archive_only_skip_pauses_but_verified_reply_wakes_delivery(client, ready, monkeypatch):
+    from app.queue_policy import next_job
+
+    enable(client, enabled=True, publication_questions=False)
+    monkeypatch.setattr(automatic, 'BATCH_SIZE', 1)
+    monkeypatch.setattr(automatic, 'eligibility_reason', lambda *_: 'Old approval')
+    with Session() as db:
+        job_id = next_job(db, (automatic.KIND,), account_ids=['owner']).id
+    asyncio.run(automatic.run_step(job_id))
+    with Session() as db:
+        job = db.get(Job, job_id)
+        assert job.result['skipped'] == 1
+        assert next_job(db, (automatic.KIND,), account_ids=['owner']) is None
+        schedule = setting(db, 'automation_schedule')
+        automatic.enqueue(db, schedule, db.get(StoreProfile, 'owner'), 0, target={'ownerreview': 9})
+        db.commit()
+        assert next_job(db, (automatic.KIND,), account_ids=['owner']).id == job_id
+        assert job.result['priority_reviews'] == {'ownerreview': 9}
+
+
 @pytest.mark.parametrize('store', ['owner', 'oz', 'ya'])
 def test_stale_buyer_update_is_checked_by_minion_before_publishing(client, ready, store, monkeypatch):
     from app.db import ReviewLibraryAuditRow
