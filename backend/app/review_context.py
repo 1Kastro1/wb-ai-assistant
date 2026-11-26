@@ -74,6 +74,9 @@ def context_proof(review, answer):
 
 
 def context_current(review, answer, verdict):
-    return (not needs_context_check(review) or
-            ((verdict or {}).get('checked') is True and (verdict or {}).get('passed') is True
-             and verdict.get('review_context_proof') == context_proof(review, answer)))
+    verdict = verdict or {}
+    proof = verdict.get('review_context_proof')
+    if not proof:
+        return not needs_context_check(review)
+    return (verdict.get('checked') is True and verdict.get('passed') is True
+            and proof == context_proof(review, answer))

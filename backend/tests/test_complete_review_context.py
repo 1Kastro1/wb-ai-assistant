@@ -32,6 +32,8 @@ def test_verdict_is_bound_to_latest_complete_message(monkeypatch, marketplace):
     assert not context_current(review, answer + ' Спасибо!', verdict)
     review.sections = {'supplement': 'Через два дня аромат исчез.'}
     assert not context_current(review, answer, verdict)
+    review.text, review.sections = 'Отлично!', {}
+    assert not context_current(review, answer, verdict)
 
 
 @pytest.mark.parametrize('is_supplement', [False, True])
