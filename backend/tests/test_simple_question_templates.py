@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app import config, main, scheduled_publication, services
-from app.db import Account, Draft, Job, Product, Publication, Review, Session, set_setting
+from app.db import Account, Draft, Job, Memory, Product, Publication, Review, Session, set_setting
 from app.simple_question_templates import METHOD, STALE
 from app.skill_engine import ENABLED
 
@@ -27,6 +27,7 @@ def prepare(monkeypatch, *, facts):
         set_setting(db, 'test_mode', False)
         set_setting(db, 'safe_mode', False)
         db.add(Account(id='owner', encrypted_token='fake-provider'))
+        db.add(Memory(id='review-greeting', kind='REVIEW_RULE', text='Каждый ответ начинай с «Добрый день!».'))
         db.add(Product(id='product', name='Лампа', facts=facts))
         db.flush()
         db.add(Review(id='question', wb_review_id='question', wb_account_id='owner', product_id='product',

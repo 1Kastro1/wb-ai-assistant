@@ -227,6 +227,8 @@ def positive_template(review, rules, revision=0, *, product=None):
     from .safety import validate_reply
     if not simple_positive(review):
         return untried_template(review, rules, revision, product=product)
+    if not rules:
+        return None
     # Evaluate the same applicable policy as the final verifier. A certified
     # workflow/category exclusion must not disable the no-claims route, while an
     # unknown or edited directive must still reach semantic verification.
