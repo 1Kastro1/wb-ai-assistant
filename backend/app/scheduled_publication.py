@@ -163,6 +163,9 @@ def eligibility_reason(db, review, draft, schedule):
         previous and previous.get('passed') is not True):
         return 'Сначала завершите проверку правил.'
     product = db.get(Product, review.product_id)
+    from .production_date import publication_issue
+    if question and (date_issue := publication_issue(db, review, product, draft.text)):
+        return date_issue
     rules = matching_owner_rules(db, product, for_questions=question)
     from .simple_question_templates import STALE, stale_question_template
     if question and stale_question_template(db, review, draft, product, rules):
