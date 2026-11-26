@@ -103,7 +103,7 @@ class SharedMarketplaceTests(unittest.TestCase):
     def test_question_model_receives_same_brand_rules_and_style_on_all_markets(self):
         self.seed_channels('Контейнер', 'TEST', 'BOX-1', 'Контейнеры')
         payloads = []
-        async def variants(messages, count):
+        async def variants(messages, count, *, timeout_seconds):
             payloads.append(json.loads(messages[1]['content']))
             return ['Здравствуйте! Корпус этого контейнера изготовлен из полипропилена, как указано в характеристиках товара.']
         with self.factory() as db:
@@ -119,7 +119,7 @@ class SharedMarketplaceTests(unittest.TestCase):
                     self.assertEqual(result['quality']['policy_version'], POLICY_VERSION)
         self.assertEqual(len(payloads), 3)
         for payload in payloads:
-            self.assertIn('Отвечай по существу, без лишних уточнений.', payload['store_rules'])
+            self.assertIn('Отвечай по существу, без лишних уточнений.', payload['owner_rules'])
             self.assertEqual(payload['reply_style'], payloads[0]['reply_style'])
             self.assertEqual(payload['verified_facts'], payloads[0]['verified_facts'])
 
@@ -301,7 +301,3 @@ class SharedMarketplaceTests(unittest.TestCase):
                     self.assertNotIn(signature, question['text'])
                     self.assertEqual(review['quality']['owner_rules']['matched'], 1)
                     self.assertEqual(question['quality']['owner_rules']['matched'], 1)
-
-
-
-

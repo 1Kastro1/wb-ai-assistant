@@ -8,7 +8,7 @@ from app.db import Session, Product, Review, Draft, Setting
 from app.rule_execution import audited_usage_replies
 from app.owner_reply_rules import matching_owner_rules
 from app.learned_reply_templates import load_template
-from test_new_variant_context import seed
+from test_new_variant_context import generate_and_check, seed
 
 FACT = {'kind':'instruction','source':'Карточка товара','verification_status':'VERIFIED',
         'text':'Нанесите средство на поверхность с помощью губки или мягкой салфетки. Оставьте на 5 минут. Протрите, удаляя грязь и остатки средства.'}
@@ -60,7 +60,7 @@ def test_unknown_policy_still_requires_semantic_check_and_timeout_is_not_approva
         db.get(Product,'lotion').facts=[FACT]
         db.add(Memory(id='extra',scope='global',kind='REVIEW_RULE',text='Объясняй ответ строго по новому требованию владельца.'))
         db.commit()
-        result=asyncio.run(services.generate_draft(db,'buyer'))
+        result=asyncio.run(generate_and_check(db))
         assert not result['quality']['passed']
         assert result['quality']['owner_rules']['technical_error']
         assert not list(db.scalars(select(VerifiedReplyContext)))

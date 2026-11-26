@@ -159,7 +159,7 @@ def test_rejected_model_reply_is_replaced_by_new_safe_model_reply(client, monkey
     "Здравствуйте! Сожалеем, что товар оказался неудовлетворительного качества. Спасибо, что сообщили о своём впечатлении. Уточните, пожалуйста, с какой проблемой Вы столкнулись при использовании, чтобы подобрать полезный совет."
 ]
     calls = []
-    async def local(messages, schema=None):
+    async def local(messages, schema=None, *, timeout_seconds=None):
         calls.append(messages)
         return candidates[min(len(calls) - 1, len(candidates) - 1)]
     monkeypatch.setattr(ollama, 'chat', local)
@@ -186,7 +186,7 @@ def test_best_of_three_is_generated_in_one_model_request(client, monkeypatch):
     "Здравствуйте! Сожалеем, что товар оказался неудовлетворительного качества. Спасибо, что сообщили о своём впечатлении. Уточните, пожалуйста, с какой проблемой Вы столкнулись при использовании, чтобы подобрать полезный совет."
 ]
     calls = []
-    async def local(messages, schema=None):
+    async def local(messages, schema=None, *, timeout_seconds=None):
         calls.append(messages)
         return json.dumps({'variants': variants}, ensure_ascii=False)
     monkeypatch.setattr(ollama, 'chat', local)
