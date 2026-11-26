@@ -459,6 +459,7 @@ def assess_reply(review, product, reply, verified_facts=None):
     from .reply_policy import has_reply_body
     from .review_context import buyer_message, review_details
     message = buyer_message(review)
+    audited_praise = message == review.text and simple_positive(review)
     review_words = set(WORDS.findall(message.lower()))
     if not has_reply_body(reply):
         issues.append('ответ пустой: нужны благодарность и ответ по существу, а не только приветствие и подпись')
@@ -470,7 +471,7 @@ def assess_reply(review, product, reply, verified_facts=None):
         'relevance': {'label': 'Соответствие отзыву', 'score': 0, 'max': 12},
         'resolution': {'label': 'Полезность решения', 'score': 0, 'max': 18},
     }
-    minimum_length = 25 if not message.strip() or simple_positive(review) else 60 if review.rating >= 4 else 120
+    minimum_length = 25 if not message.strip() or audited_praise else 60 if review.rating >= 4 else 120
     if minimum_length <= len(reply) <= 900:
         score += 15
         breakdown['substance']['score'] = 15
@@ -494,7 +495,8 @@ def assess_reply(review, product, reply, verified_facts=None):
     analysis = analyze_customer_message(message, review.rating)
     acknowledged = bool(analysis['complaints']) and not missing_complaints(analysis, reply)
     simple_praise = len(message.split()) <= 5 and analysis['sentiment'] == 'positive' and not analysis['complaints']
-    if overlap or len(review_words) <= 1 or acknowledged or simple_praise or _addresses_review_topic(message, reply) or (specific_case or {}).get('answer') == reply:
+    if (overlap or len(review_words) <= 1 or acknowledged or simple_praise or audited_praise
+            or _addresses_review_topic(message, reply) or (specific_case or {}).get('answer') == reply):
         score += 12
         breakdown['relevance']['score'] = 12
     else:
