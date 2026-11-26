@@ -238,7 +238,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     a style model. No rule can turn itself into verified product/catalog evidence.
     """
     from .integrations import ollama
-    from .review_context import CONTEXT_RULE, buyer_message, context_proof, needs_context_check
+    from .review_context import buyer_message, context_proof, needs_context_check
     check_started = monotonic()
     adjusted, applied = (reply, []) if check_only else apply_local_preferences(reply, review, rules, style_only=protected)
     if not check_only:
@@ -259,9 +259,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                   or (getattr(review, 'sections', None) or {}).get('supplement')
                   or re.search(r'\b(?:дополняю|дополню|дополнение|обновление отзыва)\b', raw_message, re.I))
     full_context = needs_context_check(review) and not protected
-    verify_context = full_context and (semantic or check_only or has_update or require_review_context)
-    if verify_context:
-        semantic = [CONTEXT_RULE, *semantic]
+    verify_context = full_context and bool(semantic or check_only or has_update or require_review_context)
     if (not instruction.strip() and not protected and not result['issues']
             and (getattr(review, 'marketplace', '') or '').endswith('_question')):
         from .simple_question_templates import METHOD, question_template
@@ -311,7 +309,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     if local_only:
         from .generation_control import FastPathUnavailable
         raise FastPathUnavailable('Нужна дополнительная проверка правил')
-    if semantic and not protected and not result['issues']:
+    if (semantic or verify_context) and not protected and not result['issues']:
         from .model_router import ModelRouter
         key = verification_key(adjusted, review, product, rules, facts, instruction, ModelRouter().choose('OWNER_RULES'))
         cached = cached_verdict(key)
@@ -325,12 +323,12 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     if semantic and protected:
         result.update(checked=False)
         result['issues'].append('Проверьте дополнительные правила магазина: вывод каталога или предупреждение безопасности сохранены без переформулировки.')
-    elif semantic and defer_semantic:
+    elif (semantic or verify_context) and defer_semantic:
         # Generation has already observed an unavailable model. Save the draft
         # and retry verification durably rather than spending a second deadline.
         result.update(checked=False, technical_error=True, reason='сервис модели недоступен')
         result['issues'].append('Ответ сохранён; проверка правил продолжится в фоне после восстановления сервиса модели.')
-    elif semantic:
+    elif semantic or verify_context:
         # A model repair may resolve the initial local defects. Recompute them
         # against the final text below instead of retaining stale warnings.
         result['issues'] = []
@@ -345,7 +343,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             budget = GenerationBudget(minimum)
             for attempt in range(2):
                 messages, payload, schema, groups = prepare(review, product, semantic, facts, adjusted,
-                    protected=protected, check_only=check_only, style_rules=rules)
+                    protected=protected, check_only=check_only, style_rules=rules, verify_context=verify_context)
                 result['semantic_groups'] = len(groups)
                 if background_heavy and not check_only and groups:
                     messages[-1]['content'] = request_json(payload, groups[0])
@@ -433,7 +431,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     result['violations'] = local_issues(adjusted, rules, review) if result.get('checked') is False else list(result['issues'])
     result['passed'] = not result['issues']
     result['applied_preferences'] = list(dict.fromkeys(applied))
-    result['verification_method'] = 'model' if semantic else 'local_constraints'
+    result['verification_method'] = 'model' if (semantic or verify_context) else 'local_constraints'
     result['verification_seconds'] = round(monotonic() - check_started, 4)
     if verify_context and result['checked'] and result['passed']:
         result['review_context_proof'] = context_proof(review, adjusted)

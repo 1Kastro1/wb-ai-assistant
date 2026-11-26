@@ -34,7 +34,7 @@ def fitting_rule_groups(groups, system_message, payload, schema):
             {**payload, 'owner_rules': group}, ensure_ascii=False) + '\n/no_think'}]
         needed = request_tokens(messages, schema)
         # Prefer small windows on CPU, but keep an indivisible whole policy.
-        if needed <= 6144 or (len(group) == 1 and needed <= MAX_CONTEXT):
+        if needed <= 6144 or (len(group) <= 1 and needed <= MAX_CONTEXT):
             result.append(group)
         elif len(group) > 1:
             middle = len(group) // 2

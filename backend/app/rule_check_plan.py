@@ -23,13 +23,16 @@ def request_json(payload, group):
     return json.dumps({**payload, 'owner_rules': group}, ensure_ascii=False, separators=(',', ':'))
 
 
-def prepare(review, product, rules, facts, answer, *, protected=False, check_only=False, style_rules=None):
+def prepare(review, product, rules, facts, answer, *, protected=False, check_only=False, style_rules=None,
+            verify_context=False):
     from .owner_reply_policy import context_constraints, rule_groups, CHECK_SCHEMA
     from .reply_policy import analyze_customer_message
     from .review_cases import specific_review_case
-    from .review_context import buyer_message
+    from .review_context import CONTEXT_RULE, buyer_message
     schema = deepcopy(CHECK_SCHEMA)
     system = SYSTEM
+    if verify_context:
+        system += ' ' + CONTEXT_RULE
     if check_only:
         # A saved-text check cannot apply a revision. Do not ask the small CPU
         # model to generate a second customer reply that will be discarded.
@@ -49,7 +52,10 @@ def prepare(review, product, rules, facts, answer, *, protected=False, check_onl
         'required_style': {key: style[key] for key in ('greeting', 'greetings', 'signature')},
         'protected_answer': protected}
     messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': ''}]
-    groups = fitting_rule_groups(rule_groups(rules), messages[0], payload, schema)
+    groups = rule_groups(rules)
+    if verify_context and not groups:
+        groups = [[]]
+    groups = fitting_rule_groups(groups, messages[0], payload, schema)
     return messages, payload, schema, groups
 
 
