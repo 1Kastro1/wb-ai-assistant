@@ -29,6 +29,9 @@ REGISTRY = {skill.id: skill for skill in (
           'Анализ', 'Классификация по содержанию', ('Вопрос',), ('Категория',)),
     Skill('product_knowledge', 'Сведения о товаре', 'Подбирает подтверждённые сведения для ответа.',
           'Контекст', 'Существующая база знаний и карточка товара', ('Товар',), ('Факты',)),
+    Skill('verified_template', 'Проверенный шаблон', 'Подбирает ответ для простого обращения, если выполнены условия шаблона.',
+          'Подготовка', 'Локальные правила и подтверждённые сведения', ('Обращение', 'Факты', 'Правила'),
+          ('Черновик',), ('product_knowledge',), required=False),
     Skill('model_generation', 'Подготовка текста моделью', 'Предлагает ответ, когда нужен AI-вызов.',
           'Подготовка', 'Текущий маршрутизатор Ollama и общий лимит времени', ('Обращение', 'Факты'), ('Черновик',),
           ('product_knowledge',), required=False),
@@ -92,7 +95,14 @@ class ReplySkills:
 
     def save(self, quality, model, route):
         if self.enabled:
+            from .config import MODEL
+            from .simple_question_templates import METHOD
+            proof = quality.get('owner_rules') or {}
+            method = proof.get('verification_method') or ''
+            template = method in (METHOD, 'local_positive', 'local_saved_positive') or method.startswith('learned_')
             quality['skill_engine'] = {
                 'version': VERSION, 'kind': self.kind, 'steps': list(self.steps.values()),
-                'model': model, 'route': route, 'passed': quality.get('passed') is True,
+                'model': model, 'route': 'template' if template else route, 'passed': quality.get('passed') is True,
+                'generation_model': MODEL if 'model_generation' in self.steps else '',
+                'policy_model': MODEL if method == 'model' else '',
             }
