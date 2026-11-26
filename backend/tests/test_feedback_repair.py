@@ -76,6 +76,11 @@ def test_only_verified_dates_for_exact_inquiry_survive_conflict_and_certificate_
 
 def test_recheck_fixes_only_required_greeting_before_semantic_verification(client, monkeypatch):
     from app.integrations import ollama
+    from app import services
+
+    # Scope this regression to formatting. Catalog/content scoring is covered
+    # by its own fixtures, including answers whose wording requires a rewrite.
+    monkeypatch.setattr(services, 'assess_reply', lambda *_a, **_k: {'passed': True, 'issues': []})
 
     original = 'Здравствуйте. Спасибо за отзыв. Сожалеем, что результат Вас разочаровал.'
     checker = AsyncMock(return_value={'compliant': True, 'violations': [], 'revised_answer': ''})
