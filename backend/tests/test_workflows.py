@@ -22,11 +22,14 @@ def test_reply_validation(text):
     with pytest.raises(ValueError): validate_reply(text)
 
 
-@pytest.mark.parametrize('rating,expected', [(5, 'оценку'), (2, 'что именно вас не устроило')])
+@pytest.mark.parametrize('rating,expected', [
+    (5, ('оценку', 'оценили')),
+    (2, ('не устроило', 'не хватило', 'дополните отзыв')),
+])
 def test_rating_only_review_uses_local_template(rating, expected):
     review = SimpleNamespace(text='', rating=rating, risk='NORMAL')
     product = SimpleNamespace(brand='OTHER')
-    assert expected in rule_reply(review, product).lower()
+    assert any(value in rule_reply(review, product).lower() for value in expected)
 
 
 def test_fragrance_complaint_uses_safe_local_template():

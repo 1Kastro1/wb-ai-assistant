@@ -44,7 +44,8 @@ async def observe(skills, inquiry, reply, facts, quality):
         if 'model_generation' not in skills.steps:
             return
     evidence = [mask_vin(fact['text']) for fact in facts if isinstance(fact.get('text'), str) and fact['text']]
-    data = {'message': mask_vin(inquiry.text), 'answer': mask_vin(reply), 'evidence': evidence}
+    from .review_context import buyer_message
+    data = {'message': mask_vin(buyer_message(inquiry)), 'answer': mask_vin(reply), 'evidence': evidence}
     messages = [{'role': 'system', 'content': SYSTEM},
                 {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)}]
 

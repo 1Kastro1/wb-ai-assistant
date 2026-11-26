@@ -11,19 +11,22 @@ DENSO_WIPERS = 'https://www.denso-am.eu/news/wiper-blade-troubleshooting-from-de
 
 def specific_review_case(review, product):
     from .brake_feedback import case as brake_case
+    from .review_context import buyer_message, review_details
     matched = brake_case(review, product)
     if matched:return matched
-    text = ' '.join((review.text or '').lower().replace('ё', 'е').split())
+    message = buyer_message(review)
+    text = ' '.join(message.lower().replace('ё', 'е').split())
     name = (getattr(product, 'name', '') + ' ' + getattr(product, 'category', '')).lower()
-    analysis = analyze_customer_message(review.text, review.rating)
-    faults = ' '.join(complaint_text(review.text).split())
+    analysis = analyze_customer_message(message, review.rating)
+    faults = ' '.join(complaint_text(message).split())
     thanks = 'Добрый день! Спасибо за отзыв. '
     def result(key, answer, url='', evidence=''):
         sources = [{'text': evidence, 'source': url, 'verification_status': 'VERIFIED', 'source_type': 'technical_reference'}] if url else []
         return {'key': key, 'answer': thanks + answer, 'sources': sources}
 
     if not text and review.rating <= 3:
-        return result('rating_only', 'Сожалеем, что покупка оставила такое впечатление. Подскажите, пожалуйста, что именно Вас не устроило? Это поможет нам ответить по существу.')
+        from .rule_execution import low_rating_body
+        return {'key': 'rating_only', 'answer': 'Добрый день! ' + low_rating_body(review), 'sources': []}
 
     # Never turn braking failure, overheating or grinding into a bedding-in reply.
     braking_failure = re.search(r'не тормоз|плохо тормоз|хуже тормоз|перегрев|дым|заклини|скрежет|провалива|вибрац|биени', text)
@@ -35,11 +38,28 @@ def specific_review_case(review, product):
 
     if getattr(review, 'risk', 'NORMAL') != 'NORMAL' or analysis['buyer_asks_about_money']:
         return None
+    details = review_details(message)
+    if 'wrong_scent' in details and not analysis['is_question'] and not set(analysis['complaints']) - {'WRONG_ITEM', 'ODOR_COMPLAINT'}:
+        step = ('По уже полученному заказу можно обратиться в поддержку маркетплейса и сообщить о несоответствии.'
+                if re.search(r'дома|забрал|(?:уже\s+)?получил', text) else
+                'Если несоответствие обнаружилось до получения в ПВЗ, можно отказаться от заказа.')
+        return result('wrong_scent', 'Извините, что Вы получили другой аромат вместо заказанного. '
+                      + step)
+    if 'scent_improved' in details and not analysis['is_question'] and not set(analysis['complaints']) - {'WEAK_SCENT'}:
+        return result('scent_improved', 'Рады, что после изменения положения ароматизатора запах стал заметнее.')
+    if 'scent_duration' in details and not analysis['is_question'] and not set(analysis['complaints']) - {'WEAK_SCENT', 'ODOR_COMPLAINT'}:
+        return result('scent_duration', 'Жаль, что в этот раз аромат держался меньше, чем раньше. '
+                      'Продолжительность зависит от условий использования, в том числе от температуры и обдува.')
+    if 'scent_too_strong' in details and not analysis['is_question'] and not set(analysis['complaints']) - {'ODOR_COMPLAINT'}:
+        praise = 'Рады, что сам аромат Вам понравился. ' if re.search(r'(?:запах|аромат)\s+приятн', text) else ''
+        return result('scent_too_strong', praise + 'Понимаем, что он показался Вам слишком сильным.' if praise else
+                      'Понимаем, что аромат показался Вам слишком сильным.')
     if (set(analysis['complaints']) == {'PACKAGING_ISSUE'} and analysis['sentiment'] == 'negative'
             and not analysis['is_question'] and (opened_packaging(faults) or packaging_wear(faults))):
         wear = packaging_wear(faults)
         answer = ('Извините за состояние упаковки и потёртости, которые Вы заметили на товаре. '
-                  'Мы отправляем только новые товары.' if wear else 'Извините, что коробка оказалась вскрытой.')
+                  'Мы отправляем только новые товары.' if wear else
+                  'Извините, что коробка оказалась вскрытой. Мы отправляем только новые товары.')
         if wb_pickup_refusal_applies(review):
             answer += (' Если в пункте выдачи до получения заказа Вы обнаружите, что товар повреждён'
                        ' или не соответствует заказу, Вы можете отказаться от его получения.')

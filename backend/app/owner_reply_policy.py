@@ -231,13 +231,14 @@ CHECK_SCHEMA = {'type': 'object', 'properties': {
 async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, protected=False, check_seconds=None,
                               allow_fast_positive=False, instruction='', local_only=False, check_only=False,
                               defer_semantic=False, previous_check=None, group_limit=None,
-                              background_heavy=False):
+                              background_heavy=False, require_review_context=False):
     """Return text and an honest verification result, including outages/conflicts.
 
     Catalog and critical safety conclusions may be checked but never rewritten by
     a style model. No rule can turn itself into verified product/catalog evidence.
     """
     from .integrations import ollama
+    from .review_context import buyer_message, context_proof, needs_context_check
     check_started = monotonic()
     adjusted, applied = (reply, []) if check_only else apply_local_preferences(reply, review, rules, style_only=protected)
     if not check_only:
@@ -253,6 +254,12 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     context_rules, skipped = select_rules(rules, review, product)
     result.update(context_rules=len(context_rules), skipped_rules=skipped, cache_hit=False)
     semantic = semantic_rules(context_rules)
+    raw_message = getattr(review, 'text', '') or ''
+    has_update = (buyer_message(review) != raw_message
+                  or (getattr(review, 'sections', None) or {}).get('supplement')
+                  or re.search(r'\b(?:дополняю|дополню|дополнение|обновление отзыва)\b', raw_message, re.I))
+    full_context = needs_context_check(review) and not protected
+    verify_context = full_context and bool(semantic or check_only or has_update or require_review_context)
     if (not instruction.strip() and not protected and not result['issues']
             and (getattr(review, 'marketplace', '') or '').endswith('_question')):
         from .simple_question_templates import METHOD, question_template
@@ -261,26 +268,32 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                           verification_seconds=round(monotonic() - check_started, 4))
             return adjusted, result
     key = None
-    if not instruction.strip() and not protected and not result['issues']:
+    if not has_update and not instruction.strip() and not protected and not result['issues']:
         from .brake_feedback import template as brake_template
         expected = brake_template(review, product, rules)
         if expected and adjusted == expected and assess(adjusted)['passed']:
             result.update(verification_method='local_brake_feedback', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
+            if full_context:
+                result['review_context_proof'] = context_proof(review, adjusted)
             return adjusted, result
-    if not instruction.strip() and not protected and not result['issues']:
+    if not has_update and not instruction.strip() and not protected and not result['issues']:
         from .rule_execution import audited_usage_replies
         if adjusted in audited_usage_replies(review, product, rules, facts) and assess(adjusted)['passed']:
             result.update(verification_method='local_verified_usage', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
+            if full_context:
+                result['review_context_proof'] = context_proof(review, adjusted)
             return adjusted, result
-    if not instruction.strip() and not protected and not result['issues']:
+    if not has_update and not instruction.strip() and not protected and not result['issues']:
         expected = audited_case_template(review, product, rules)
         if expected and adjusted == expected and assess(adjusted)['passed']:
             result.update(verification_method='local_review_case', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
+            if full_context:
+                result['review_context_proof'] = context_proof(review, adjusted)
             return adjusted, result
-    if check_only and not instruction.strip() and not protected and not result['issues']:
+    if not full_context and check_only and not instruction.strip() and not protected and not result['issues']:
         if verified_positive_reply(adjusted, review, rules, product=product) and assess(adjusted)['passed']:
             method = 'local_positive' if any(adjusted == positive_template(review, rules, i, product=product) for i in range(3)) else 'local_saved_positive'
             result.update(verification_method=method, semantic_groups=0, verified_groups=0,
@@ -288,7 +301,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             return adjusted, result
     # Only the exact no-claims templates and audited whole policies qualify.
     # Unknown/edited semantic rules must still reach the model, even on five stars.
-    if allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
+    if not full_context and allow_fast_positive and not instruction.strip() and not protected and not result['issues']:
         if any(adjusted == positive_template(review, rules, revision, product=product) for revision in range(3)) and assess(adjusted)['passed']:
             result.update(verification_method='local_positive', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
@@ -296,7 +309,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     if local_only:
         from .generation_control import FastPathUnavailable
         raise FastPathUnavailable('Нужна дополнительная проверка правил')
-    if semantic and not protected and not result['issues']:
+    if (semantic or verify_context) and not protected and not result['issues']:
         from .model_router import ModelRouter
         key = verification_key(adjusted, review, product, rules, facts, instruction, ModelRouter().choose('OWNER_RULES'))
         cached = cached_verdict(key)
@@ -310,12 +323,12 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     if semantic and protected:
         result.update(checked=False)
         result['issues'].append('Проверьте дополнительные правила магазина: вывод каталога или предупреждение безопасности сохранены без переформулировки.')
-    elif semantic and defer_semantic:
+    elif (semantic or verify_context) and defer_semantic:
         # Generation has already observed an unavailable model. Save the draft
         # and retry verification durably rather than spending a second deadline.
         result.update(checked=False, technical_error=True, reason='сервис модели недоступен')
         result['issues'].append('Ответ сохранён; проверка правил продолжится в фоне после восстановления сервиса модели.')
-    elif semantic:
+    elif semantic or verify_context:
         # A model repair may resolve the initial local defects. Recompute them
         # against the final text below instead of retaining stale warnings.
         result['issues'] = []
@@ -330,7 +343,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             budget = GenerationBudget(minimum)
             for attempt in range(2):
                 messages, payload, schema, groups = prepare(review, product, semantic, facts, adjusted,
-                    protected=protected, check_only=check_only, style_rules=rules)
+                    protected=protected, check_only=check_only, style_rules=rules, verify_context=verify_context)
                 result['semantic_groups'] = len(groups)
                 if background_heavy and not check_only and groups:
                     messages[-1]['content'] = request_json(payload, groups[0])
@@ -418,8 +431,10 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     result['violations'] = local_issues(adjusted, rules, review) if result.get('checked') is False else list(result['issues'])
     result['passed'] = not result['issues']
     result['applied_preferences'] = list(dict.fromkeys(applied))
-    result['verification_method'] = 'model' if semantic else 'local_constraints'
+    result['verification_method'] = 'model' if (semantic or verify_context) else 'local_constraints'
     result['verification_seconds'] = round(monotonic() - check_started, 4)
+    if verify_context and result['checked'] and result['passed']:
+        result['review_context_proof'] = context_proof(review, adjusted)
     if key and result['passed'] and assess(adjusted)['passed']:
         remember_verdict(key, adjusted, result)
     return adjusted, result

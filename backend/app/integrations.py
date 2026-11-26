@@ -306,6 +306,7 @@ class WildberriesProvider:
         raise ValueError('Достигнут лимит страниц синхронизации')
 
     async def sync_reviews(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
+        from .review_sections import wb_review_context
         account_id = account_id or setting(db, 'active_store', 'owner')
         token, total = wb_token(db, account_id), int((resume or {}).get('processed', 0))
         for answered in (False, True):
@@ -319,6 +320,13 @@ class WildberriesProvider:
                 if result.get('error'):
                     raise ValueError('WB сообщил об ошибке получения отзывов')
                 items = result.get('data', {}).get('feedbacks', [])
+                page_items = {str(item['id']): item for item in items}
+
+                async def linked_feedback(external_id):
+                    if external_id not in page_items:
+                        page_items[external_id] = await self.linked_feedback(token, external_id)
+                    return page_items[external_id]
+
                 for item in items:
                     details = item.get('productDetails', {})
                     pid = str(details['nmId'])
@@ -331,11 +339,8 @@ class WildberriesProvider:
                     row = db.scalar(select(Review).where(Review.wb_account_id == account_id, Review.wb_review_id == rid))
                     if not row:
                         row = Review(id=account_id + ':' + rid, wb_account_id=account_id, wb_review_id=rid, product_id=pid, status='unanswered')
-                    text = '\n'.join(str(item.get(k) or '') for k in ('text', 'pros', 'cons')).strip()
-                    row.text, row.rating = mask_vin(text), item['productValuation']
-                    from .review_sections import review_sections
-                    sections = review_sections(item, 'wb')
-                    if sections: row.sections = sections
+                    text, sections = await wb_review_context(item, linked_feedback, allow_incomplete=True)
+                    row.text, row.rating, row.sections = text, item['productValuation'], sections
                     row.created_at = item.get('createdDate', '')
                     row.is_answered = bool(item.get('answer'))
                     row.existing_answer = mask_vin((item.get('answer') or {}).get('text', ''))
@@ -358,6 +363,14 @@ class WildberriesProvider:
                     break
                 await asyncio.sleep(0.4)
         return total
+
+    @staticmethod
+    async def linked_feedback(token, external_id):
+        response = await guard.request('wb', 'review', token=token, params={'id': external_id})
+        data = response.get('data') or {}
+        if response.get('error') or str(data.get('id')) != external_id:
+            raise ValueError('Wildberries не вернул связанный текст отзыва')
+        return data
 
     async def sync_questions(self, db, account_id=None, progress=None, cancelled=None, resume=None, checkpoint=None, between_pages=None):
         account_id = account_id or setting(db, 'active_store', 'owner')
@@ -429,6 +442,22 @@ class WildberriesProvider:
         if current.get('data', {}).get('answer'):
             from .publication_reconciliation import wb_evidence
             return wb_evidence(current, review.wb_review_id, text)
+        data = current['data']
+        if any(key in data for key in ('text', 'pros', 'cons', 'parentFeedbackId', 'childFeedbackId')):
+            from .review_context import buyer_message
+            from .review_sections import wb_review_context
+            try:
+                message, sections = await wb_review_context(data, lambda rid: self.linked_feedback(token, rid))
+            except ValueError as error:
+                raise before_send(error) from None
+            rating = data.get('productValuation', review.rating)
+            if ' '.join(message.split()) != ' '.join(buyer_message(review).split()) or rating != review.rating:
+                review.text, review.sections, review.rating = message, sections, rating
+                product = db.get(Product, review.product_id)
+                for key, value in classify(message, product.category if product else '').items():
+                    setattr(review, key, value)
+                raise PublicationError('Wildberries обновил отзыв. Нужна проверка полного текста.',
+                                       outcome='not_sent', retryable=True)
         result = await guard.request('wb', 'publish', token=token, body={'id': review.wb_review_id, 'text': text})
         if not isinstance(result, dict) or result.get('error'):
             raise PublicationError('WB не подтвердил результат отправки. Выполняется сверка.')

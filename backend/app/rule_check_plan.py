@@ -23,12 +23,16 @@ def request_json(payload, group):
     return json.dumps({**payload, 'owner_rules': group}, ensure_ascii=False, separators=(',', ':'))
 
 
-def prepare(review, product, rules, facts, answer, *, protected=False, check_only=False, style_rules=None):
+def prepare(review, product, rules, facts, answer, *, protected=False, check_only=False, style_rules=None,
+            verify_context=False):
     from .owner_reply_policy import context_constraints, rule_groups, CHECK_SCHEMA
     from .reply_policy import analyze_customer_message
     from .review_cases import specific_review_case
+    from .review_context import CONTEXT_RULE, buyer_message
     schema = deepcopy(CHECK_SCHEMA)
     system = SYSTEM
+    if verify_context:
+        system += ' ' + CONTEXT_RULE
     if check_only:
         # A saved-text check cannot apply a revision. Do not ask the small CPU
         # model to generate a second customer reply that will be discarded.
@@ -37,17 +41,21 @@ def prepare(review, product, rules, facts, answer, *, protected=False, check_onl
     else:
         system += ' You may return a safe Russian repair preserving facts, required style and safety; otherwise leave revised_answer empty.'
     style = context_constraints(rules if style_rules is None else style_rules, review)
-    analysis = analyze_customer_message(review.text, review.rating)
+    message = buyer_message(review)
+    analysis = analyze_customer_message(message, review.rating)
     case = specific_review_case(review, product)
     buyer_context = {key:analysis[key] for key in ('sentiment','complaints','is_question','resolved')}
     buyer_context['recognized_case'] = case['key'] if case else None
-    payload = {'buyer_message': review.text, 'rating': review.rating, 'buyer_context': buyer_context,
+    payload = {'buyer_message': message, 'rating': review.rating, 'buyer_context': buyer_context,
         'reply_kind': 'question' if (getattr(review, 'marketplace', '') or '').endswith('_question') else 'review',
         'product': product.name, 'verified_facts': facts, 'answer': answer,
         'required_style': {key: style[key] for key in ('greeting', 'greetings', 'signature')},
         'protected_answer': protected}
     messages = [{'role': 'system', 'content': system}, {'role': 'user', 'content': ''}]
-    groups = fitting_rule_groups(rule_groups(rules), messages[0], payload, schema)
+    groups = rule_groups(rules)
+    if verify_context and not groups:
+        groups = [[]]
+    groups = fitting_rule_groups(groups, messages[0], payload, schema)
     return messages, payload, schema, groups
 
 

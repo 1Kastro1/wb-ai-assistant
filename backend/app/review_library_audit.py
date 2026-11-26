@@ -325,6 +325,7 @@ def selfcheck(db,job_id,stages):
     from .learned_reply_templates import load_template,context_key
     from .owner_reply_rules import matching_owner_rules
     from .services import assess_reply,review_verified_facts
+    from .rule_execution import verification_key
     if any(row.id!=text_id(row.text) for row in db.scalars(select(VerifiedReplyText))):
         raise ValueError('Нарушена целостность библиотеки шаблонов')
     results=[]
@@ -351,7 +352,12 @@ def selfcheck(db,job_id,stages):
         if context_key(review,product,rules,facts):
             loaded=load_template(db,review,product,rules,facts,
                 lambda value:assess_reply(review,product,value,facts),exact_answer=answer)
-            if not loaded:raise ValueError('Проверенный ответ больше не доступен в актуальном контексте: '+stage['marketplace'])
+            if not loaded:
+                if audit_row.input_key != verification_key(answer, review, product, rules, facts):
+                    results.append({'marketplace': stage['marketplace'], 'store': stage['account_id'],
+                                    'status': 'context_changed', 'sample': rid})
+                    continue
+                raise ValueError('Проверенный ответ больше не доступен в актуальном контексте: '+stage['marketplace'])
             # A changed policy must never reuse an old approval.
             if load_template(db,review,product,[*rules,'Контроль: другое правило'],facts,
                     lambda value:{'passed':True},exact_answer=answer):

@@ -20,12 +20,14 @@ def seed(market,*,published=False,human=False):
 
 
 async def passed(answer,review,product,rules,*args,**kwargs):
-    return answer,{'matched':len(rules),'fingerprint':fingerprint(rules),'checked':True,'passed':True,'issues':[]}
+    from app.review_context import context_proof
+    return answer,{'matched':len(rules),'fingerprint':fingerprint(rules),'checked':True,'passed':True,'issues':[],
+        'review_context_proof': context_proof(review, answer)}
 
 
 @pytest.mark.parametrize('market',['yandex','wb','ozon'])
 def test_only_verified_replacement_is_saved_with_revision_history(monkeypatch,market):
-    monkeypatch.setattr('app.auto_review_repair.repair',lambda *a: replacement())
+    monkeypatch.setattr('app.auto_review_repair.repair',lambda review, *a: replacement(review=review))
     async def checked(*args,**kwargs):return await passed(*args,**kwargs)
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',checked)
     jid=seed(market)
@@ -38,9 +40,11 @@ def test_only_verified_replacement_is_saved_with_revision_history(monkeypatch,ma
         assert db.get(ReviewLibraryAuditRow,(jid,'r')).status=='verified'
 
 
-async def replacement(*,technical=False):
+async def replacement(*,technical=False,review=None):
+    from app.review_context import context_proof
     return ANSWER,{'passed':not technical,'issues':['temporary'] if technical else [],
-        'owner_rules':{'checked':not technical,'passed':not technical,'technical_error':technical,'issues':['temporary'] if technical else []},
+        'owner_rules':{'checked':not technical,'passed':not technical,'technical_error':technical,'issues':['temporary'] if technical else [],
+                       **({'review_context_proof': context_proof(review, ANSWER)} if review and not technical else {})},
         'automatic_repair':{'version':'test','case':'damaged'}}
 
 
@@ -63,7 +67,7 @@ def test_employee_revision_is_never_automatically_replaced(monkeypatch):
 
 
 def test_published_missing_text_gets_separate_checked_reference_without_remote_edit(monkeypatch):
-    monkeypatch.setattr('app.auto_review_repair.repair',lambda *a: replacement())
+    monkeypatch.setattr('app.auto_review_repair.repair',lambda review, *a: replacement(review=review))
     monkeypatch.setattr('app.owner_reply_policy.enforce_owner_rules',passed)
     jid=seed('yandex',published=True);asyncio.run(step(jid,limit=8))
     with Session() as db:

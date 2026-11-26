@@ -55,7 +55,8 @@ def eligible_review():
         Review.status.in_(('manual_review', 'draft_ready')), Review.manual == False,
         Review.safety_critical == False, Review.risk == 'NORMAL',
         ~and_(Review.marketplace == 'ozon', func.trim(Review.text) == ''),
-        ~select(Publication.id).where(Publication.review_id == Review.id).exists(),
+        ~select(Publication.id).where(Publication.review_id == Review.id,
+            Publication.status != 'retryable').exists(),
     )
 
 
@@ -69,13 +70,19 @@ def interrupted_text_check():
     ))
 
 
-def handoff(db, draft, review):
+def handoff_context(db, draft, review):
+    """Route a stale publication candidate to the ordinary repair worker."""
+    return handoff(db, draft, review, context_changed=True)
+
+
+def handoff(db, draft, review, *, context_changed=False):
     """Wake the durable store worker after a retryable verification failure."""
     proof = (draft.quality or {}).get('owner_rules') or {}
-    if (not proof.get('technical_error') or proof.get('continuation')
+    if not enabled_for(db, setting(db, 'automation_schedule', {})):
+        return None
+    if not context_changed and (not proof.get('technical_error') or proof.get('continuation')
         or (proof.get('retryable') is False and proof.get('failure_code') != 'retry_exhausted')
-        or not (review.text or '').strip() or review.marketplace not in PROVIDERS
-        or not enabled_for(db, setting(db, 'automation_schedule', {}))):
+        or not (review.text or '').strip() or review.marketplace not in PROVIDERS):
         return None
     store = db.get(StoreProfile, review.wb_account_id)
     if not store or store.provider != review.marketplace or not db.get(Account, store.id):
@@ -91,6 +98,12 @@ def handoff(db, draft, review):
     if not audit:
         audit = ReviewLibraryAuditRow(job_id=job.id, review_id=review.id)
         db.add(audit)
+    if context_changed:
+        from .review_context import context_proof
+        key = context_proof(review, draft.text)
+        if audit.status in ('retry', 'ready_to_deliver') or (
+                audit.status == 'handoff' and (audit.verification_progress or {}).get('_context_handoff') == key):
+            return job
     elif (audit.verification_progress or {}).get('_minion_revision') == draft.revision:
         if audit.status == 'retry':
             return job  # Keep the repair proposal and any model backoff.
@@ -98,6 +111,8 @@ def handoff(db, draft, review):
             return job  # This exact revision already has a decision.
     audit.status, audit.attempts, audit.retry_at = 'handoff', 0, 0
     audit.verification_progress = {'_minion_revision': draft.revision}
+    if context_changed:
+        audit.verification_progress = {**audit.verification_progress, '_context_handoff': key}
     job.result = {**job.result, 'handoff_at': now(), 'retry_at': 0,
         'message': 'Миньон подхватил прерванную проверку'}
     return job
@@ -131,7 +146,7 @@ def candidate(db, job, current):
         .where(
             Review.wb_account_id == job.result['account_id'], eligible_review(),
             or_(and_(Draft.quality_attention == True, Draft.quality_technical == False),
-                interrupted_text_check(), audit.status == 'retry'),
+                interrupted_text_check(), audit.status.in_(('retry', 'handoff'))),
             or_(fresh, retry),
         ).order_by(*order).limit(1))
 
@@ -228,7 +243,7 @@ async def run_step(job_id, session_factory=Session):
         more_handoffs = db.scalar(select(ReviewLibraryAuditRow.review_id)
             .join(Review, Review.id == ReviewLibraryAuditRow.review_id).join(Draft, Draft.review_id == Review.id)
             .where(ReviewLibraryAuditRow.job_id == job.id, ReviewLibraryAuditRow.status == 'handoff',
-                eligible_review(), interrupted_text_check()).limit(1))
+                eligible_review()).limit(1))
         more_continuations = db.scalar(select(ReviewLibraryAuditRow.review_id)
             .join(Review, Review.id == ReviewLibraryAuditRow.review_id).join(Draft, Draft.review_id == Review.id)
             .where(ReviewLibraryAuditRow.job_id == job.id, eligible_review(), continuation_check(time.time())).limit(1))

@@ -18,7 +18,8 @@ def template_key(review, product):
         return None
     from .reply_policy import analyze_customer_message
     from .review_cases import specific_review_case
-    text = review.text.strip()
+    from .review_context import buyer_message
+    text = buyer_message(review).strip()
     if not text:
         return 'rating_only'
     analysis = analyze_customer_message(text, review.rating)
@@ -64,8 +65,11 @@ def approved_template(db, review, draft):
     if key == 'fusso_surface':
         facts += [fusso_instruction(product)]
     rules = matching_owner_rules(db, product)
-    for revision in range(3):
-        candidate = rule_reply(review, product, revision, facts=facts)
+    variants = [rule_reply(review, product, revision, facts=facts) for revision in range(3)]
+    if key == 'rating_only':
+        from .rule_execution import LEGACY_LOW_RATING
+        variants.append(LEGACY_LOW_RATING)
+    for candidate in variants:
         if not candidate:
             continue
         candidate, _ = apply_local_preferences(candidate, review, rules)

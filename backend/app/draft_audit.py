@@ -298,7 +298,8 @@ async def _recheck_one(job_id, session_factory=Session):
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
             if (not draft or not review or db.get(Job, job_id).cancel_requested or review.is_answered
-                    or review.status in ('publishing', 'published') or expected != (draft.revision, draft.text, review.text, review.rating, review.product_id)):
+                    or review.status in ('publishing', 'published') or expected != (draft.revision, draft.text, review.text, review.rating, review.product_id)
+                    or verification_key(draft.text, review, product, rules, facts) != input_key):
                 return False
             # Never apply a model rewrite to an employee's/manual answer, nor
             # allow a model repair that fails the independent semantic checks.

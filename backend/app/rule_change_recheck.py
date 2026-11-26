@@ -68,6 +68,9 @@ def should_check(db, draft, review, product, state, rules=None):
 def needs_verification(db, draft, review, product, rules, *, input_key=None):
     from .owner_reply_policy import fingerprint, saved_rule_quality
     verdict = (draft.quality or {}).get('owner_rules') or {}
+    from .review_context import context_current
+    if verdict.get('passed') is True and not context_current(review, draft.text, verdict):
+        return True
     if verdict.get('fingerprint') != fingerprint(rules):
         return True
     if verdict.get('input_key'):
