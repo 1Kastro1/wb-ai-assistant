@@ -70,12 +70,16 @@ def queue_ordering():
     # aged turn per minute while live work is moving so history still advances.
     peer = aliased(Job)
     peer_served = peer.result['last_served_at'].as_string()
+    fresh_waiting = select(peer.id).where(fresh_generation(peer), peer.status == 'queued',
+        peer.cancel_requested == False, func.coalesce(peer_served, peer.created_at) < fresh_cutoff,
+        func.coalesce(peer.result['retry_at'].as_float(), 0) <= time.time()).correlate(None).exists()
     live_recent = select(peer.id).where(fresh_generation(peer), peer_served >= cutoff).correlate(None).exists()
     background_recent = select(peer.id).where(archive_generation(peer),
         peer_served >= cutoff).correlate(None).exists()
     background_turn = overdue_generation & archive_generation(Job) & live_recent & ~background_recent
     approved_send = overdue_send & (Job.kind != 'scheduled_publication')
-    interactive = case((approved_send | (direct_request & aged), -8), (direct_delivery, -7),
+    priority_aged = aged & (~(fresh_waiting | expedited_waiting) | approved_send | direct_request)
+    interactive = case((priority_aged, -8), (direct_delivery, -7),
                        (minion_handoff_pending(), -6), (background_turn, -5),
                        (fresh_due, -4), (aged, -3), (urgent_positive, -1),
                        (Job.kind.in_(('single_draft', 'single_question_draft')), 0),
