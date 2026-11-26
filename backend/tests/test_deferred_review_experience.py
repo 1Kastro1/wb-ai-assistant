@@ -89,6 +89,7 @@ def test_saved_generation_and_regeneration_respect_deferred_experience(client, m
     from app.db import Session, Memory, Product, Review, Action
     from app.integrations import ollama
     from app.services import generate_draft
+    from app.reply_policy import FIRST_IMPRESSION_THANKS
     rules = json.loads((Path(__file__).parent / 'fixtures/untried_review_rules.json').read_text(encoding='utf-8'))
     checker = AsyncMock(side_effect=AssertionError('Exact audited neutral case needs no model'))
     monkeypatch.setattr(ollama, 'structured', checker)
@@ -106,7 +107,7 @@ def test_saved_generation_and_regeneration_respect_deferred_experience(client, m
             assert result['quality']['passed'], result['quality']
             assert result['quality']['owner_rules']['passed']
             assert result['quality']['owner_rules']['verification_method'] == 'local_positive'
-            assert 'впечатлениям после использования' in result['text']
+            assert result['text'].splitlines()[0].split(maxsplit=1)[1] in FIRST_IMPRESSION_THANKS
             assert 'оценили качество' not in result['text']
             assert 'поделились опытом' not in result['text']
         assert not db.get(Review, 'deferred').is_answered
