@@ -1,4 +1,5 @@
 import asyncio
+from math import ceil
 
 
 # Observed CPU responses take ~68 seconds, with ~12 seconds for a cold load.
@@ -8,6 +9,14 @@ OWNER_RULE_CHECK_SECONDS = 120
 AUTO_RULE_CHECK_SECONDS = 120
 MINION_RULE_CHECK_SECONDS = 240
 MANUAL_RULE_CHECK_SECONDS = 180
+
+
+def cpu_request_seconds(messages, schema=None, *, minimum=120, maximum=600):
+    from .model_context import request_tokens
+
+    # On the Aeza CPU, 2,605 actual prompt tokens took 209 seconds to
+    # evaluate, before decoding. The estimator also reserves output tokens.
+    return min(maximum, max(minimum, ceil(100 + request_tokens(messages, schema) / 18)))
 
 
 class GenerationBudget:

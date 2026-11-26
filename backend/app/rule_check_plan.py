@@ -1,8 +1,8 @@
 """Prepare complete rule checks and bound one durable CPU work unit."""
 from copy import deepcopy
 import json
-import math
-from .model_context import fitting_rule_groups, request_tokens
+from .generation_budget import cpu_request_seconds
+from .model_context import fitting_rule_groups
 
 SYSTEM = (
     'Verify every applicable owner rule with its conditions and lists intact. Return only schema JSON. '
@@ -52,8 +52,4 @@ def prepare(review, product, rules, facts, answer, *, protected=False, check_onl
 
 
 def step_deadline(messages, schema, minimum):
-    # Full evidence and whole rules remain present. Longer CPU prefill gets a
-    # finite per-unit allowance, independent of the number of remaining groups.
-    # Measured on this CPU: 2605 actual prompt tokens took 209 seconds,
-    # plus 24 seconds for a short verdict. Include prefill and a safety margin.
-    return min(600, max(minimum, math.ceil(90 + request_tokens(messages, schema) / 25)))
+    return cpu_request_seconds(messages, schema, minimum=minimum)

@@ -42,6 +42,7 @@ def queue_ordering():
     batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts','review_library_audit','review_minion')),
         (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
             Job.result['policy_regeneration'].as_boolean() == True,
+            Job.result['target_revision'].as_integer().is_not(None),
             (Job.result['positive_recheck'].as_boolean() == True) & (Job.result['background'].as_boolean() == True)))
     manual_check = ((Job.result['retry_draft_id'].as_string().is_not(None))
                     & (Job.result['manual_check'].as_boolean() == True))

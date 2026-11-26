@@ -57,6 +57,21 @@ def test_healthy_progress_never_approves_a_later_violation(monkeypatch):
     assert failed['issues']==['Не подтверждён факт']
 
 
+def test_generation_defers_multi_group_check_before_waiting_on_qwen(monkeypatch):
+    from app.integrations import ollama
+
+    monkeypatch.setattr('app.owner_reply_policy.rule_groups', lambda rules: [[rule] for rule in rules])
+    model = AsyncMock(return_value=PASS)
+    monkeypatch.setattr(ollama, 'structured', model)
+    args = inputs()
+    args.update(check_only=False, group_limit=None, background_heavy=True)
+    _, pending = asyncio.run(enforce_owner_rules(**args))
+    model.assert_not_awaited()
+    assert pending['semantic_groups'] == 3 and pending['verified_groups'] == 0
+    assert pending['continuation'] and not pending['technical_error'] and not pending['passed']
+    assert technical_check(attach_rule_quality({'passed': True}, pending))
+
+
 def test_minion_repair_checks_the_same_proposal_in_durable_groups(monkeypatch):
     from app.auto_review_repair import repair
     from app.integrations import ollama

@@ -92,9 +92,9 @@ def checkpoint_verdict(verdict, previous, input_key, timestamp, *, manual=False)
     return result
 
 
-def enqueue(db, draft, review, actor_id='', *, manual=False, confirmed_repair=False):
+def enqueue(db, draft, review, actor_id='', *, manual=False, confirmed_repair=False, targeted=False):
     # Caller holds the draft row lock (or its generation lease).
-    if not manual and not confirmed_repair:
+    if not manual and not confirmed_repair and not targeted:
         from .review_minions import handoff
         return handoff(db, draft, review) or automatic_queue(db, review.wb_account_id)
     active = db.scalars(select(Job).where(Job.kind == 'draft_recheck',
@@ -107,7 +107,7 @@ def enqueue(db, draft, review, actor_id='', *, manual=False, confirmed_repair=Fa
         remaining = (state.get('draft_ids') or [])[int(state.get('cursor', 0)):]
         if state.get('check_only') and not state.get('policy_scan') and (
                 state.get('retry_draft_id') == draft.id or remaining == [draft.id]):
-            if state.get('repair_revision', draft.revision) != draft.revision:
+            if state.get('repair_revision', state.get('target_revision', draft.revision)) != draft.revision:
                 continue
             if manual:
                 # A direct click resumes a delayed retry without duplicating a
@@ -123,6 +123,8 @@ def enqueue(db, draft, review, actor_id='', *, manual=False, confirmed_repair=Fa
                 'message': 'Повторная проверка правил: сохранённый текст не изменяется'})
     if manual:
         job.result = {**job.result, 'manual_check': True, 'requested_check_at': now()}
+    if targeted:
+        job.result = {**job.result, 'target_revision': draft.revision}
     if confirmed_repair:
         job.result = {**job.result, 'repair_revision': draft.revision,
                       'message': 'Исправление подтверждённой ошибки и проверка нового ответа'}
@@ -137,7 +139,7 @@ def consolidate(db):
             Job.status.in_(('queued','running')), Job.cancel_requested == False))):
         state = job.result or {}
         if (state.get('retry_draft_id') and state.get('check_only') and not state.get('manual_check')
-                and 'repair_revision' not in state):
+                and 'repair_revision' not in state and 'target_revision' not in state):
             target = automatic_queue(db, state.get('account_id') or 'owner')
             job.cancel_requested = True
             if job.status == 'queued': job.status = 'cancelled'

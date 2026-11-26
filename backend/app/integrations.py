@@ -86,7 +86,8 @@ class OllamaProvider:
             options = {'timeout_seconds': timeout_seconds} if timeout_seconds else {}
             raw = await self.chat(request, schema=schema, **options)
         else:
-            raw = await self.chat(request)
+            options = {'timeout_seconds': timeout_seconds} if timeout_seconds else {}
+            raw = await self.chat(request, **options)
         try:
             match = re.search(r'\{.*\}', raw, re.S)
             payload = json.loads(match.group(0) if match else raw)
