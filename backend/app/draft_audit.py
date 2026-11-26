@@ -156,6 +156,7 @@ def automatic_check_condition():
 async def _recheck_one(job_id, session_factory=Session):
     from .services import assess_reply, assess_question_answer, trusted_product_facts, review_verified_facts
     from .confirmed_reply_repair import confirmed_issue, repair, repair_pending, repair_unverified
+    from .feedback_repair import findings, stage
     from .owner_reply_rules import matching_owner_rules, owner_business_facts
     from .owner_reply_policy import enforce_owner_rules, attach_rule_quality
     with session_factory() as db:
@@ -234,16 +235,18 @@ async def _recheck_one(job_id, session_factory=Session):
             previous = (draft.quality or {}).get('owner_rules') or {}
             continuing_repair = repair_unverified(draft.quality)
             issue = confirmed_issue(review, draft.text)
-            if state.get('rule_change') or (check_only and not issue and not state.get('manual_check')
-                    and previous.get('input_key') == input_key):
+            protected = (manually_edited(draft) or review.manual or review.safety_critical or review.risk != 'NORMAL'
+                         or bool(question and (draft.quality or {}).get('fitment')))
+            notes = (findings(draft.quality, assess(draft.text), input_key)
+                     if not protected and previous.get('input_key') == input_key else [])
+            if not notes and (state.get('rule_change') or (check_only and not issue and not state.get('manual_check')
+                    and previous.get('input_key') == input_key)):
                 if not needs_verification(db, draft, review, product, rules, input_key=input_key):
                     return False
             if (check_only and not issue and not state.get('manual_check') and previous.get('input_key') == input_key
                     and previous.get('retry_at', 0) > time.time()):
                 return False
             attempted = True
-            protected = (manually_edited(draft) or review.manual or review.safety_critical or review.risk != 'NORMAL'
-                         or bool(question and (draft.quality or {}).get('fitment')))
             repaired_quality = None
             learned = None
             from .simple_question_templates import METHOD, STALE, stale_question_template
@@ -260,6 +263,10 @@ async def _recheck_one(job_id, session_factory=Session):
                 answer, repaired_quality = await repair(
                     review, product, draft.text, draft.quality or {}, rules, facts, assess, protected=protected)
                 verdict = repaired_quality.get('owner_rules') or {}
+            elif notes:
+                answer, repaired_quality = await stage(
+                    review, product, draft.text, draft.quality or {}, rules, facts, assess, notes, input_key)
+                verdict = repaired_quality['owner_rules']
             elif learned:
                 answer, verdict = learned
             else:
@@ -271,6 +278,14 @@ async def _recheck_one(job_id, session_factory=Session):
                     check_only=check_only or continuing_repair, previous_check=previous,
                     group_limit=1 if check_only or continuing_repair else None,
                     allow_fast_positive=check_only)
+                if not protected and not continuing_repair and answer == draft.text:
+                    content = assess(answer)
+                    checked_quality = attach_rule_quality(content, verdict)
+                    notes = findings(checked_quality, content, input_key)
+                    if notes and (draft.quality or {}).get('confirmed_repair', {}).get('input_key') != input_key:
+                        answer, repaired_quality = await stage(
+                            review, product, answer, checked_quality, rules, facts, assess, notes, input_key)
+                        verdict = repaired_quality['owner_rules']
             db.rollback()
             review = db.scalar(select(Review).where(Review.id == rid).with_for_update())
             draft = db.scalar(select(Draft).where(Draft.id == did).with_for_update())
@@ -283,7 +298,10 @@ async def _recheck_one(job_id, session_factory=Session):
                     or facts != current_facts()):
                 return False
             checked = assess(answer)
-            if answer != draft.text and (protected or not checked['passed'] or
+            now_protected = (manually_edited(draft) or review.manual or review.safety_critical or review.risk != 'NORMAL')
+            if answer != draft.text and repaired_quality and (now_protected or not checked['passed']):
+                return False
+            if answer != draft.text and (protected or now_protected or not checked['passed'] or
                     ((check_only or continuing_repair) and not repaired_quality)):
                 verdict = {**verdict, 'passed': False, 'checked': False,
                            'issues': ['Предложенный вариант требует ручной проверки; исходный текст сохранён']}
@@ -306,7 +324,7 @@ async def _recheck_one(job_id, session_factory=Session):
                     quality.pop('reply_supervisor', None)
                     quality['owner_rules'] = checkpoint_verdict(
                         quality['owner_rules'], {}, final_key, now())
-                else:
+                elif issue:
                     # A failed repair must not keep retrying the original
                     # defect as though it were a transient checker outage.
                     quality.pop('owner_rules', None)
@@ -319,7 +337,7 @@ async def _recheck_one(job_id, session_factory=Session):
                     if quality['passed'] and quality['owner_rules'].get('checked_at') and verdict.get('checked') is True:
                         quality['confirmed_repair'] = {**audit, 'status': 'rechecked'}
                     elif not technical_check(quality):
-                        quality['confirmed_repair'] = {**audit, 'status': 'blocked'}
+                        quality['confirmed_repair'] = {**audit, 'input_key': final_key, 'status': 'blocked'}
             quality['repair_audit'] = {**(draft.quality or {}).get('repair_audit', {}), 'rules_rechecked_at': now()}
             draft.quality = quality
             review.status = 'manual_review' if review.manual or not quality['passed'] else 'draft_ready'
@@ -409,3 +427,4 @@ if __name__ == '__main__':
                            result={'account_id': args.store, 'version': VERSION, 'message': 'Перепроверка сохранённых ответов'})
             db.add(existing); db.commit()
         print(existing.id, existing.status)
+

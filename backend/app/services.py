@@ -736,6 +736,10 @@ def assess_question_answer(question, product, answer, sources=None, owner_rules=
     answer_words = set(WORDS.findall(answer.lower()))
     overlap = len(question_words & answer_words)
     issues, score = [], 30
+    from .production_date import claim_issue
+    date_issue = claim_issue(question, answer, sources)
+    if date_issue:
+        issues.append(date_issue)
     if has_redundant_clarification(answer, question.text):
         issues.append('не переспрашивать уже описанную проблему')
     breakdown = {
@@ -794,21 +798,28 @@ async def generate_question_draft(db, question, instruction=''):
     context_memories, _ = select_rules(memories, question, product)
     verified_facts = skills.run('product_knowledge', trusted_product_facts, db, product)
     verified_facts += owner_business_facts(product, memories)
-    sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED'} for fact in verified_facts]
+    sources = [{'text': fact.get('text',''), 'source': fact.get('source','Карточка товара'), 'verification_status':'VERIFIED',
+                **({key: fact.get(key) for key in ('kind', 'review_id', 'date')} if fact.get('kind') == 'production_date' else {})}
+               for fact in verified_facts]
     analysis = analyze_customer_message(question.text)
     intent = skills.run('question_classifier', question_intent, question.text)
     def assess(value):
         return skills.run('quality_control', assess_question_answer, question, product, value, sources, owner_rules=memories)
+    from .production_date import single_request as asks_for_date, answer as date_answer
+    production_reply = (date_answer(question, product, verified_facts)
+                        if asks_for_date(question) and not analysis['buyer_asks_about_money'] else None)
     from .simple_question_templates import question_template
     local_reply = (skills.run('verified_template', question_template, question, product, memories, verified_facts)
                    if not instruction.strip() else None)
+    if production_reply:
+        local_reply = None
     local_quality = assess(local_reply) if local_reply else None
     if local_quality and not local_quality['passed']:
         local_reply = None
-    assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not local_reply and not analysis['buyer_asks_about_money'] else None
+    assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not (local_reply or production_reply or analysis['buyer_asks_about_money']) else None
     if assortment:
         sources.extend(assortment['sources']);intent=assortment['intent']
-    if not assortment and intent == 'применение' and not has_usage_instruction(verified_facts):
+    if not (assortment or production_reply) and intent == 'применение' and not has_usage_instruction(verified_facts):
         web_started = time.monotonic()
         try:
             found = cached_web_instruction_sources(product) or await asyncio.wait_for(web_research.search_instructions(product, db), timeout=8)
@@ -827,7 +838,7 @@ async def generate_question_draft(db, question, instruction=''):
         if item.existing_answer:
             examples.append({'question': item.text, 'answer': item.existing_answer})
     candidates = []
-    fitment = fitment_answer(db, question, product) if not assortment and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк|сошк|рулев|наконечник|шаров', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
+    fitment = fitment_answer(db, question, product) if not (assortment or production_reply) and intent == 'совместимость' and (re.search(r'фильтр|колодк|свеч|диск|амортиз|ремень|подшип|рычаг|радиатор|автомоб|стартер|генератор|суппорт|сцеплен|катушк|сошк|рулев|наконечник|шаров', product.name, re.I) or vehicle_identifiers(question.text) or oem_numbers(question.text)) else None
     if fitment and fitment['status']=='NEEDS_CATALOG' and internet_fitment_enabled(db, question.wb_account_id):
         from .internet_fitment import research_question
         web_started=time.monotonic()
@@ -841,7 +852,7 @@ async def generate_question_draft(db, question, instruction=''):
     voltage = battery_voltage_answer(question, product)
     if voltage:
         sources.append(voltage['source'])
-    uses_model = not (local_reply or analysis['buyer_asks_about_money'] or voltage or fitment or assortment)
+    uses_model = not (local_reply or production_reply or analysis['buyer_asks_about_money'] or voltage or fitment or assortment)
     model_started = time.monotonic()
     try:
         if uses_model:
@@ -854,7 +865,7 @@ async def generate_question_draft(db, question, instruction=''):
                 'previous_answer': existing.text[:600] if existing else '', 'owner_instruction': instruction,
             }, context_memories, [{'text': fact.get('text', ''), 'kind': fact.get('kind', '')} for fact in verified_facts])
             seconds = cpu_request_seconds(messages, minimum=QUESTION_GENERATION_SECONDS)
-        candidates = [] if local_reply else [official_support_reply()] if analysis['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await skills.run_async(
+        candidates = [] if (local_reply or production_reply) else [official_support_reply()] if analysis['buyer_asks_about_money'] else [fitment['text']] if fitment else [voltage['answer']] if voltage else [assortment['answer']] if assortment else await skills.run_async(
             'model_generation', GenerationBudget(seconds).run, lambda: ollama.reply_variants(messages, 1, timeout_seconds=seconds))
     except Exception as error:
         fallback_reason = 'timeout' if isinstance(error, TimeoutError) else 'unavailable'
@@ -869,7 +880,9 @@ async def generate_question_draft(db, question, instruction=''):
         except ValueError:
             continue
     passed_candidates = [item for item in checked if item[1]['passed']]
-    if local_reply:
+    if production_reply:
+        reply, quality, model = production_reply, assess(production_reply), 'production-date-1.0'
+    elif local_reply:
         reply, quality, model = local_reply, local_quality, 'question-template-1.0'
         quality['selection_note'] = 'Использован проверенный шаблон для простого вопроса'
     elif fitment and not analysis['buyer_asks_about_money']:
@@ -903,7 +916,7 @@ async def generate_question_draft(db, question, instruction=''):
         reply, question, product, memories, verified_facts,
         assess,
         protected=bool(fitment), instruction=instruction, local_only=bool(local_reply),
-        background_heavy=uses_model, defer_semantic=fallback_reason in ('timeout', 'unavailable'))
+        background_heavy=bool(uses_model or production_reply), defer_semantic=fallback_reason in ('timeout', 'unavailable'))
     if adjusted != reply:
         reply = validate_reply(mask_vin(adjusted))
         if not fitment:
@@ -939,7 +952,9 @@ async def generate_question_draft(db, question, instruction=''):
     question.status = 'draft_ready' if quality['passed'] else 'manual_review'
     from .confirmed_reply_repair import repair_pending
     from .rule_retry import enqueue, technical_check
-    needs_repair = repair_pending(quality)
+    from .feedback_repair import findings
+    needs_repair = repair_pending(quality) or bool(not quality.get('fitment') and findings(
+        quality, {'issues': quality.get('text_issues')}))
     if needs_repair or technical_check(quality):
         db.flush()
         enqueue(db, draft, question, confirmed_repair=needs_repair, targeted=True)
@@ -1270,7 +1285,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     from .rule_retry import technical_check, enqueue
     from .generation_control import batch_context
     from .confirmed_reply_repair import repair_pending
-    if repair_pending(quality):
+    from .feedback_repair import findings
+    if repair_pending(quality) or (review.risk == 'NORMAL' and not review.manual and not review.safety_critical
+                                  and findings(quality, {'issues': quality.get('text_issues')})):
         db.flush()
         enqueue(db, draft, review, confirmed_repair=True)
     elif (technical_check(quality) or (repaired_empty_reply and not quality['owner_rules'].get('checked'))) and not (batch_context.get() or {}).get('suppress_rule_retry'):
@@ -1361,6 +1378,9 @@ def propose_publish(db, review_ids):
             continue
         is_question = review.marketplace.endswith('_question')
         product = db.get(Product, review.product_id)
+        from .production_date import publication_issue
+        if is_question and (date_issue := publication_issue(db, review, product, draft.text)):
+            raise ValueError(date_issue)
         rules = matching_owner_rules(db, product, for_questions=is_question)
         from .simple_question_templates import STALE, stale_question_template
         if is_question and stale_question_template(db, review, draft, product, rules):
@@ -1461,6 +1481,9 @@ async def confirm_action(db, action_id, manual_ack=False, actor_id='', *, bulk_a
                 raise ValueError(reason)
         question = review.marketplace.endswith('_question')
         product = db.get(Product, review.product_id)
+        from .production_date import publication_issue
+        if question and (date_issue := publication_issue(db, review, product, draft.text)):
+            raise ValueError(date_issue)
         rules = matching_owner_rules(db, product, for_questions=question)
         from .simple_question_templates import STALE, stale_question_template
         if question and stale_question_template(db, review, draft, product, rules):
