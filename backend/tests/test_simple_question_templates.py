@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app import config, main, scheduled_publication, services
 from app.db import Account, Draft, Job, Memory, Product, Publication, Review, Session, set_setting
-from app.simple_question_templates import METHOD, STALE
+from app.simple_question_templates import METHOD, STALE, question_template
 from app.skill_engine import ENABLED
 
 
@@ -85,3 +85,12 @@ def test_changed_product_count_invalidates_the_saved_template(client, monkeypatc
         draft = db.get(Draft, recorded['id'])
         assert scheduled_publication.eligibility_reason(db, review, draft, {'publication_questions': True}) == STALE
     rejected.assert_not_awaited()
+
+
+@pytest.mark.parametrize('message', ['товар в наличии?', 'Добрый вечер. Будет ещё в наличии?'])
+def test_stock_questions_use_no_claims_template(message):
+    question = Review(marketplace='wb_question', text=message, risk='NORMAL')
+    answer = question_template(question, Product(name='Лампа'), [], [])
+    assert answer and 'в наличии' in answer
+    question.text = message + ' Подойдёт ли на Весту?'
+    assert question_template(question, Product(name='Лампа'), [], []) is None

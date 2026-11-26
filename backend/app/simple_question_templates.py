@@ -40,11 +40,14 @@ def question_template(question, product, rules, facts):
             or getattr(question, 'manual', False) or getattr(question, 'safety_critical', False)):
         return None
     message = ' '.join(question.text.casefold().replace('ё', 'е').split())
-    message = re.sub(r'^(?:добрый день|здравствуйте)[!.,]?\s+', '', message)
+    message = re.sub(r'^(?:добрый день|добрый вечер|доброе утро|здравствуйте)[!.,]?\s+', '', message)
     message = re.sub(r'^подскажите(?:, пожалуйста)?,?\s+', '', message).rstrip('?.! ')
     allowed = DELIVERY_RULES
-    if re.fullmatch(r'(?:товар )?(?:есть ли|есть) (?:этот )?(?:товар )?в наличии', message):
+    if re.fullmatch(r'(?:(?:есть(?: ли)? )?(?:этот )?товар |есть(?: ли)? )?в наличии', message):
         body = 'Чтобы узнать, есть ли товар в наличии, посмотрите его карточку перед оформлением заказа.'
+    elif re.fullmatch(r'(?:когда )?будет (?:еще )?в наличии', message):
+        body = ('Дату поступления пока не можем подтвердить. '
+                'Когда товар появится в наличии, это будет видно в его карточке.')
     elif re.fullmatch(r'когда (?:доставят|доставят товар|будет доставка|придет заказ)', message):
         body = 'Когда доставят товар, можно узнать при оформлении заказа. Там отображается актуальная дата доставки для Вашего адреса.'
     elif re.fullmatch(r'сколько (?:штук|единиц) в (?:комплекте|упаковке)', message):
