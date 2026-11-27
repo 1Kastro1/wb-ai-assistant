@@ -11,22 +11,29 @@ GUIDANCE = (
     ('не трактовать положительный', 'Не трактуй положительный опыт как жалобу. Благодари за отзыв и отмечай только названное достоинство без диагностики и возвратов.'),
     ('не приписывать опыт', 'Если покупатель ещё не использовал товар, не утверждай, что товар подошёл, работает или оправдал ожидания; поблагодари за оценку без выдуманного опыта.'),
 )
-DEFAULT_GUIDANCE = 'Перед ответом выдели существенные замечания и вопрос покупателя. Учитывай каждое из них по действующим правилам и подтверждённым данным; если сведений недостаточно, укажи, чего именно не хватает, без выдуманных причин и обещаний.'
 CASE_COVERAGE = json.loads(Path(__file__).with_name('rule_case_coverage173.json').read_text(encoding='utf-8'))
 
 
-def covered_case_rule(db, instructions):
+def covered_case_rule(db, instructions, product=None):
     """Only explicitly audited whole policies prove coverage of case guidance.
 
     A changed/disabled policy or another audience never suppresses suggestions.
     No similarity score, buyer wording or model verdict can expand this list.
     """
     covered, policies = set(), []
-    from .rule_duplicates import normalized_scope
+    from .rule_duplicates import normalized_scope, normalized_text
+    from .owner_reply_rules import matching_owner_rules
+    scope_rules = set(matching_owner_rules(db, product)) if product is not None else None
     for rule in db.scalars(select(Memory).where(Memory.enabled == True)):
-        if rule.kind not in ('REVIEW_RULE', 'GLOBAL_RULE') or normalized_scope(rule.scope) != 'global':
+        if rule.kind not in ('REVIEW_RULE', 'GLOBAL_RULE'):
             continue
-        accepted = CASE_COVERAGE.get(hashlib.sha256(rule.text.encode('utf-8')).hexdigest(), [])
+        if scope_rules is None and normalized_scope(rule.scope) != 'global' or scope_rules is not None and rule.text not in scope_rules:
+            continue
+        clauses = {normalized_text(clause) for clause in rule.text.splitlines()}
+        if rule.text.startswith('Разбор сложного отзыва. '):
+            clauses.add(normalized_text(rule.text.removeprefix('Разбор сложного отзыва. ')))
+        accepted = set(CASE_COVERAGE.get(hashlib.sha256(rule.text.encode('utf-8')).hexdigest(), []))
+        accepted.update(value for value in instructions if normalized_text(value) in clauses)
         if accepted:
             covered.update(accepted)
             policies.append((rule, set(accepted)))
@@ -45,7 +52,7 @@ def category(issues):
         return 'technical'
     if 'публикаци' in text or 'сверк' in text:
         return 'publication'
-    if 'нет доступного' in text:
+    if any(marker in text for marker in ('нет доступного', 'нет подтвержд', 'недостаточно данных', 'не подтверждён', 'нет сведений')):
         return 'missing_data'
     return 'content'
 
@@ -54,7 +61,7 @@ def guidance(issues):
     if category(issues)!='content':
         return []
     instructions=[value for marker,value in GUIDANCE if marker in ' '.join(issues or []).lower()]
-    return instructions or [DEFAULT_GUIDANCE]
+    return instructions
 
 
 def case_regressions(db, rule, product_id):
@@ -90,14 +97,15 @@ def suggest_case_rule(db, row, review):
     instructions = guidance(row.issues)
     if not instructions:
         return None
-    covered = covered_case_rule(db, instructions)
+    product = db.get(Product, review.product_id)
+    covered = covered_case_rule(db, instructions, product)
     if covered:
         return covered
     from .rule_duplicates import try_rules_lock, duplicate_rule
     if not try_rules_lock(db):
         return None
     # A UI writer may have committed new coverage just before the lock.
-    covered = covered_case_rule(db, instructions)
+    covered = covered_case_rule(db, instructions, product)
     if covered:
         return covered
     identity = hashlib.sha256((review.product_id + ':' + '\n'.join(instructions)).encode()).hexdigest()[:28]
@@ -130,7 +138,7 @@ def suggest_case_rule(db, row, review):
         from .rule_change_recheck import snapshot, rule_changed
         examples, conflicts = case_regressions(db, rule, review.product_id)
         info = {**info, 'case_examples': examples, 'case_conflicts': conflicts}
-        if conflicts:
+        if conflicts or not examples:
             set_setting(db, 'memory-meta:' + mid, info)
             return rule
         before = snapshot(rule)
@@ -183,7 +191,7 @@ def cases(db, view='attention', offset=0, limit=20):
         mid = 'case-rule-' + hashlib.sha256((review.product_id + ':' + '\n'.join(instructions)).encode()).hexdigest()[:28]
         rule = None
         if instructions and row.status=='attention' and category(row.issues)=='content':
-            rule = covered_case_rule(db, instructions) or db.get(Memory, mid)
+            rule = covered_case_rule(db, instructions, product) or db.get(Memory, mid)
             info = setting(db, 'memory-meta:' + rule.id, {}) if rule else {}
             if info.get('duplicate_of'):
                 rule = db.get(Memory, info['duplicate_of'])

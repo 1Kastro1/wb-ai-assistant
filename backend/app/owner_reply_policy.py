@@ -260,6 +260,10 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
                   or re.search(r'\b(?:дополняю|дополню|дополнение|обновление отзыва)\b', raw_message, re.I))
     full_context = needs_context_check(review) and not protected
     verify_context = full_context and bool(semantic or check_only or has_update or require_review_context)
+
+    def bind_review_proof(text):
+        result['review_context_proof'] = context_proof(review, text)
+        result['input_key'] = verification_key(text, review, product, rules, facts)
     if (not instruction.strip() and not protected and not result['issues']
             and (getattr(review, 'marketplace', '') or '').endswith('_question')):
         from .simple_question_templates import METHOD, question_template
@@ -275,7 +279,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             result.update(verification_method='local_brake_feedback', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
             if full_context:
-                result['review_context_proof'] = context_proof(review, adjusted)
+                bind_review_proof(adjusted)
             return adjusted, result
     if not has_update and not instruction.strip() and not protected and not result['issues']:
         from .rule_execution import audited_usage_replies
@@ -283,7 +287,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             result.update(verification_method='local_verified_usage', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
             if full_context:
-                result['review_context_proof'] = context_proof(review, adjusted)
+                bind_review_proof(adjusted)
             return adjusted, result
     if not has_update and not instruction.strip() and not protected and not result['issues']:
         expected = audited_case_template(review, product, rules)
@@ -291,7 +295,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
             result.update(verification_method='local_review_case', semantic_groups=0, verified_groups=0,
                           verification_seconds=round(monotonic() - check_started, 4))
             if full_context:
-                result['review_context_proof'] = context_proof(review, adjusted)
+                bind_review_proof(adjusted)
             return adjusted, result
     if not full_context and check_only and not instruction.strip() and not protected and not result['issues']:
         if verified_positive_reply(adjusted, review, rules, product=product) and assess(adjusted)['passed']:
@@ -434,7 +438,7 @@ async def enforce_owner_rules(reply, review, product, rules, facts, assess, *, p
     result['verification_method'] = 'model' if (semantic or verify_context) else 'local_constraints'
     result['verification_seconds'] = round(monotonic() - check_started, 4)
     if verify_context and result['checked'] and result['passed']:
-        result['review_context_proof'] = context_proof(review, adjusted)
+        bind_review_proof(adjusted)
     if key and result['passed'] and assess(adjusted)['passed']:
         remember_verdict(key, adjusted, result)
     return adjusted, result
@@ -491,5 +495,3 @@ def saved_rule_quality(reply, rules, previous=None, *, changed=False, review=Non
     return {**previous, 'matched': len(rules), 'fingerprint': current,
             'checked': not issues, 'passed': not issues, 'issues': list(dict.fromkeys(issues)),
             'violations': list(dict.fromkeys(violations + ([] if changed else previous.get('violations', []))))}
-
-

@@ -109,15 +109,19 @@ def test_all_low_rating_scope_sends_only_after_current_successful_check(client,r
     from app.owner_reply_rules import matching_owner_rules
     from app.owner_reply_policy import fingerprint
     from app.review_context import context_proof
+    from app.rule_execution import verification_key
+    from app.services import review_verified_facts
     with Session() as db:
         install_rules(db)
         r,d=db.get(Review,store+'review'),db.get(Draft,store+'review')
         r.rating,r.text,r.status=2,'Доставка задержалась на неделю.','manual_review'
         d.text=d.original='Здравствуйте. Спасибо за отзыв. Сожалеем, что доставка задержалась на неделю. Если вопрос по доставке ещё актуален, пожалуйста, обратитесь в официальную поддержку маркетплейса.\nС уважением ГК Юником.'
         from app.db import Product
-        rules=matching_owner_rules(db,db.get(Product,r.product_id))
+        product=db.get(Product,r.product_id)
+        rules=matching_owner_rules(db,product)
         d.quality={'passed':True,'text_issues':[],'owner_rules':{'fingerprint':fingerprint(rules),'checked':True,
-            'passed':True,'issues':[], 'review_context_proof': context_proof(r, d.text)}}
+            'passed':True,'issues':[], 'review_context_proof': context_proof(r, d.text),
+            'input_key': verification_key(d.text, r, product, rules, review_verified_facts(db, r, product, rules))}}
         db.commit()
     enable(client,publication_questions=False,publication_low_ratings=True,publication_all_low_ratings=True)
     for _ in range(3):

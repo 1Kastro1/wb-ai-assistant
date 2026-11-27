@@ -26,6 +26,7 @@ async def stage(review, product, reply, quality, rules, facts, assess, notes, in
     """Save a changed proposal without approval. The next job checks that exact text."""
     from .production_date import single_request, answer
     from .reply_policy import first_impression_reply
+    from .rule_execution import positive_template, select_rules
 
     audit = {'issue': notes[0], 'findings': notes, 'input_key': input_key, 'status': 'blocked'}
     try:
@@ -37,12 +38,13 @@ async def stage(review, product, reply, quality, rules, facts, assess, notes, in
             candidate = answer(review, product, facts)
         elif concise := first_impression_reply(review):
             candidate = concise
+        elif approved := positive_template(review, rules, product=product):
+            candidate = approved
         else:
             from .generation_budget import GenerationBudget, cpu_request_seconds
             from .integrations import ollama
             from .model_context import draft_messages
             from .review_context import CONTEXT_RULE, buyer_message
-            from .rule_execution import select_rules
 
             style = context_constraints(rules, review)
             messages = draft_messages(

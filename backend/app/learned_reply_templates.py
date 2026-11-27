@@ -65,7 +65,7 @@ def context_key(review, product, rules, facts, *, praise_group=False, candidate_
 def load_template(db, review, product, rules, facts, assess, *, previous='', exact_answer=None):
     from .owner_reply_policy import saved_rule_quality, local_issues
     from .safety import validate_reply
-    from .rule_execution import verified_positive_reply
+    from .rule_execution import verified_positive_reply, verification_key
     from .review_context import context_current
     for kind in ('exact', 'positive', 'equivalent'):
         grouped = kind == 'positive'
@@ -96,6 +96,7 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
                 continue
             verdict.update(verification_method='learned_positive_group' if grouped else 'learned_equivalent_context' if kind=='equivalent' else 'learned_exact_context',
                            template_source=item.get('source',''),verification_seconds=0, template_key=key)
+            verdict['input_key'] = verification_key(answer, review, product, rules, facts)
             return answer, verdict
     return None
 

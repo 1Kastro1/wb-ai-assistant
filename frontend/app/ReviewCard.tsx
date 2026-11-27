@@ -31,9 +31,11 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   function register(id:string,flush:(()=>Promise<any>)|null){flusher.current=flush;return onRegister?.(id,flush)}
   async function preparePublication(){try{await flusher.current?.();await publish?.()}catch{/* DraftEditor or the parent shows the saving/publication error. */}}
   const q=r.draft?.quality||{},hasText=hasCustomerText(r);
-  const remotePending=r.marketplace==='ozon'&&r.status==='answer_pending';
+  const remotePending=r.status==='answer_pending';
   const answerSource=r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркета':'Wildberries';
-  const remoteUnknown=r.marketplace==='ozon'&&(r.status==='answer_unknown'||(r.is_answered&&!String(r.existing_answer||'').trim()));
+  const remoteUnknown=r.status==='answer_unknown'||Boolean(r.sections?._seller_reply_unverified)
+    || (r.marketplace==='ozon'&&r.is_answered&&!String(r.existing_answer||'').trim());
+  const awaitingMarketplace=remotePending||remoteUnknown;
   const automaticVerified=Boolean((q.automatic_repair||q.automatic_audit)&&q.passed&&q.owner_rules?.checked&&q.owner_rules?.passed&&!q.owner_rules?.technical_error&&!q.owner_rules?.issues?.length);
   const needsCheck=(!automaticVerified&&r.rating<=3)||r.manual||r.risk!=='NORMAL'||!q.passed||(String(r.draft?.model||'').startsWith('safety-fallback')&&!q.repair_audit?.rules_rechecked_at);
   const technical=Boolean(q.owner_rules?.technical_error||q.owner_rules?.status==='error')&&!q.owner_rules?.passed;
@@ -41,16 +43,16 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
   const checkWaiting=checking&&Number(ruleCheckJob?.result?.retry_at||0)*1000>Date.now();
   const checkLabel=ruleCheckJob?.status==='running'?'Проверяем правила…':checkWaiting?'Повторить сейчас':'Проверка в очереди';
   const personal=r.rating<=3||r.manual||r.risk!=='NORMAL';
-  const status=r.is_answered?(remotePending?'На модерации Ozon':remoteUnknown?'Статус ответа уточняется':'Отправлено'):generating?'Готовится':checking&&!checkWaiting?checkLabel:generationError?'Нужно повторить':r.status==='answer_rejected'?'Ответ отклонён Ozon':!r.draft?'Нужен ответ':technical&&!personal?'Проверка продолжится в фоне':needsCheck?'Нужна проверка':'Готов к отправке';
-  const reason=r.is_answered?(remotePending?'Ozon ещё не подтвердил публикацию ответа':remoteUnknown?'Нужно получить комментарий продавца из Ozon; повторная отправка не запускается':'Ответ уже опубликован'):generating?'Текущий текст сохраняется до завершения':generationError||(!r.draft?'Подготовьте черновик':r.rating<=3?'Низкая оценка: проверьте ответ перед отправкой':r.manual?'Опасный симптом: нужна личная проверка':q.issues?.join('; ')||'Перед отправкой проверьте текст');
-  const blocked=busy||generating||!canManage||!assistantEnabled||dirty;
+  const status=remotePending?'Ответ на модерации':remoteUnknown?'Сверка с маркетплейсом':r.is_answered?'Отправлено':generating?'Готовится':checking&&!checkWaiting?checkLabel:generationError?'Нужно повторить':r.status==='answer_rejected'?'Ответ отклонён маркетплейсом':!r.draft?'Нужен ответ':technical&&!personal?'Проверка продолжится в фоне':q.confirmed_repair?.status==='pending'?'Исправление перепроверяется':needsCheck?'Нужна проверка':'Готов к отправке';
+  const reason=remotePending?'Маркетплейс ещё не подтвердил публикацию ответа':remoteUnknown?'Ждём подтверждение ответа продавца от маркетплейса':r.is_answered?'Ответ уже опубликован':generating?'Текущий текст сохраняется до завершения':generationError||(!r.draft?'Подготовьте черновик':r.rating<=3?'Низкая оценка: проверьте ответ перед отправкой':r.manual?'Опасный симптом: нужна личная проверка':q.issues?.join('; ')||'Перед отправкой проверьте текст');
+  const blocked=busy||generating||!canManage||!assistantEnabled||dirty||awaitingMarketplace;
   const retryLabel=/ещё готовится|ожидание|задание сохранено/.test(generationError)?'Продолжить ожидание':'Повторить попытку';
   return <article className={'card review compact-review '+(r.rating<=3?'negative':'positive')}>
     <div className="review-head"><label className="check"><input type="checkbox" checked={checked} disabled={!canManage||r.is_answered} onChange={toggle}/><span className="review-product"><ProductThumbnail product={r.product}/><span className="review-product-copy"><b>{r.product.name}</b><span className="review-meta"><span>{r.product.brand} · {r.marketplace==='ozon'?'Ozon':r.marketplace==='yandex'?'Яндекс Маркет':'Wildberries'} {r.product_id}</span><span>{new Date(r.created_at).toLocaleDateString('ru-RU')}</span>{!hasText&&<span>Оценка без текста</span>}</span></span></span></label><div className="review-head-state"><span className="stars" aria-label={r.rating+' из 5'}>{'★'.repeat(r.rating)}<span>{'★'.repeat(5-r.rating)}</span></span><span role="status" title={reason} className={'pill '+(generating?'working':generationError||needsCheck?'amber':'green')}>{status}</span></div></div>
     <details className="review-expand" open={expanded||generating||checking} onToggle={e=>{if(e.currentTarget.open)setOpened(true);if(!generating)setExpanded(e.currentTarget.open)}}><summary><span className="review-preview">{hasText?r.text:r.is_answered?status:'Покупатель поставил оценку без текста'}</span><span className="review-open-label">{expanded||generating?'Свернуть':'Открыть ответ'}</span></summary>
     {(opened||expanded||generating||checking||Boolean(generationError))&&<div className={'review-content '+(hasText?'has-text':'rating-only')}>
       {hasText&&<CustomerReview review={r}/>}
-      {r.is_answered?<div>{(remotePending||remoteUnknown)&&<p className="muted" role="status">{reason}</p>}{String(r.existing_answer||'').trim()?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<p className="generation-notice" role="status">Текст ответа пока не загружен из {answerSource}. Сохранённый черновик остаётся в приложении. Повторная отправка не запускается.</p>}</div>:<div className="draft">
+      {(r.is_answered||awaitingMarketplace)?<div>{awaitingMarketplace&&<p className="muted" role="status">{reason}</p>}{String(r.existing_answer||'').trim()?<blockquote className="published-reply">{r.existing_answer}</blockquote>:<p className="generation-notice" role="status">Текст ответа пока не загружен из {answerSource}. Сохранённый черновик доступен после сверки.</p>}</div>:<div className="draft">
         {r.draft?<DraftEditor draft={r.draft} disabled={generating||!canManage} storageKey={storageKey||'draft-edit:'+r.draft.id} onSave={save} onDirty={value=>{setDirty(value);onPending?.(value)}} onRegister={register}/>:<p className="muted">Подготовьте ответ на этот отзыв.</p>}
         {checking&&<div className="generation-notice" role="status" aria-live="polite"><b>{checkLabel}</b><p>{checkWaiting?"Сервис не успел завершить проверку. Повтор запланирован на "+new Date(Number(ruleCheckJob?.result?.retry_at)*1000).toLocaleTimeString("ru-RU")+". Можно повторить сейчас.":ruleCheckJob?.status==="running"?"Проверяем сохранённый ответ по этапам. Время зависит от объёма правил и характеристик товара. Пройденные этапы сохраняются.":"Задание принято и ожидает свободного обработчика."} Текст ответа сохранён.</p></div>}
         <OwnerRuleStatus quality={q}/>{r.draft&&<RuleDetails draftId={r.draft.id} revision={r.draft.revision}/>}
@@ -66,5 +68,3 @@ export default function ReviewCard({review:r,checked,toggle,busy,assistantEnable
     </div>}</details>
   </article>;
 }
-
-

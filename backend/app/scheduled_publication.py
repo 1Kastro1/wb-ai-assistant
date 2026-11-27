@@ -161,7 +161,7 @@ def eligibility_reason(db, review, draft, schedule):
     if quality.get('owner_rules') is not None and not isinstance(quality['owner_rules'], dict):
         return 'Сначала завершите проверку правил.'
     previous = quality.get('owner_rules') or {}
-    from .review_context import STALE_CONTEXT, context_current
+    from .review_context import STALE_CONTEXT, STALE_FACTS, context_current, facts_current
     if not context_current(review, draft.text, previous):
         return STALE_CONTEXT
     if (previous.get('technical_error') or previous.get('checked') is False or
@@ -178,6 +178,8 @@ def eligibility_reason(db, review, draft, schedule):
         return STALE
     if not saved_rule_quality(draft.text, rules, quality.get('owner_rules'), review=review)['passed']:
         return 'Сначала проверьте ответ по актуальным правилам.'
+    if not facts_current(db, review, draft, product, rules):
+        return STALE_FACTS
     if question and quality.get('fitment', {}).get('status') in ('NEEDS_CATALOG', 'CONFLICT'):
         return 'Нужна проверка применяемости по каталогу.'
     try:
@@ -381,10 +383,21 @@ async def run_step(job_id, session_factory=Session):
                 ready_cursor=[draft.quality['owner_rules']['checked_at'],review.id]
             if not priority:
                 recover_positive_verdict(db, review, draft)
+            from .publication_constraints import seller_comment_unknown
+            if seller_comment_unknown(review):
+                from httpx import HTTPError
+                from .publication_reconciliation import resolve_seller_comment
+                try:
+                    await resolve_seller_comment(db, review)
+                except (HTTPError, ValueError, TimeoutError):
+                    pass  # The unresolved seller comment still blocks sending.
             reason = eligibility_reason(db, review, draft, schedule)
             from .confirmed_reply_repair import BLOCKED
-            from .review_context import STALE_CONTEXT
-            if reason == STALE_CONTEXT:
+            from .review_context import STALE_CONTEXT, STALE_FACTS
+            if reason == STALE_FACTS:
+                from .rule_retry import enqueue as enqueue_recheck
+                enqueue_recheck(db, draft, review, schedule.get('publication_authorized_by', ''), targeted=True)
+            elif reason == STALE_CONTEXT:
                 from .review_minions import handoff_context
                 if not handoff_context(db, draft, review):
                     from .rule_change_recheck import enqueue_draft
@@ -467,5 +480,3 @@ def runtime(db, schedule):
             'updated_at': state.get('updated_at'), 'next_at': datetime.fromtimestamp(due, timezone.utc).isoformat()
             if connected and selected and schedule.get('publication_enabled') and not reason and not pending else None})
     return {'available': not availability_reason(db), 'availability_reason': availability_reason(db), 'blocked_reason': reason, 'stores': stores}
-
-

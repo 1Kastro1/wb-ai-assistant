@@ -214,6 +214,25 @@ def test_yandex_review_list_recovers_and_preserves_verified_seller_text(monkeypa
     assert all(call.args == ('yandex', 'reviews') for call in mock.await_args_list)
 
 
+def test_yandex_comment_count_is_a_hold_until_seller_reply_is_verified(monkeypatch):
+    from app.publication_constraints import publication_restriction
+    from app.integrations import upsert_market_review
+
+    with Session() as db:
+        store = StoreProfile(id='ya-count', name='Яндекс', provider='yandex', config={'business_id': '123'})
+        db.add(store)
+        db.flush()
+        review = upsert_market_review(db, store, '42', 'p', 'Товар', '', 5, 'Спасибо!', '', True, answer=None)
+        db.commit()
+        assert not review.is_answered and publication_restriction(review)
+        monkeypatch.setattr(integrations, 'store_credentials', lambda *_: (store, 'test-key'))
+        request = AsyncMock(return_value={'state': 'published', 'text': 'Добрый день! Спасибо за отзыв.'})
+        monkeypatch.setattr(recovery, 'yandex_seller_reply', request)
+        asyncio.run(recovery.resolve_seller_comment(db, review))
+        assert review.is_answered and review.status == 'published'
+        assert not publication_restriction(review)
+
+
 def test_yandex_reads_all_pages_and_uses_selected_store_credentials(monkeypatch):
     jid = reserve('yandex')
     seen = []

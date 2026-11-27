@@ -142,7 +142,7 @@ def yandex_comment_evidence(comment, external_id, expected_text):
         return None
     if str(comment.get('feedbackId')) != str(external_id):
         raise ValueError('Яндекс Маркет вернул комментарий другого отзыва.')
-    if str(comment.get('text', '')).strip() != expected_text.strip():
+    if expected_text is not None and str(comment.get('text', '')).strip() != expected_text.strip():
         return {'state': 'mismatch'}
     states = {'PUBLISHED': 'published', 'UNMODERATED': 'answer_pending',
               'BANNED': 'rejected', 'DELETED': 'rejected'}
@@ -150,8 +150,71 @@ def yandex_comment_evidence(comment, external_id, expected_text):
             'comment_id': str(comment.get('id', '')), 'text': comment.get('text', '')}
 
 
+async def yandex_seller_reply(store, token, external_id, expected=None):
+    from .integrations import YandexProvider
+    from .security import guard
+
+    if not str(external_id).isdigit():
+        raise ValueError('Некорректный идентификатор отзыва Яндекс Маркета.')
+    page, seen, mismatch = '', set(), False
+    for _ in range(100):
+        params = {'limit': 50}
+        if page:
+            params['pageToken'] = page
+        value = await guard.request('yandex', 'review_comments', headers={'Api-Key': token},
+            url=YandexProvider().target(store, 'review_comments'), params=params,
+            body={'feedbackId': int(external_id)})
+        payload = value.get('result') or {}
+        if value.get('status') != 'OK' or not isinstance(payload.get('comments'), list):
+            raise ValueError('Яндекс Маркет не вернул подтверждённый список комментариев.')
+        for comment in payload['comments']:
+            evidence = yandex_comment_evidence(comment, external_id, expected)
+            if evidence and evidence['state'] != 'mismatch':
+                if expected is not None or evidence['state'] != 'rejected':
+                    return evidence
+            mismatch = mismatch or bool(evidence and evidence['state'] == 'mismatch')
+        page = str((payload.get('paging') or {}).get('nextPageToken') or '')
+        if not page:
+            return {'state': 'mismatch' if mismatch else 'absent'}
+        if page in seen:
+            break
+        seen.add(page)
+    raise ValueError('Сверка комментариев Яндекс Маркета не завершена.')
+
+
+async def resolve_seller_comment(db, review):
+    from .integrations import store_credentials
+    from .publication_constraints import seller_comment_unknown
+    from .safety import mask_vin
+
+    expected = (review.id, review.wb_account_id, review.wb_review_id)
+    store, token = store_credentials(db, review.wb_account_id)
+    identity = account_identity(db, store)
+    evidence = await yandex_seller_reply(store, token, review.wb_review_id)
+    db.refresh(store)
+    current = db.scalar(select(Review).where(Review.id == expected[0]).with_for_update()
+                        .execution_options(populate_existing=True))
+    if (not current or current.is_answered or current.status == 'publishing'
+            or (current.id, current.wb_account_id, current.wb_review_id) != expected
+            or not seller_comment_unknown(current) or account_identity(db, store) != identity
+            or db.scalar(select(Publication.id).where(Publication.review_id == current.id)) is not None):
+        return
+    state = evidence['state']
+    if state == 'published' and str(evidence.get('text') or '').strip():
+        current.is_answered, current.status = True, 'published'
+        current.existing_answer = mask_vin(evidence['text'])
+    elif state == 'answer_pending':
+        current.status = 'answer_pending'
+        return
+    elif state != 'absent':
+        return
+    sections = dict(current.sections or {})
+    sections.pop('_seller_reply_unverified', None)
+    current.sections = sections
+
+
 async def remote_evidence(db, review, state):
-    from .integrations import store_credentials, wb_token, YandexProvider, OzonProvider
+    from .integrations import store_credentials, wb_token, OzonProvider
     from .security import guard
     store = db.get(StoreProfile, review.wb_account_id)
     if not store or state.get('identity') != account_identity(db, store):
@@ -172,31 +235,7 @@ async def remote_evidence(db, review, state):
             evidence = {**evidence, 'state': 'rejected'}
         return evidence
     if store.provider == 'yandex':
-        if not str(external_id).isdigit():
-            raise ValueError('Некорректный идентификатор отзыва Яндекс Маркета.')
-        page, seen, mismatch = '', set(), False
-        for _ in range(100):
-            params = {'limit': 50}
-            if page:
-                params['pageToken'] = page
-            value = await guard.request('yandex', 'review_comments', headers={'Api-Key': token},
-                url=YandexProvider().target(store, 'review_comments'), params=params,
-                body={'feedbackId': int(external_id)})
-            payload = value.get('result') or {}
-            if value.get('status') != 'OK' or not isinstance(payload.get('comments'), list):
-                raise ValueError('Яндекс Маркет не вернул подтверждённый список комментариев.')
-            for comment in payload['comments']:
-                evidence = yandex_comment_evidence(comment, external_id, expected)
-                if evidence and evidence['state'] != 'mismatch':
-                    return evidence
-                mismatch = mismatch or bool(evidence)
-            page = str((payload.get('paging') or {}).get('nextPageToken') or '')
-            if not page:
-                return {'state': 'mismatch' if mismatch else 'absent'}
-            if page in seen:
-                break
-            seen.add(page)
-        raise ValueError('Сверка комментариев Яндекс Маркета не завершена.')
+        return await yandex_seller_reply(store, token, external_id, expected)
     raise ValueError('Маркетплейс не поддерживает сверку.')
 
 

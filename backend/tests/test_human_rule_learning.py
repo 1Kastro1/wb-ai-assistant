@@ -30,6 +30,7 @@ def seed_audit(db):
 def test_owner_enabled_learning_activates_once_rechecks_scope_and_never_approves():
     with Session() as db:
         seed_audit(db);set_setting(db,'auto_case_rules_enabled',True)
+        db.get(Draft, 'db').quality = {'passed': True, 'owner_rules': {'checked': True, 'passed': True}}
         row=db.get(ReviewLibraryAuditRow,('audit','a'))
         rule=suggest_case_rule(db,row,db.get(Review,'a'))
         assert rule.enabled and rule.scope=='product:p'
@@ -66,6 +67,21 @@ def test_technical_failures_do_not_grow_rules_even_after_opt_in():
         row=db.get(ReviewLibraryAuditRow,('audit','a'));row.issues=['тайм-аут: ответ должен быть содержательным']
         assert suggest_case_rule(db,row,db.get(Review,'a')) is None
         assert db.scalar(select(func.count()).select_from(Memory))==0
+
+
+def test_unverified_rules_are_saved_inactive_and_data_gaps_do_not_create_rules():
+    with Session() as db:
+        seed_audit(db)
+        set_setting(db, 'auto_case_rules_enabled', True)
+        row = db.get(ReviewLibraryAuditRow, ('audit', 'a'))
+        review = db.get(Review, 'a')
+        for issue in ('Нет подтверждённых сведений о мощности', 'Не выполнена подпись ответа'):
+            row.issues = [issue]
+            assert suggest_case_rule(db, row, review) is None
+        row.issues = ['ответить именно на содержание отзыва']
+        rule = suggest_case_rule(db, row, review)
+        assert not rule.enabled
+        assert setting(db, 'memory-meta:' + rule.id, {})['case_examples'] == 0
 
 
 def test_reviewed_cleanup_is_reversible_idempotent_and_keeps_other_rules(client,tmp_path):
