@@ -86,6 +86,9 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
     active = {}
     between_task = None
     slice_started = time.monotonic()
+    # A fresh batch that won a queue turn must inspect at least one candidate.
+    # Pending handoffs used to make it yield repeatedly without any progress.
+    may_yield = not initial.get('fresh_reviews')
     yielded = False
     last_draft = None
     support = inspect.signature(generate).parameters
@@ -258,12 +261,13 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
             with session_factory() as db:
                 yield_due = not single and other_waiting(db, job_id,
                     priority_only=time.monotonic() - slice_started < BATCH_SLICE_SECONDS)
-            if yield_due and not active and between_task is None:
+            if yield_due and may_yield and not active and between_task is None:
                 yielded = True
                 break
             started_any = False
             for lane in (('fast', 'model') if fast_supported else ('model',)):
-                if lane not in active and (not yield_due or lane == 'fast' and 'model' in active):
+                if lane not in active and (not yield_due or not may_yield
+                        or lane == 'fast' and 'model' in active):
                     # Imports run in their own session/task. A slow marketplace
                     # must not stop either generation lane while it awaits I/O.
                     info = next_review(lane)
@@ -271,11 +275,15 @@ async def run_draft_batch(job_id, generate, between_reviews, session_factory=Ses
                         active[lane] = (asyncio.create_task(generate_one(info)), info)
                         started_any = True
             if started_any:
+                may_yield = True
                 snapshot()
             if not active and between_task is None:
                 with session_factory() as db:
                     remaining = db.scalar(query().with_only_columns(func.count(), maintain_column_froms=True)) or 0
                 if not remaining:
+                    break
+                if yield_due:
+                    yielded = True
                     break
             waiting_tasks = {task for task, _ in active.values()}
             if between_task:
