@@ -787,7 +787,7 @@ def assess_question_answer(question, product, answer, sources=None, owner_rules=
     return {'score': min(100, score), 'passed': score >= 90 and not issues, 'issues': issues, 'intent_label': intent, 'breakdown': breakdown, 'sources': sources or [], 'checked_at': now(), 'evaluator_version': QUALITY_EVALUATOR_VERSION}
 
 
-async def generate_question_draft(db, question, instruction=''):
+async def generate_question_draft(db, question, instruction='', *, catalog_only=False):
     from .skill_engine import ReplySkills
     skills = ReplySkills(db, 'question')
     question_started = time.monotonic()
@@ -815,13 +815,13 @@ async def generate_question_draft(db, question, instruction=''):
                         if asks_for_date(question) and not analysis['buyer_asks_about_money'] else None)
     from .simple_question_templates import question_template
     local_reply = (skills.run('verified_template', question_template, question, product, memories, verified_facts)
-                   if not instruction.strip() else None)
+                   if not (instruction.strip() or catalog_only) else None)
     if production_reply:
         local_reply = None
     local_quality = assess(local_reply) if local_reply else None
     if local_quality and not local_quality['passed']:
         local_reply = None
-    assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not (local_reply or production_reply or analysis['buyer_asks_about_money']) else None
+    assortment = assortment_question_answer(db,question,product,trusted_product_facts) if not (catalog_only or local_reply or production_reply or analysis['buyer_asks_about_money']) else None
     if assortment:
         sources.extend(assortment['sources']);intent=assortment['intent']
     if not (assortment or production_reply) and intent == 'применение' and not has_usage_instruction(verified_facts):
@@ -978,7 +978,7 @@ def recovery_protected(db, review, draft, recovery):
     return protected_draft(db, review, draft) or (isinstance(recovery, str) and review.wb_account_id != recovery)
 
 
-async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip_existing=False, recovery=False):
+async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip_existing=False, recovery=False, catalog_only=False):
     async def operation():
         # Re-read after acquiring the cross-process claim. Bulk work never overwrites edits.
         db.expire_all()
@@ -992,11 +992,12 @@ async def generate_draft(db, review_id, instruction='', *, fast_only=False, skip
             if (not review or review.is_answered or review.status == 'publishing'
                 or db.scalar(select(Draft.id).where(Draft.review_id == review_id))):
                 raise ReviewSkipped('У отзыва уже есть ответ или черновик')
-        return await _generate_draft(db, review_id, instruction, fast_only=fast_only, retry_outages=skip_existing, recovery=recovery)
+        return await _generate_draft(db, review_id, instruction, fast_only=fast_only, retry_outages=skip_existing,
+                                     recovery=recovery, catalog_only=catalog_only)
     return await exclusive_generation(review_id, operation, sessionmaker(bind=db.get_bind(), expire_on_commit=False))
 
 
-async def _generate_draft(db, review_id, instruction='', *, fast_only=False, retry_outages=False, recovery=False):
+async def _generate_draft(db, review_id, instruction='', *, fast_only=False, retry_outages=False, recovery=False, catalog_only=False):
     from .skill_engine import ReplySkills
     generation_started = time.monotonic()
     requested_instruction = instruction
@@ -1006,7 +1007,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
         raise ValueError('Ассистент отключён владельцем')
     review = db.get(Review, review_id)
     if review and review.marketplace.endswith('_question'):
-        return await generate_question_draft(db, review, instruction)
+        return await generate_question_draft(db, review, instruction, catalog_only=catalog_only)
     if not review or review.is_answered:
         raise ValueError('Отзыв не найден или уже имеет ответ')
     if review.status == 'publishing':

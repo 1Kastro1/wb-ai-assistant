@@ -41,7 +41,7 @@ def queue_ordering():
     # Its next checkpoint refreshes last_served_at, so other work still runs.
     overdue_send = Job.kind.in_(('wb_publish_send', 'scheduled_publication', 'publication_reconcile')) & (served < cutoff)
     generation_cutoff = (current - timedelta(minutes=5)).isoformat()
-    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts','review_library_audit','review_minion')),
+    batch_generation = or_(Job.kind.in_(('drafts', 'question_drafts','review_library_audit','review_minion','fitment_minion')),
         (Job.kind == 'draft_recheck') & or_(Job.result['policy_scan'].as_boolean() == True,
             Job.result['policy_regeneration'].as_boolean() == True,
             Job.result['target_revision'].as_integer().is_not(None),
@@ -91,8 +91,8 @@ def queue_ordering():
 
 
 def fresh_generation(job):
-    return (job.kind.in_(('drafts', 'question_drafts')) &
-            job.result['fresh_reviews'].as_boolean().is_(True))
+    return or_(job.kind == 'fitment_minion', job.kind.in_(('drafts', 'question_drafts')) &
+               job.result['fresh_reviews'].as_boolean().is_(True))
 
 
 def archive_generation(job):

@@ -212,7 +212,7 @@ def test_owner_can_publish_verified_positive_reviews_during_archive_audit(client
            drafts_enabled=True, question_drafts_enabled=True)
     main.queue_scheduled_jobs()
     with Session() as db:
-        assert {job.kind for job in db.scalars(select(Job))} == {automatic.KIND,'products','reviews','questions','drafts','question_drafts'}
+        assert {job.kind for job in db.scalars(select(Job))} == {automatic.KIND,'products','reviews','questions','drafts','question_drafts','fitment_minion'}
         db.add(Job(id='needed-check',kind='draft_recheck',result={'account_id':'owner'}));db.flush()
         assert next_job(db,('draft_recheck',)).id=='needed-check'
         assert selfcheck(db, 'audit', [])['publication_disabled'] is False

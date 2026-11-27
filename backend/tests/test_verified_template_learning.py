@@ -13,6 +13,23 @@ from app.learned_reply_templates import load_template
 from app.review_rule_pack143 import PACK
 
 
+def test_template_view_deduplicates_review_text_across_markets(client):
+    from app.verified_reply_library import remember
+
+    with Session() as db:
+        for market in ('wb', 'ozon'):
+            remember(db, 'review-' + market, 'exact', 'Спасибо за Ваш отзыв!', {}, marketplace=market)
+        remember(db, 'question', 'exact', 'Да, подходит.', {}, marketplace='wb_question')
+        db.commit()
+    result = client.get('/review-library/templates', params={'marketplace': 'ozon', 'q': 'СПАСИБО'})
+    assert result.status_code == 200
+    data = result.json()
+    assert data['total'] == 1
+    assert data['items'][0]['marketplaces'] == ['wb', 'ozon']
+    assert data['items'][0]['contexts'] == 2
+    assert client.get('/review-library/templates').json()['total'] == 1
+
+
 def seed(db,text='Все супер!'):
     db.add(Product(id='p',name='Ароматизатор GIGA',brand='EIKOSHA',category='Ароматизаторы',marketplace='wb'))
     db.add_all(Memory(id='m'+str(i),text=r['text'],scope=r['scope'],kind='REVIEW_RULE') for i,r in enumerate(PACK['rules']))
