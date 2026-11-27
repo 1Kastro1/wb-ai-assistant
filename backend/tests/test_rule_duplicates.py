@@ -126,7 +126,7 @@ def test_automatic_learning_reuses_audited_global_coverage_without_new_rules_or_
     with Session() as db:
         rule=Memory(id='general',text='Учитывай каждое замечание и вопрос.',kind='REVIEW_RULE',scope='global')
         db.add(rule);set_setting(db,'auto_case_rules_enabled',True);db.commit()
-        monkeypatch.setattr(library,'CASE_COVERAGE',{content_hash(rule):[value for _,value in library.GUIDANCE]+[library.DEFAULT_GUIDANCE]})
+        monkeypatch.setattr(library,'CASE_COVERAGE',{content_hash(rule):[value for _,value in library.GUIDANCE]})
         for pid in ('p1','p2','p3'):
             row=SimpleNamespace(status='attention',issues=['ответить именно на содержание отзыва'])
             assert library.suggest_case_rule(db,row,SimpleNamespace(id=pid,product_id=pid)).id=='general'

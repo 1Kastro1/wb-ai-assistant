@@ -4,6 +4,7 @@ import json
 import re
 
 STALE_CONTEXT = 'Сначала проверьте ответ по полному тексту отзыва и актуальным правилам.'
+STALE_FACTS = 'Сначала проверьте ответ по актуальным сведениям о товаре.'
 CONTEXT_RULE = (
     'Сверь ответ со всем текстом покупателя, включая достоинства, недостатки и дополнения. '
     'Последнее уточнение определяет, осталась ли проблема. Ответь на главную претензию и существенные замечания, '
@@ -80,3 +81,17 @@ def context_current(review, answer, verdict):
         return not needs_context_check(review)
     return (verdict.get('checked') is True and verdict.get('passed') is True
             and proof == context_proof(review, answer))
+
+
+def facts_current(db, review, draft, product, rules, *, input_key=None):
+    """For non-template replies check the exact input verified by the worker."""
+    if not needs_context_check(review):
+        return True
+    proof = (draft.quality or {}).get('owner_rules') or {}
+    if not proof.get('input_key'):
+        return False
+    if input_key is None:
+        from .rule_execution import verification_key
+        from .services import review_verified_facts
+        input_key = verification_key(draft.text, review, product, rules, review_verified_facts(db, review, product, rules))
+    return proof['input_key'] == input_key

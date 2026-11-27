@@ -65,6 +65,33 @@ def test_archive_only_skip_pauses_but_verified_reply_wakes_delivery(client, read
         assert job.result['priority_reviews'] == {'ownerreview': 9}
 
 
+def test_changed_product_facts_require_recheck_before_automatic_send(client, ready, monkeypatch):
+    from app.owner_reply_policy import fingerprint
+    from app.review_context import context_proof
+    from app.rule_execution import verification_key
+
+    monkeypatch.setattr(services, 'assess_reply', lambda *_a, **_k: {'passed': True, 'issues': []})
+    enable(client, enabled=True, publication_questions=False)
+    with Session() as db:
+        review, draft, product = db.get(Review, 'ownerreview'), db.get(Draft, 'ownerreview'), db.get(Product, 'owner')
+        review.text = 'Щётка подошла, но первые полосы появились через неделю.'
+        draft.text = 'Добрый день! Спасибо за отзыв. Жаль, что щётка начала оставлять полосы через неделю.'
+        draft.quality = {'passed': True, 'owner_rules': {'fingerprint': fingerprint([]), 'checked': True,
+            'passed': True, 'review_context_proof': context_proof(review, draft.text),
+            'input_key': verification_key(draft.text, review, product, [], services.review_verified_facts(db, review, product, []))}}
+        product.facts = [{'text': 'Новая проверенная характеристика', 'source': 'Карточка товара', 'verification_status': 'VERIFIED'}]
+        job_id = db.scalar(select(Job.id).where(Job.kind == automatic.KIND,
+            Job.result['account_id'].as_string() == 'owner'))
+        db.commit()
+    asyncio.run(automatic.run_step(job_id))
+    assert ready == []
+    with Session() as db:
+        job = db.scalar(select(Job).where(Job.kind == 'draft_recheck',
+            Job.result['retry_draft_id'].as_string() == 'ownerreview'))
+        assert job and job.result['target_revision'] == 9
+        assert db.scalar(select(Publication).where(Publication.review_id == 'ownerreview')) is None
+
+
 @pytest.mark.parametrize('store', ['owner', 'oz', 'ya'])
 def test_stale_buyer_update_is_checked_by_minion_before_publishing(client, ready, store, monkeypatch):
     from app.db import ReviewLibraryAuditRow

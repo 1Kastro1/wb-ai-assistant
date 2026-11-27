@@ -501,12 +501,21 @@ def upsert_market_review(db, store, external_id, product_external_id, product_na
             if (attempt.get('review_id') == row.id and attempt.get('external_id') == row.wb_review_id
                     and attempt.get('action_id') == publication.action_id and attempt.get('identity') == account_identity(db, store)):
                 row.existing_answer = mask_vin(attempt.get('text') or '')
-        row.is_answered = bool(answered or row.existing_answer or confirmed)
+        row.is_answered = bool(row.existing_answer or confirmed)
+        if store.provider == 'yandex':
+            section_values = dict(row.sections or {})
+            if answered and not row.is_answered:
+                section_values['_seller_reply_unverified'] = True
+            else:
+                section_values.pop('_seller_reply_unverified', None)
+            row.sections = section_values
     else:
         row.is_answered, row.existing_answer = bool(answered), mask_vin(answer)
     for key, value in classify(row.text, product.category).items():
         setattr(row, key, value)
     row.status = 'published' if row.is_answered else ('manual_review' if row.manual else ('draft_ready' if db.scalar(select(Draft).where(Draft.review_id == row.id)) else 'unanswered'))
+    if answer is None and publication and publication.status in ('answer_pending', 'uncertain', 'mismatch'):
+        row.status = 'answer_pending' if publication.status == 'answer_pending' else 'answer_unknown'
     db.add(row)
     return row
 
@@ -818,4 +827,3 @@ ozon, yandex = OzonProvider(), YandexProvider()
 
 def provider_for(store):
     return {'wb': wb, 'ozon': ozon, 'yandex': yandex}.get(store.provider)
-
