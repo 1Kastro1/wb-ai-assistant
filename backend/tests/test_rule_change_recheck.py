@@ -89,6 +89,8 @@ def test_product_scope_reaches_equivalent_listings_and_keeps_saved_text(client, 
 
 def test_scoped_rules_skip_unaffected_and_already_current_verdict(client):
     from app.review_context import context_proof
+    from app.rule_execution import verification_key
+    from app.services import review_verified_facts
     with Session() as db:
         seed(db)
         rule=Memory(id='r',text='Пиши по существу.',kind='REVIEW_RULE',scope='category:Фильтры',enabled=True)
@@ -97,7 +99,8 @@ def test_scoped_rules_skip_unaffected_and_already_current_verdict(client):
         rules=matching_owner_rules(db,product)
         assert should_check(db,draft,review,product,state,rules)
         draft.quality={'passed':True,'owner_rules':{'checked':True,'passed':True,'fingerprint':fingerprint(rules),
-            'issues':[], 'review_context_proof': context_proof(review, draft.text)}}
+            'issues':[], 'review_context_proof': context_proof(review, draft.text),
+            'input_key': verification_key(draft.text, review, product, rules, review_verified_facts(db, review, product, rules))}}
         assert not should_check(db,draft,review,product,state,rules)
         # Curated category metadata is respected even if the marketplace category is empty.
         assert affected(db,review,product,state)
