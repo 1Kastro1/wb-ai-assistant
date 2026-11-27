@@ -1,6 +1,4 @@
 """Turn completed checks into one repair attempt per saved set of inputs."""
-import re
-
 from .confirmed_reply_repair import normalized
 from .owner_reply_policy import apply_local_preferences, apply_signature, attach_rule_quality, context_constraints, fingerprint, local_issues
 from .safety import mask_vin, validate_reply
@@ -27,21 +25,18 @@ def findings(quality, content, input_key=None):
 async def stage(review, product, reply, quality, rules, facts, assess, notes, input_key):
     """Save a changed proposal without approval. The next job checks that exact text."""
     from .production_date import single_request, answer
+    from .reply_policy import first_impression_reply
 
     audit = {'issue': notes[0], 'findings': notes, 'input_key': input_key, 'status': 'blocked'}
     try:
-        buyer = normalized(review.text)
         format_notes = formatting_findings(reply, review, rules)
         if format_notes and set(notes) <= set(format_notes):
             # Correct presentation without changing the buyer-facing substance.
             candidate, _ = apply_local_preferences(reply, review, rules, style_only=True)
         elif single_request(review):
             candidate = answer(review, product, facts)
-        elif (not review.marketplace.endswith('_question') and review.rating >= 4
-                and re.fullmatch(r'\s*пока (?:вроде )?пахнет[, ]+посмотрим[, ]+(?:на ?сколько )?хватит[!. ]*', buyer)):
-            candidate = ('Здравствуйте! Спасибо, что поделились первыми впечатлениями! '
-                         'Рады, что аромат уже чувствуется. Как долго он будет держаться, '
-                         'станет понятно в процессе использования.')
+        elif concise := first_impression_reply(review):
+            candidate = concise
         else:
             from .generation_budget import GenerationBudget, cpu_request_seconds
             from .integrations import ollama

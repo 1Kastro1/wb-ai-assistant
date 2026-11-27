@@ -9,6 +9,7 @@ KIND = 'scheduled_publication'
 PROVIDERS = ('wb', 'ozon', 'yandex')
 BATCH_SIZE = 200
 LIVE_BURST = 8
+ARCHIVE_BACKOFF_SECONDS = 60
 FIELDS = ('publication_enabled', 'publication_hours', 'publication_reviews', 'publication_questions', 'publication_low_ratings', 'publication_all_low_ratings')
 
 
@@ -210,7 +211,11 @@ def enqueue(db, schedule, store, current, *, target=None):
         .order_by(Job.created_at).limit(1).with_for_update().execution_options(populate_existing=True))
     if active:
         if target:
-            active.result = {**active.result, 'priority_reviews': {**active.result.get('priority_reviews', {}), **target},
+            state = dict(active.result or {})
+            archive_retry = state.pop('archive_retry_at', None)
+            if archive_retry is not None and state.get('retry_at') == archive_retry:
+                state['retry_at'] = 0
+            active.result = {**state, 'priority_reviews': {**state.get('priority_reviews', {}), **target},
                 'has_priority_reviews': True}
         elif (active.result or {}).get('priority_only'):
             active.result = {**active.result, 'priority_only': False}
@@ -302,7 +307,8 @@ def finish(db, job, schedule, message):
 async def run_step(job_id, session_factory=Session):
     from .services import confirm_action
     started = time.monotonic()
-    for _ in range(BATCH_SIZE):
+    only_archive_skips = True
+    for index in range(BATCH_SIZE):
         with session_factory() as db:
             try:
                 schedule, job = authorized_job(db, job_id)
@@ -331,7 +337,7 @@ async def run_step(job_id, session_factory=Session):
                 fresh=fresh.where(or_(checked_at>ready_cursor[0],and_(checked_at==ready_cursor[0],Review.id>ready_cursor[1])))
             from_ready = False
             archive = None
-            if not state.get('priority_only') and state.get('live_streak', 0) >= LIVE_BURST:
+            if not priority and not state.get('priority_only') and state.get('live_streak', 0) >= LIVE_BURST:
                 archive = db.scalar(candidate_query(state['account_id'], schedule, state.get('cursor')).limit(1))
             if archive is not None:
                 priority = None
@@ -430,8 +436,14 @@ async def run_step(job_id, session_factory=Session):
                 'message': 'Ответ передан на публикацию' if aid and not reason else 'Проверяем готовность ответов к отправке',
                 'skip_reasons':reasons}
             job.status = 'cancelled' if job.cancel_requested else 'queued'
+            only_archive_skips = only_archive_skips and not (from_ready or priority or aid) and bool(reason)
+            slice_done = time.monotonic() - started >= 15 or index + 1 == BATCH_SIZE
+            if (slice_done and only_archive_skips and job.status == 'queued'
+                    and not job.result.get('priority_reviews') and not job.result.get('retry_at')):
+                retry_at = time.time() + ARCHIVE_BACKOFF_SECONDS
+                job.result = {**job.result, 'retry_at': retry_at, 'archive_retry_at': retry_at}
             db.commit()
-            if job.status in ('completed', 'cancelled') or time.monotonic() - started >= 15:
+            if job.status in ('completed', 'cancelled') or slice_done:
                 return
 
 

@@ -22,6 +22,24 @@ def start_job(**result):
         db.commit()
 
 
+def test_fresh_batch_saves_a_review_before_yielding_to_pending_minion(client, seeded, monkeypatch):
+    start_job(scheduled=True, fresh_reviews=True)
+    with Session() as db:
+        db.get(Review, 'r4').created_at = '2027-01-01'
+        db.add(Job(id='handoff', kind='review_minion', result={'handoff_at': '2026-11-27'}))
+        db.commit()
+
+    async def generate(db, rid, instruction=''):
+        return save(db, rid)
+
+    monkeypatch.setattr(main, 'generate_draft', generate)
+    asyncio.run(main.run_sync_job('batch'))
+    with Session() as db:
+        assert db.get(Draft, 'answer-r4')
+        assert db.get(Job, 'batch').result['processed'] == 1
+        assert db.get(Job, 'batch').status == 'queued'
+
+
 @pytest.mark.parametrize('fast_text', ['', 'Отличные лампочки.', 'Хорошая штука'])
 def test_fast_answers_finish_while_model_is_blocked_and_new_reviews_join(client, seeded, monkeypatch, fast_text):
     with Session() as db:

@@ -81,9 +81,9 @@ def untried_template(review, rules, revision=0, *, product=None):
     from types import SimpleNamespace
     from .owner_reply_policy import constraints, apply_local_preferences, apply_signature, local_issues
     from .product_guidance import positive_review_reply
+    from .reply_policy import first_impression
     from .safety import validate_reply
-    text = re.sub(r'[.!?,;…]', ' ', (getattr(review, 'text', '') or '').casefold().replace('ё', 'е'))
-    if ' '.join(text.split()) not in UNTRIED_TEXTS:
+    if not first_impression(review):
         return None
     if not empty_positive(SimpleNamespace(text='', **{key: getattr(review, key, default) for key, default in
             [('rating',0),('risk','NORMAL'),('manual',False),('safety_critical',False),('marketplace','')]})):

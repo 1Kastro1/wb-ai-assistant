@@ -6,6 +6,7 @@ from .safety import mask_vin, validate_reply
 
 RATING = 'Ответ ошибочно благодарит за высокую оценку при оценке 1–3★.'
 ADAPTER = 'Ответ не упоминает крепление, о котором спросил покупатель.'
+FIRST_IMPRESSION = 'На первые впечатления достаточно короткой благодарности без предположений о сроке работы товара.'
 BLOCKED = 'Сначала исправьте подтверждённую ошибку в ответе.'
 UNCHECKED = 'Исправленный ответ ещё не прошёл повторную проверку.'
 
@@ -36,6 +37,10 @@ def mentions_adapter(text, code):
 def confirmed_issue(review, reply):
     answer = normalized(reply)
     if not review.marketplace.endswith('_question'):
+        from .reply_policy import first_impression
+        if first_impression(review) and re.search(
+                r'в процессе использования|как долго|сколько (?:будет|прослуж)|аромат уже чувствуется', answer):
+            return FIRST_IMPRESSION
         return RATING if 1 <= review.rating <= 3 and re.search(r'за (?:вашу )?высокую оценку', answer) else ''
     code = adapter_code(review)
     if (code and not mentions_adapter(answer, code)
@@ -45,6 +50,9 @@ def confirmed_issue(review, reply):
 
 
 def replacement(review, product, issue, facts):
+    if issue == FIRST_IMPRESSION:
+        from .reply_policy import first_impression_reply
+        return first_impression_reply(review)
     if issue == ADAPTER:
         code = adapter_code(review)
         if any(mentions_adapter(fact.get('text'), code) for fact in facts):

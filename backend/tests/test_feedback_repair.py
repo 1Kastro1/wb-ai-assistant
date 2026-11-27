@@ -49,7 +49,9 @@ def test_saved_findings_create_new_revision_and_complete_fresh_rule_check(client
     with Session() as db:
         draft = db.get(Draft, 'd')
         assert draft.revision == 2 and draft.original == original
-        assert ('точный месяц и год' if is_question else 'аромат уже чувствуется') in draft.text
+        assert ('точный месяц и год' if is_question else 'Спасибо за отзыв!') in draft.text
+        if not is_question:
+            assert 'аромат уже чувствуется' not in draft.text
         assert '2025' not in draft.text and db.get(Job, job_id).status == 'queued'
         assert draft.quality['confirmed_repair']['status'] == 'pending'
         assert draft.quality['passed'] is False
@@ -60,6 +62,19 @@ def test_saved_findings_create_new_revision_and_complete_fresh_rule_check(client
         assert draft.quality['confirmed_repair']['status'] == 'rechecked'
         assert draft.quality['owner_rules']['checked'] and draft.quality['passed']
     checker.assert_awaited_once()
+
+
+@pytest.mark.parametrize('market', ['wb', 'ozon', 'yandex'])
+def test_first_impression_uses_full_review_before_selecting_short_reply(market):
+    from app.reply_policy import first_impression_reply
+    from app.confirmed_reply_repair import confirmed_issue
+
+    review = SimpleNamespace(marketplace=market, rating=5,
+        text='Пока вроде пахнет, посмотрим на сколько хватит!', sections={})
+    assert first_impression_reply(review) == 'Здравствуйте! Спасибо за отзыв!'
+    assert confirmed_issue(review, 'Как долго он будет держаться, станет понятно в процессе использования.')
+    review.sections['supplement'] = 'Через неделю аромат пропал.'
+    assert first_impression_reply(review) is None
 
 
 def test_only_verified_dates_for_exact_inquiry_survive_conflict_and_certificate_guard():
