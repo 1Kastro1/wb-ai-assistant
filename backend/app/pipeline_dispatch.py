@@ -47,9 +47,10 @@ async def run_slice(job_id, execute, session_factory=Session, poll_seconds=1):
     with session_factory() as db:
         job = db.get(Job, job_id)
         kind = job.kind if job else None
+        scheduled_batch = kind in ('drafts', 'question_drafts') and bool((job.result or {}).get('scheduled'))
     if kind == PUBLICATION:
         return await run_publication_group(job_id, execute, session_factory)
-    if kind not in (*MODEL_WORK, 'drafts', 'question_drafts'):
+    if kind not in MODEL_WORK and not scheduled_batch:
         return await execute(job_id)
     token = parallel_slice.set(True)
     parent = asyncio.create_task(execute(job_id))

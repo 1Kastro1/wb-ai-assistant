@@ -7,7 +7,7 @@ from app.pipeline_dispatch import run_slice, parallel_slice
 @pytest.mark.parametrize('kind', ['draft_recheck', 'drafts', 'question_drafts'])
 def test_io_finishes_while_model_is_waiting_without_starting_second_model(kind):
     with Session() as db:
-        db.add_all([Job(id='model',kind=kind),Job(id='model2',kind='draft_recheck'),
+        db.add_all([Job(id='model',kind=kind,result={'scheduled':True}),Job(id='model2',kind='draft_recheck'),
             Job(id='sync',kind='reviews'),Job(id='send',kind='scheduled_publication')]);db.commit()
     async def scenario():
         io_finished=asyncio.Event();seen=[]
