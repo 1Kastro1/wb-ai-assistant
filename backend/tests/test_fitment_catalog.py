@@ -42,6 +42,39 @@ class FitmentTests(unittest.TestCase):
         self.seed();r=self.row();r['fit']='нет';alt=self.row();alt.update(part_number='00456',wb_nm_id='100002');foreign=self.row();foreign.update(part_number='00789',wb_nm_id='100003')
         self.upload([r,alt,foreign]);result=self.answer();self.assertEqual(result['status'],'ALTERNATIVE');self.assertIn('100002',result['text']);self.assertNotIn('100003',result['text'])
 
+    def test_minion_resolves_compact_frame_through_oem_and_store_article(self):
+        from app.db import Account, Job, StoreProfile, set_setting
+        from app.fitment_minion import enqueue, run_step
+        from app.safety import mask_vin
+        from app.vehicle_identifiers import vehicle_identifiers
+
+        question_text = 'Подойдёт ли фильтр для Nissan, кузов VAY12000123?'
+        self.seed(question_text)
+        self.assertEqual(vehicle_identifiers(question_text), ['VAY12-000123'])
+        self.assertEqual(vehicle_identifiers('Артикул VAY12000123'), [])
+        self.assertNotIn('VAY12000123', mask_vin(question_text))
+        anchor = self.row()
+        anchor.update(vin='VAY12-000123', brand='NISSAN', part_number='AY100NS005', wb_nm_id='')
+        cross = self.row()
+        cross.pop('vin')
+        cross.update(wb_nm_id='100002', cross_brand='NISSAN', cross_number='AY100NS005')
+        self.upload([anchor, cross])
+        schedule = {'enabled': True, 'question_drafts_enabled': True}
+        with self.factory() as db:
+            db.add(Account(id='owner', encrypted_token='fixture'))
+            set_setting(db, 'automation_schedule', schedule)
+            enqueue(db, db.get(StoreProfile, 'owner'), schedule)
+            db.commit()
+        with patch('app.services.ollama.reply_variants', new=AsyncMock()) as model:
+            asyncio.run(run_step('fitment_minion:owner', self.factory))
+            model.assert_not_called()
+        with self.factory() as db:
+            draft = db.scalar(select(Draft).where(Draft.review_id == 'fit-q'))
+            self.assertEqual(draft.quality['fitment']['status'], 'ALTERNATIVE')
+            self.assertIn('100002', draft.text)
+            self.assertNotIn('000123', draft.text)
+            self.assertEqual(db.get(Job, 'fitment_minion:owner').result['confirmed'], 1)
+
     def test_missing_catalog_never_means_no_stock_or_fit(self):
         self.seed();r=self.answer();self.assertEqual(r['status'],'NEEDS_CATALOG');self.assertNotIn('нет товара',r['text'])
 

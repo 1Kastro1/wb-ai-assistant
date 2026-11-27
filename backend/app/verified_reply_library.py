@@ -5,8 +5,39 @@ import hashlib
 import re
 import time
 import unicodedata
-from sqlalchemy import select, delete, func
-from .db import VerifiedReplyText,VerifiedReplyContext,Setting,IS_SQLITE
+from sqlalchemy import select, delete, func, case, and_
+from .db import VerifiedReplyText,VerifiedReplyContext,Setting,Review,IS_SQLITE
+
+REVIEW_MARKETS = ('wb', 'ozon', 'yandex')
+
+
+def saved_review_templates(db, market='', search='', offset=0, limit=20):
+    from datetime import datetime, timezone
+    from .safety import mask_vin
+
+    proof = VerifiedReplyContext
+    marketplace = func.coalesce(func.nullif(proof.source_marketplace, ''), Review.marketplace)
+    grouped = select(proof.template_id, func.count().label('contexts'), func.max(proof.verified_at).label('verified_at'),
+        *(func.max(case((marketplace == value, 1), else_=0)).label(value) for value in REVIEW_MARKETS)
+    ).outerjoin(Review, and_(proof.source_marketplace == '', proof.source_review_id == Review.id)
+    ).where(marketplace.in_(REVIEW_MARKETS)).group_by(proof.template_id).subquery()
+    query = select(VerifiedReplyText.id, VerifiedReplyText.text, grouped.c.contexts, grouped.c.verified_at,
+        *(grouped.c[value] for value in REVIEW_MARKETS)).join(grouped, grouped.c.template_id == VerifiedReplyText.id)
+    if market:
+        query = query.where(grouped.c[market] == 1)
+    if search.strip():
+        if IS_SQLITE:
+            query = query.where(func.unicode_casefold(VerifiedReplyText.text).contains(search.strip().casefold(), autoescape=True))
+        else:
+            query = query.where(func.lower(VerifiedReplyText.text).contains(search.strip().lower(), autoescape=True))
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = db.execute(query.order_by(grouped.c.verified_at.desc(), VerifiedReplyText.id).offset(offset).limit(limit))
+    return {'total': total, 'items': [
+        {'id': row['id'], 'text': mask_vin(row['text']), 'contexts': row['contexts'],
+         'marketplaces': [value for value in REVIEW_MARKETS if row[value]],
+         'verified_at': datetime.fromtimestamp(row['verified_at'], timezone.utc).isoformat()}
+        for row in rows.mappings()
+    ]}
 
 
 def text_id(answer):

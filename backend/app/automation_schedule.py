@@ -104,6 +104,8 @@ def enqueue_due_jobs(db, schedule, current):
                     schedule[key] = current
         for kind in ('drafts', 'question_drafts'):
             enqueue_generation(db, schedule, store, kind, current)
+        from .fitment_minion import enqueue as enqueue_fitment
+        enqueue_fitment(db, store, schedule)
         if store.provider in ('wb', 'ozon', 'yandex'):
             from .scheduled_publication import enqueue
             enqueue(db, schedule, store, current)

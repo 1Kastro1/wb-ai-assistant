@@ -7,7 +7,7 @@ from .db import Job, StoreProfile, setting, public
 from .config import DATA
 
 LABELS = {'review_minion': 'Миньон сложных отзывов', 'review_library_audit':'Проверка отзывов и обучение шаблонов','publication_reconcile': 'Сверка отправленных ответов', 'scheduled_publication': 'Автоматическая выгрузка готовых ответов', 'products': 'Обновление товаров', 'reviews': 'Обновление отзывов', 'questions': 'Обновление вопросов',
-          'drafts': 'Ответы на отзывы', 'question_drafts': 'Ответы на вопросы',
+          'drafts': 'Ответы на отзывы', 'question_drafts': 'Ответы на вопросы', 'fitment_minion': 'Миньон подбора деталей',
           'single_draft': 'Ответ на отзыв', 'single_question_draft': 'Ответ на вопрос',
           'draft_audit': 'Перепроверка черновиков', 'draft_recheck': 'Проверка правил ответа',
           'knowledge_research': 'Поиск инструкций для важных товаров',

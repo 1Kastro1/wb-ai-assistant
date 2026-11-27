@@ -8,7 +8,7 @@ from .scheduled_publication import KIND as PUBLICATION, PROVIDERS
 
 LIVE_IO = ('reviews', 'questions', 'products', 'scheduled_publication',
            'publication_reconcile', 'wb_publish_send')
-MODEL_WORK = ('draft_recheck', 'draft_audit', 'review_library_audit', 'review_minion', 'knowledge_research')
+MODEL_WORK = ('draft_recheck', 'draft_audit', 'review_library_audit', 'review_minion', 'fitment_minion', 'knowledge_research')
 parallel_slice = ContextVar('parallel_pipeline_slice', default=False)
 
 

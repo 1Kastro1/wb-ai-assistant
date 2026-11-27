@@ -3,6 +3,7 @@ import {useEffect,useState} from 'react';
 import {api} from './client';
 import './reply-library.css';
 import ReviewPolicyCampaign from './ReviewPolicyCampaign';
+import ReplyTemplates from './ReplyTemplates';
 type Row=Record<string,any>;
 const markets:Record<string,string>={yandex:'Яндекс Маркет',wb:'Wildberries',ozon:'Ozon'};
 const statuses:Record<string,string>={verified:'Подтверждён',verified_reference:'Проверенный образец',attention:'Нужно решение',retry:'Запланирован повтор',blocked:'Нужна настройка сервиса',technical_attention:'Повторы остановлены · нужен сервис'};
@@ -14,7 +15,7 @@ export default function ReplyLibraryStatus({onRule,onOpen}:{onRule?:(rule:Row)=>
   async function load(){try{const result=await api('/review-library/status','GET',undefined,15000);if(active){setData(result);setError('')}}catch{if(active)setError('Не удалось обновить библиотеку. Показаны последние данные.')}finally{if(active)timer=setTimeout(load,document.hidden?30000:15000)}}
   void load();return()=>{active=false;clearTimeout(timer)};
  },[]);
- useEffect(()=>{if(tab==='overview')return;let active=true;setLoading(true);setListError('');
+ useEffect(()=>{if(tab==='overview'||tab==='templates')return;let active=true;setLoading(true);setListError('');
   api('/review-library/cases?view='+tab+'&offset='+offset+'&limit=20','GET',undefined,15000).then(result=>{if(active){setRows(result.items);setTotal(result.total)}}).catch(()=>{if(active)setListError('Не удалось загрузить случаи. Переключите вкладку для повтора.')}).finally(()=>{if(active)setLoading(false)});
   return()=>{active=false};
  },[tab,offset,data?.counts?.checked,data?.counts?.retry]);
@@ -23,9 +24,9 @@ export default function ReplyLibraryStatus({onRule,onOpen}:{onRule?:(rule:Row)=>
  return <section className="reply-library" aria-label="Библиотека ответов">
   <div className="section-title"><div><p className="eyebrow">ПРОВЕРЕННЫЕ ОТВЕТЫ И СЛОЖНЫЕ СЛУЧАИ</p><h1>Библиотека ответов</h1><p className="muted">Сохранённые образцы ускоряют ответы в том же контексте и по тем же правилам.</p></div><span className="pill">{job?.status==='completed'?'Завершено':job?.status==='failed'?'Нужна проверка':job?.status==='cancelled'?'Остановлено':job?'Обработка продолжается':'Нет активной проверки'}</span></div>
   {error&&<p role="status" className="orange">{error}</p>}
-  <div className="segmented library-tabs" role="tablist" aria-label="Разделы библиотеки">{[['overview','Обзор'],['attention','Требуют внимания'],['retry','Повторы'],['history','История']].map(([id,label])=><button key={id} id={'library-tab-'+id} role="tab" aria-selected={tab===id} aria-controls="library-panel" onClick={()=>{setTab(id);setOffset(0)}}>{label}</button>)}</div>
+  <div className="segmented library-tabs" role="tablist" aria-label="Разделы библиотеки">{[['overview','Обзор'],['templates','Шаблоны'],['attention','Требуют внимания'],['retry','Повторы'],['history','История']].map(([id,label])=><button key={id} id={'library-tab-'+id} role="tab" aria-selected={tab===id} aria-controls="library-panel" onClick={()=>{setTab(id);setOffset(0)}}>{label}</button>)}</div>
   <div id="library-panel" role="tabpanel" aria-labelledby={'library-tab-'+tab}>
-   {tab==='overview'?<>
+   {tab==='templates'?<ReplyTemplates/>:tab==='overview'?<>
     {!data?<p role="status">Загружаем библиотеку…</p>:<>
      <div className="library-metrics">{[['Уникальные образцы',data.library?.unique_templates],['Подтверждённые отзывы',counts.verified],['Требуют внимания',counts.attention],['Повторы и сбои',(counts.retry||0)+(counts.blocked||0)+(counts.technical_stopped||0)]].map(([label,value])=><div className="card" key={label}><small>{label}</small><strong>{number(value)}</strong></div>)}</div>
      {job&&<div className="card library-progress"><div><h3>{stage?markets[stage.marketplace]:'Проверка всех магазинов'}</h3><b>{percent.toLocaleString('ru-RU',{maximumFractionDigits:1})}%</b></div><progress max={100} value={percent} aria-label="Прогресс текущего магазина"/><p className="muted">Подтверждено — ответ прошёл проверки. Остальные проверенные случаи находятся во вкладке «Требуют внимания»; технические сбои — в «Повторах».</p>

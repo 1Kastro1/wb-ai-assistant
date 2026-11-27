@@ -84,7 +84,7 @@ async def lifespan(app):
     with Session() as db:
         for job in db.scalars(select(Job).where(Job.status.in_(['queued','running']))):
             resumable_import = job.kind in ('products', 'reviews', 'questions')
-            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'review_minion', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile')
+            resumable_batch = job.kind in ('drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'review_minion', 'fitment_minion', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile')
             waiting_reply = job.status == 'queued' and job.kind in ('single_draft', 'single_question_draft')
             if (resumable_import or resumable_batch or waiting_reply) and not job.cancel_requested:
                 job.status = 'queued'
@@ -1268,6 +1268,10 @@ async def execute_job(job_id):
                 from .review_minions import run_step
                 await run_step(job_id, session_factory=Session)
                 db.refresh(job)
+            elif kind == 'fitment_minion':
+                from .fitment_minion import run_step
+                await run_step(job_id, session_factory=Session)
+                db.refresh(job)
             elif kind == 'publication_reconcile':
                 from .publication_reconciliation import run_step
                 await run_step(job_id)
@@ -1382,7 +1386,7 @@ async def execute_job(job_id):
             if asyncio.current_task().cancelling() and not job.cancel_requested:
                 # Preserve resumable imports when the worker shuts down. Manual
                 # cancellation is raised by cancelled(), without task.cancel().
-                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'review_minion', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile') else 'interrupted'
+                job.status = 'queued' if kind in ('products', 'reviews', 'questions', 'drafts', 'question_drafts', 'draft_audit', 'draft_recheck', 'review_library_audit', 'review_minion', 'fitment_minion', 'knowledge_research', 'wb_publish_prepare', 'wb_publish_send', 'wb_exclusions_audit', 'wb_excluded_recovery', 'scheduled_publication', 'publication_reconcile') else 'interrupted'
                 job.result = {**(job.result or {}), 'account_id': account_id,
                               'message': 'Работа прервана перезапуском приложения'}
                 db.commit()
@@ -3005,7 +3009,12 @@ def fitment_pending_questions(auth: AUTH, db: DB):
 @app.get('/fitment/internet/settings')
 def internet_fitment_settings(auth: AUTH,db: DB):
     from .fitment_categories import CATALOG_SYSTEMS
-    return {'enabled':internet_fitment_enabled(db, active_store(db,auth)),'providers':['Uniqom — оригинальные каталоги через вход в браузере','PartSouq — публичный каталог OEM','NHTSA vPIC — сведения об автомобиле'],'timeout_seconds':18,'all_categories':True,'uniqom_mode':'browser','systems':[{'id':key,'label':label} for key,label,_ in CATALOG_SYSTEMS]}
+    from .fitment_minion import KIND, enabled as minion_enabled
+    store = active_store(db, auth)
+    job = db.get(Job, f'{KIND}:{store}')
+    state = job.result if job else {}
+    return {'enabled':internet_fitment_enabled(db, store),'providers':['Uniqom — оригинальные каталоги через вход в браузере','PartSouq — публичный каталог OEM','NHTSA vPIC — сведения об автомобиле'],'timeout_seconds':18,'all_categories':True,'uniqom_mode':'browser','systems':[{'id':key,'label':label} for key,label,_ in CATALOG_SYSTEMS],
+            'minion': {'enabled': minion_enabled(db, setting(db, 'automation_schedule', {})), 'confirmed': state.get('confirmed', 0), 'pending_catalog': state.get('pending_catalog', 0)}}
 
 
 class InternetFitmentSettings(Payload):
@@ -3289,3 +3298,11 @@ def review_library_cases(auth: OWNER, db: DB, view: str = 'attention',
         raise HTTPException(422, 'Неизвестный раздел библиотеки')
     from .library_workspace import cases
     return cases(db,view,offset,limit)
+
+
+@app.get('/review-library/templates')
+def review_library_templates(auth: OWNER, db: DB, marketplace: Literal['', 'wb', 'ozon', 'yandex'] = '',
+                             q: str = Query(default='', max_length=120),
+                             offset: int = Query(default=0, ge=0), limit: int = Query(default=20, ge=1, le=50)):
+    from .verified_reply_library import saved_review_templates
+    return saved_review_templates(db, marketplace, q, offset, limit)

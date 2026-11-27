@@ -38,16 +38,18 @@ def test_server_ticks_each_connected_store_at_shared_intervals_without_duplicate
     assert response.status_code == 200, response.text
     with Session() as db:
         jobs = list(db.scalars(select(Job)))
-        assert len(jobs) == 10
+        assert len(jobs) == 12
+        assert {job.result['account_id'] for job in jobs if job.kind == 'fitment_minion'} == {'owner', 'market'}
         assert {job.result['account_id'] for job in jobs} == {'owner', 'market'}
         for job in jobs:
-            job.status = 'completed'
+            if job.kind != 'fitment_minion':
+                job.status = 'completed'
         db.commit()
     # This is the worker's tick function; there is no browser callback or request.
     main.queue_scheduled_jobs(current + 2 * 3600)
     main.queue_scheduled_jobs(current + 2 * 3600)
     with Session() as db:
-        queued = list(db.scalars(select(Job).where(Job.status == 'queued')))
+        queued = list(db.scalars(select(Job).where(Job.status == 'queued', Job.kind != 'fitment_minion')))
         assert len(queued) == 4
         assert {job.kind for job in queued} == {'reviews', 'questions'}
         for job in queued:
@@ -55,9 +57,10 @@ def test_server_ticks_each_connected_store_at_shared_intervals_without_duplicate
         db.commit()
     main.queue_scheduled_jobs(current + 6 * 3600)
     with Session() as db:
-        queued = list(db.scalars(select(Job).where(Job.status == 'queued')))
+        queued = list(db.scalars(select(Job).where(Job.status == 'queued', Job.kind != 'fitment_minion')))
         assert len(queued) == 8
         assert {job.kind for job in queued} == {'reviews', 'questions', 'drafts', 'question_drafts'}
+        assert db.scalar(select(func.count()).select_from(Job).where(Job.kind == 'fitment_minion')) == 2
 
 
 def test_manual_sync_does_not_bypass_generation_interval(client, monkeypatch):
