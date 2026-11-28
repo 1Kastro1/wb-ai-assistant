@@ -16,6 +16,10 @@
 .template-intro p { margin:0; color:#534965; }
 .template-count { background:#fff; border:1px solid #e5d9f6; border-radius:999px; padding:7px 13px; white-space:nowrap; color:#4f327b; font-size:.82rem; }
 .saved-templates .library-template-filters { margin:0; }
+.saved-templates .library-template-filters {
+  grid-template-columns:minmax(180px,1fr) repeat(3,minmax(120px,.65fr)) auto;
+}
+.template-filter-actions { display:flex; gap:8px; flex-wrap:wrap; }
 .template-status { margin:0; color:#425569; }
 .template-status:empty { display:none; }
 .template-list { display:grid; gap:14px; }
@@ -33,7 +37,11 @@
 .template-editor { margin-top:14px; }
 .template-editor label { margin:0 0 12px; }
 .template-editor textarea { display:block; width:100%; margin-top:6px; line-height:1.6; }
+@media(max-width:1120px){
+  .saved-templates .library-template-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
 @media(max-width:600px){
+  .saved-templates .library-template-filters { grid-template-columns:1fr; }
   .template-intro { align-items:flex-start; flex-direction:column; padding:17px; }
   .template-card { padding:15px; }
   .template-card-head { align-items:flex-start; }
