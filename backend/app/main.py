@@ -3303,9 +3303,11 @@ def review_library_cases(auth: OWNER, db: DB, view: str = 'attention',
 @app.get('/review-library/templates')
 def review_library_templates(auth: OWNER, db: DB, marketplace: Literal['', 'wb', 'ozon', 'yandex'] = '',
                              q: str = Query(default='', max_length=120),
-                             offset: int = Query(default=0, ge=0), limit: int = Query(default=20, ge=1, le=50)):
+                             offset: int = Query(default=0, ge=0), limit: int = Query(default=20, ge=1, le=50),
+                             brand: str = Query(default='', max_length=160),
+                             category: str = Query(default='', max_length=160)):
     from .verified_reply_library import saved_review_templates
-    return saved_review_templates(db, marketplace, q, offset, limit)
+    return saved_review_templates(db, marketplace, q, offset, limit, brand=brand, category=category)
 
 
 class ReviewTemplateEdit(Payload):

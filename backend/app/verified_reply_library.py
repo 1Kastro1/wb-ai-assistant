@@ -46,13 +46,55 @@ def _template_aliases(edits):
             for alias in [*edit.get('aliases', ()), text_id(edit['text'])] if alias != key}
 
 
-def saved_review_templates(db, market='', search='', offset=0, limit=20):
+def _brand_options(brands):
+    unique = {brand.casefold(): brand for brand in sorted(brands, reverse=True)}
+    return sorted(unique.values(), key=str.casefold)
+
+
+def _template_facets(db, aliases, market, brand, category):
+    proof = VerifiedReplyContext
+    sources = select(proof.template_id, proof.source_review_id).where(
+        proof.source_review_id != '',
+        proof.source_marketplace.in_(('', *REVIEW_MARKETS))).distinct().subquery()
+    examples = (select(sources.c.template_id, Review, Product.category, Product.brand)
+                .join(Review, Review.id == sources.c.source_review_id)
+                .outerjoin(Product, Product.id == Review.product_id)
+                .where(Review.marketplace.in_(REVIEW_MARKETS))
+                .options(load_only(Review.text, Review.sections, Review.rating, Review.marketplace)))
+    counts, categories_by_review = {}, {}
+    brands, categories, matching = set(), set(), set()
+    for key, review, product_category, product_brand in db.execute(examples):
+        template_id = aliases.get(key, key)
+        fields = counts.setdefault(template_id, {'categories': set(), 'products': set(), 'ratings': set(), 'brands': set()})
+        if review.id not in categories_by_review:
+            categories_by_review[review.id] = _review_categories(review)
+        review_categories = categories_by_review[review.id]
+        fields['categories'].update(review_categories)
+        categories.update(review_categories)
+        if product_category:
+            fields['products'].add(product_category)
+        product_brand = (product_brand or '').strip()
+        if product_brand:
+            fields['brands'].add(product_brand)
+            brands.add(product_brand)
+        if 1 <= review.rating <= 5:
+            fields['ratings'].add(review.rating)
+        if ((not market or review.marketplace == market)
+                and (not brand or product_brand.casefold() == brand)
+                and (not category or category in review_categories)):
+            matching.add(template_id)
+    filters = {'brands': _brand_options(brands), 'categories': sorted(categories, key=str.casefold)}
+    return counts, filters, matching
+
+
+def saved_review_templates(db, market='', search='', offset=0, limit=20, *, brand='', category=''):
     from .safety import mask_vin
 
     edits = setting(db, EDITS_KEY, {})
     proof = VerifiedReplyContext
     marketplace = _review_market(proof)
     aliases = _template_aliases(edits)
+    counts, filters, matching = _template_facets(db, aliases, market, brand.strip().casefold(), category.strip())
     template = case(aliases, value=proof.template_id, else_=proof.template_id) if aliases else proof.template_id
     grouped = select(template.label('template_id'), func.count().label('contexts'), func.max(proof.verified_at).label('verified_at'),
         *(func.max(case((marketplace == value, 1), else_=0)).label(value) for value in REVIEW_MARKETS)
@@ -64,6 +106,8 @@ def saved_review_templates(db, market='', search='', offset=0, limit=20):
         *(grouped.c[value] for value in REVIEW_MARKETS)).join(grouped, grouped.c.template_id == VerifiedReplyText.id)
     if market:
         query = query.where(grouped.c[market] == 1)
+    if brand.strip() or category.strip():
+        query = query.where(VerifiedReplyText.id.in_(matching))
     if search.strip():
         if IS_SQLITE:
             query = query.where(func.unicode_casefold(text).contains(search.strip().casefold(), autoescape=True))
@@ -71,32 +115,12 @@ def saved_review_templates(db, market='', search='', offset=0, limit=20):
             query = query.where(func.lower(text).contains(search.strip().lower(), autoescape=True))
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = db.execute(query.order_by(grouped.c.verified_at.desc(), VerifiedReplyText.id).offset(offset).limit(limit)).mappings().all()
-    counts = {row['id']: {'categories': set(), 'products': set(), 'ratings': set(), 'brands': set()} for row in rows}
-    ids = set(counts) | {key for key, root in aliases.items() if root in counts}
-    if ids:
-        sources = select(proof.template_id, proof.source_review_id).where(
-            proof.template_id.in_(ids), proof.source_review_id != '').distinct().subquery()
-        examples = (select(sources.c.template_id, Review, Product.category, Product.brand)
-                    .join(Review, Review.id == sources.c.source_review_id)
-                    .outerjoin(Product, Product.id == Review.product_id)
-                    .where(Review.marketplace.in_(REVIEW_MARKETS))
-                    .options(load_only(Review.text, Review.sections, Review.rating)))
-        for key, review, category, brand in db.execute(examples):
-            fields = counts[aliases.get(key, key)]
-            fields['categories'].update(_review_categories(review))
-            if category:
-                fields['products'].add(category)
-            if brand := (brand or '').strip():
-                fields['brands'].add(brand)
-            if 1 <= review.rating <= 5:
-                fields['ratings'].add(review.rating)
-    return {'total': total, 'items': [
+    return {'total': total, 'filters': filters, 'items': [
         {'id': row['id'], 'text': mask_vin(row['text']), 'contexts': row['contexts'],
          'marketplaces': [value for value in REVIEW_MARKETS if row[value]],
          'verified_at': _iso(row['verified_at']), 'revision': edits.get(row['id'], {}).get('revision', 0),
-         **{key: sorted(values) for key, values in counts[row['id']].items() if key != 'brands'},
-         'brands': sorted({brand.casefold(): brand for brand in sorted(counts[row['id']]['brands'], reverse=True)}.values(),
-                          key=str.casefold)}
+         **{key: sorted(counts.get(row['id'], {}).get(key, ())) for key in ('categories', 'products', 'ratings')},
+         'brands': _brand_options(counts.get(row['id'], {}).get('brands', ()))}
         for row in rows
     ]}
 

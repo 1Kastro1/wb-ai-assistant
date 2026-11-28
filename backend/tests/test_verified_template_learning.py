@@ -30,6 +30,32 @@ def test_template_view_deduplicates_review_text_across_markets(client):
     assert client.get('/review-library/templates').json()['total'] == 1
 
 
+def test_template_filters_match_one_source_review_before_pagination(client):
+    from app.verified_reply_library import remember
+
+    with Session() as db:
+        db.add_all([Product(id='a', name='Ароматизатор', brand='EIKOSHA'),
+                    Product(id='b', name='Полироль', brand='Soft99')])
+        db.flush()
+        db.add_all([Review(id='a', wb_review_id='a', product_id='a', marketplace='wb', text='', rating=5),
+                    Review(id='b', wb_review_id='b', product_id='b', marketplace='ozon', text='Спасибо, всё отлично!', rating=5)])
+        db.flush()
+        remember(db, 'a', 'exact', 'Спасибо за оценку!', {}, source='a', marketplace='wb', verified_at=1)
+        remember(db, 'b', 'exact', 'Спасибо за оценку!', {}, source='b', marketplace='ozon', verified_at=2)
+        remember(db, 'other', 'exact', 'Благодарим за отзыв!', {}, source='b', marketplace='ozon', verified_at=3)
+        db.commit()
+
+    url = '/review-library/templates'
+    filters = {'brand': 'eikosha', 'category': 'Оценка без текста', 'limit': 1}
+    first = client.get(url, params=filters).json()
+    assert first['total'] == 1
+    assert first['items'][0]['text'] == 'Спасибо за оценку!'
+    assert first['filters']['brands'] == ['EIKOSHA', 'Soft99']
+    assert client.get(url, params={**filters, 'offset': 1}).json()['items'] == []
+    for other in ({'brand': 'Soft99'}, {'category': 'Положительный отзыв'}, {'marketplace': 'ozon'}, {'q': 'Благодарим'}):
+        assert client.get(url, params={**filters, **other}).json()['total'] == 0
+
+
 def seed(db,text='Все супер!'):
     db.add(Product(id='p',name='Ароматизатор GIGA',brand='EIKOSHA',category='Ароматизаторы',marketplace='wb'))
     db.add_all(Memory(id='m'+str(i),text=r['text'],scope=r['scope'],kind='REVIEW_RULE') for i,r in enumerate(PACK['rules']))

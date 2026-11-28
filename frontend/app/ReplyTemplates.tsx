@@ -9,10 +9,12 @@ type Template = {
  id:string; text:string; marketplaces:string[]; verified_at:string;
  revision:number; categories:string[]; products:string[]; ratings:number[]; brands?:string[];
 };
+type TemplatePage = {items:Template[];total:number;filters?:{brands:string[];categories:string[]}};
 
 export default function ReplyTemplates(){
  const [input,setInput]=useState(''),[search,setSearch]=useState(''),[market,setMarket]=useState('');
- const [offset,setOffset]=useState(0),[result,setResult]=useState<{items:Template[];total:number}|null>(null);
+ const [brand,setBrand]=useState(''),[category,setCategory]=useState('');
+ const [offset,setOffset]=useState(0),[result,setResult]=useState<TemplatePage|null>(null);
  const [error,setError]=useState(''),[loading,setLoading]=useState(true),[feedback,setFeedback]=useState('');
  const [reload,setReload]=useState(0);
  const [editor,setEditor]=useState<{id:string;text:string;revision:number}|null>(null);
@@ -20,13 +22,14 @@ export default function ReplyTemplates(){
  useEffect(()=>{
   let active=true;
   setLoading(true);setError('');
-  const params=new URLSearchParams({q:search,marketplace:market,offset:String(offset),limit:String(pageSize)});
+  const params=new URLSearchParams({q:search,marketplace:market,brand,category,offset:String(offset),limit:String(pageSize)});
   api('/review-library/templates?'+params).then(data=>{if(active)setResult(data)})
    .catch(()=>{if(active)setError('Не удалось загрузить шаблоны.')})
    .finally(()=>{if(active)setLoading(false)});
   return()=>{active=false};
- },[market,search,offset,reload]);
+ },[market,brand,category,search,offset,reload]);
  const total=result?.total??0;
+ const filtered=Boolean(input||search||market||brand||category);
  async function saveTemplate(){
   if(!editor||!editor.text.trim()||saving)return;
   setSaving(true);setSaveError('');setFeedback('');
@@ -49,7 +52,12 @@ export default function ReplyTemplates(){
   <form className="card library-template-filters" onSubmit={event=>{event.preventDefault();setFeedback('');setSearch(input.trim());setOffset(0);setReload(value=>value+1)}}>
    <label>Текст ответа<input type="search" disabled={editor!==null} value={input} maxLength={120} onChange={event=>setInput(event.target.value)} placeholder="Найти фразу в шаблоне"/></label>
    <label>Маркетплейс<select disabled={editor!==null} value={market} onChange={event=>{setFeedback('');setMarket(event.target.value);setOffset(0)}}><option value="">Все площадки</option>{Object.entries(markets).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>
-   <button type="submit" disabled={editor!==null}>Найти</button>
+   <label>Бренд<select disabled={editor!==null} value={brand} onChange={event=>{setFeedback('');setBrand(event.target.value);setOffset(0)}}><option value="">Все бренды</option>{result?.filters?.brands.map(value=><option key={value}>{value}</option>)}</select></label>
+   <label>Категория отзыва<select disabled={editor!==null} value={category} onChange={event=>{setFeedback('');setCategory(event.target.value);setOffset(0)}}><option value="">Все категории</option>{result?.filters?.categories.map(value=><option key={value}>{value}</option>)}</select></label>
+   <div className="template-filter-actions">
+    <button type="submit" disabled={editor!==null}>Найти</button>
+    {filtered&&<button type="button" disabled={editor!==null} onClick={()=>{setInput('');setSearch('');setMarket('');setBrand('');setCategory('');setOffset(0);setFeedback('')}}>Сбросить</button>}
+   </div>
   </form>
   <p role="status" className="template-status">{loading?'Загружаем сохранённые шаблоны…':feedback}</p>
   {error&&<p role="alert">{error} <button onClick={()=>setReload(value=>value+1)}>Повторить</button></p>}
