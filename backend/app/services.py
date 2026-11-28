@@ -1024,7 +1024,7 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     verified_facts = skills.run('product_knowledge', review_verified_facts, db, review, product, memories)
     context_memories, _ = select_rules(memories, review, product)
     generation_revision = initial_draft.revision if initial_draft else 0
-    from .learned_reply_templates import load_template, remember_template, similar_candidate, same_answer
+    from .learned_reply_templates import edited_candidate, load_template, remember_template, similar_candidate, same_answer
     from .owner_reply_policy import apply_local_preferences, apply_signature
     def formatted(value):
         value, _ = apply_local_preferences(value, review, memories)
@@ -1034,15 +1034,20 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     except ValueError:
         # An invalid old draft is a reason to repair it, not to block a new one.
         previous_text = initial_draft.text
-    learned = load_template(db, review, product, memories, verified_facts,
-        lambda value: assess_reply(review, product, value, verified_facts), previous=previous_text
-    ) if buyer_message(review).strip() and not requested_instruction.strip() else None
+    def assess_candidate(value):
+        return assess_reply(review, product, value, verified_facts)
+
+    edited = edited_candidate(db, review, product, memories, verified_facts, assess_candidate,
+                              previous=previous_text) if not requested_instruction.strip() else None
+    learned = load_template(db, review, product, memories, verified_facts, assess_candidate,
+                            previous=previous_text, exact_answer=edited
+                            ) if (edited or buyer_message(review).strip()) and not requested_instruction.strip() else None
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
-    if local_positive and initial_draft:
+    if local_positive and initial_draft and not edited:
         # Built-in praise already rotates instantly and receives a fresh local
         # verdict. Keep that route rather than alternating older library items.
         learned = None
-    if fast_only and not local_positive and not learned:
+    if fast_only and not learned and (edited or not local_positive):
         raise FastPathUnavailable('Нужна дополнительная проверка правил')
     rule_candidates = []
     for offset in range(3):
@@ -1091,6 +1096,9 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     if learned:
         reply, forced_model = learned[0], 'verified-template-1.0'
         selection_note = 'Использован успешно проверенный ответ для совпавшего контекста и текущих правил'
+    elif edited:
+        reply, forced_model = edited, 'owner-template-1.0'
+        selection_note = 'Использована правка владельца. Ответ проверяется по актуальным правилам.'
     elif not requested_instruction.strip():
         candidate = similar_candidate(db, review, product, memories, verified_facts,
             lambda value: assess_reply(review, product, value, verified_facts), previous=previous_text)
@@ -1234,7 +1242,8 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
             reply, review, product, memories, verified_facts,
             lambda value: assess_reply(review, product, value, verified_facts),
             protected=review.risk != 'NORMAL', allow_fast_positive=bool(local_positive), instruction=requested_instruction,
-            local_only=fast_only, defer_semantic=model_outage, background_heavy=True)
+            local_only=fast_only, defer_semantic=model_outage, background_heavy=True,
+            require_review_context=bool(edited))
     # A reply already exists. Preserve it as an explicitly unverified manual
     # draft when the rule checker fails, instead of discarding it and spending
     # several full checker deadlines on the same review. Publication still

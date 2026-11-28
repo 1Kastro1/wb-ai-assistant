@@ -3306,3 +3306,23 @@ def review_library_templates(auth: OWNER, db: DB, marketplace: Literal['', 'wb',
                              offset: int = Query(default=0, ge=0), limit: int = Query(default=20, ge=1, le=50)):
     from .verified_reply_library import saved_review_templates
     return saved_review_templates(db, marketplace, q, offset, limit)
+
+
+class ReviewTemplateEdit(Payload):
+    text: str = Field(min_length=1, max_length=5000)
+    revision: int = Field(ge=0)
+
+
+@app.patch('/review-library/templates/{template_id}')
+def review_library_template_edit(template_id: str, body: ReviewTemplateEdit, auth: OWNER, db: DB):
+    from .verified_reply_library import edit_template, TemplateConflict
+    try:
+        result = edit_template(db, template_id, body.text, body.revision)
+    except TemplateConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    db.commit()
+    return result
