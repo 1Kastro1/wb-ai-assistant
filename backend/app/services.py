@@ -1034,12 +1034,12 @@ async def _generate_draft(db, review_id, instruction='', *, fast_only=False, ret
     except ValueError:
         # An invalid old draft is a reason to repair it, not to block a new one.
         previous_text = initial_draft.text
-    def assess_candidate(value):
+    def assess_template(value):
         return assess_reply(review, product, value, verified_facts)
 
-    edited = edited_candidate(db, review, product, memories, verified_facts, assess_candidate,
+    edited = edited_candidate(db, review, product, memories, verified_facts, assess_template,
                               previous=previous_text) if not requested_instruction.strip() else None
-    learned = load_template(db, review, product, memories, verified_facts, assess_candidate,
+    learned = load_template(db, review, product, memories, verified_facts, assess_template,
                             previous=previous_text, exact_answer=edited
                             ) if (edited or buyer_message(review).strip()) and not requested_instruction.strip() else None
     local_positive = positive_template(review, memories, generation_revision, product=product) if not requested_instruction.strip() else None
