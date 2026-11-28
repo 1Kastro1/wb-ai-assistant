@@ -56,6 +56,7 @@ def test_owner_edit_shows_review_categories_and_needs_fresh_proof(client):
     item = client.get('/review-library/templates').json()['items'][0]
     assert item['categories'] == ['Положительный отзыв']
     assert item['products'] == ['Ароматизаторы']
+    assert item['brands'] == ['EIKOSHA']
     assert item['ratings'] == [5]
     endpoint = '/review-library/templates/' + item['id']
     opening, rest = old.split('! ', 1)
