@@ -107,6 +107,42 @@ def test_owner_edit_shows_review_categories_and_needs_fresh_proof(client):
     assert result['items'][0]['id'] == text_id(old)
 
 
+def test_owner_creates_and_edits_a_scoped_unverified_template(client):
+    from app.learned_reply_templates import edited_candidate
+
+    with Session() as db:
+        _, old = seed(db)
+        db.add(Product(id='other', name='Ароматизатор', brand='Другой бренд', marketplace='wb'))
+        db.commit()
+    opening, rest = old.split('! ', 1)
+    signature = rest.rsplit('\n', 1)[-1]
+    text = opening + '! Благодарим за то, что поделились своим мнением.\n' + signature
+    payload = {'text': text, 'brand': 'eikosha', 'category': 'Положительный отзыв'}
+    url = '/review-library/templates'
+    options = client.get('/review-library/template-options').json()
+    assert 'EIKOSHA' in options['brands'] and 'Положительный отзыв' in options['categories']
+    assert client.post(url, json={**payload, 'brand': 'Нет в каталоге'}).status_code == 422
+    created = client.post(url, json=payload)
+    assert created.status_code == 201
+    assert client.post(url, json=payload).status_code == 409
+    with Session() as db:
+        r, p = db.get(Review, 'first'), db.get(Product, 'p')
+        rules = matching_owner_rules(db, p)
+        facts = services.review_verified_facts(db, r, p, rules)
+        assess = lambda value: {'passed': True}
+        assert edited_candidate(db, r, p, rules, facts, assess) == text
+        assert load_template(db, r, p, rules, facts, assess, exact_answer=text) is None
+        assert edited_candidate(db, r, db.get(Product, 'other'), rules, facts, assess) is None
+        r.text = ''
+        assert edited_candidate(db, r, p, rules, facts, assess) is None
+    revised = text.replace('своим мнением', 'впечатлениями')
+    assert client.patch(url+'/'+created.json()['id'], json={'text': revised, 'revision': 0}).status_code == 200
+    items = client.get(url, params={'brand': 'EIKOSHA', 'category': 'Положительный отзыв', 'marketplace': 'yandex'}).json()['items']
+    assert len(items) == 1
+    assert items[0]['text'] == revised and items[0]['manual']
+    assert items[0]['brands'] == ['EIKOSHA'] and items[0]['verified_at'] is None
+
+
 def test_successful_separate_recheck_is_learned_and_reused_after_new_session(client,monkeypatch):
     from app.integrations import ollama
     def no_model(*a,**k): raise AssertionError('Audited learned praise must not call model')
