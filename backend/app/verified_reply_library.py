@@ -71,28 +71,32 @@ def saved_review_templates(db, market='', search='', offset=0, limit=20):
             query = query.where(func.lower(text).contains(search.strip().lower(), autoescape=True))
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = db.execute(query.order_by(grouped.c.verified_at.desc(), VerifiedReplyText.id).offset(offset).limit(limit)).mappings().all()
-    counts = {row['id']: {'categories': set(), 'products': set(), 'ratings': set()} for row in rows}
+    counts = {row['id']: {'categories': set(), 'products': set(), 'ratings': set(), 'brands': set()} for row in rows}
     ids = set(counts) | {key for key, root in aliases.items() if root in counts}
     if ids:
         sources = select(proof.template_id, proof.source_review_id).where(
             proof.template_id.in_(ids), proof.source_review_id != '').distinct().subquery()
-        examples = (select(sources.c.template_id, Review, Product.category)
+        examples = (select(sources.c.template_id, Review, Product.category, Product.brand)
                     .join(Review, Review.id == sources.c.source_review_id)
                     .outerjoin(Product, Product.id == Review.product_id)
                     .where(Review.marketplace.in_(REVIEW_MARKETS))
                     .options(load_only(Review.text, Review.sections, Review.rating)))
-        for key, review, category in db.execute(examples):
+        for key, review, category, brand in db.execute(examples):
             fields = counts[aliases.get(key, key)]
             fields['categories'].update(_review_categories(review))
             if category:
                 fields['products'].add(category)
+            if brand := (brand or '').strip():
+                fields['brands'].add(brand)
             if 1 <= review.rating <= 5:
                 fields['ratings'].add(review.rating)
     return {'total': total, 'items': [
         {'id': row['id'], 'text': mask_vin(row['text']), 'contexts': row['contexts'],
          'marketplaces': [value for value in REVIEW_MARKETS if row[value]],
          'verified_at': _iso(row['verified_at']), 'revision': edits.get(row['id'], {}).get('revision', 0),
-         **{key: sorted(values) for key, values in counts[row['id']].items()}}
+         **{key: sorted(values) for key, values in counts[row['id']].items() if key != 'brands'},
+         'brands': sorted({brand.casefold(): brand for brand in sorted(counts[row['id']]['brands'], reverse=True)}.values(),
+                          key=str.casefold)}
         for row in rows
     ]}
 

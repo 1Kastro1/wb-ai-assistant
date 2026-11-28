@@ -7,7 +7,7 @@ const markets: Record<string,string> = {wb:'Wildberries',ozon:'Ozon',yandex:'Я�
 const pageSize = 20;
 type Template = {
  id:string; text:string; marketplaces:string[]; verified_at:string;
- revision:number; categories:string[]; products:string[]; ratings:number[];
+ revision:number; categories:string[]; products:string[]; ratings:number[]; brands?:string[];
 };
 
 export default function ReplyTemplates(){
@@ -64,6 +64,7 @@ export default function ReplyTemplates(){
     </span>}
    </header>
    <div className="template-meta">
+    <span>{item.brands?.length?<><strong>{item.brands.length===1?'Бренд':'Бренды'}</strong> {item.brands.join(' · ')}</>:'Бренд не указан'}</span>
     <span>{item.marketplaces.map(id=>markets[id]||id).join(' · ')}</span>
     {item.products.length>0&&<details><summary>Категории товаров ({item.products.length})</summary>{item.products.join(' · ')}</details>}
    </div>
