@@ -100,6 +100,30 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
     return None
 
 
+def edited_candidate(db, review, product, rules, facts, assess, *, previous=''):
+    from .db import VerifiedReplyContext, setting
+    from .owner_reply_policy import local_issues
+    from .verified_reply_library import EDITS_KEY
+
+    edits = setting(db, EDITS_KEY, {})
+    if not edits:
+        return None
+    for kind in ('exact', 'positive', 'equivalent'):
+        key = context_key(review, product, rules, facts,
+                          praise_group=kind == 'positive', equivalent_group=kind == 'equivalent')
+        if not key:
+            continue
+        query = (select(VerifiedReplyContext.template_id)
+                 .where(VerifiedReplyContext.context_key == key,
+                        VerifiedReplyContext.kind == kind, VerifiedReplyContext.template_id.in_(edits))
+                 .order_by(VerifiedReplyContext.verified_at.desc(), VerifiedReplyContext.id))
+        for template_id in db.scalars(query):
+            reply = edits[template_id]['text']
+            if not same_answer(reply, previous) and not local_issues(reply, rules, review) and assess(reply)['passed']:
+                return reply
+    return None
+
+
 def same_answer(first, second):
     def normalized(value):
         return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', value)).strip().casefold()

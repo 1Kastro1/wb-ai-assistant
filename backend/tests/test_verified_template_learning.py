@@ -46,6 +46,40 @@ def seed(db,text='Все супер!'):
     return job.id,answer
 
 
+def test_owner_edit_shows_review_categories_and_needs_fresh_proof(client):
+    from app.learned_reply_templates import edited_candidate
+    from app.verified_reply_library import remember, text_id
+
+    with Session() as db:
+        jid, old = seed(db)
+    asyncio.run(recheck_step(jid))
+    item = client.get('/review-library/templates').json()['items'][0]
+    assert item['categories'] == ['Положительный отзыв']
+    assert item['products'] == ['Ароматизаторы']
+    assert item['ratings'] == [5]
+    endpoint = '/review-library/templates/' + item['id']
+    opening, rest = old.split('! ', 1)
+    signature = rest.rsplit('\n', 1)[-1]
+    revised = opening + '! Благодарим за то, что поделились своим мнением.\n' + signature
+    assert client.patch(endpoint, json={'text': revised, 'revision': 0}).json()['revision'] == 1
+    assert client.patch(endpoint, json={'text': old, 'revision': 0}).status_code == 409
+    data = client.get('/review-library/templates', params={'q': 'БЛАГОДАРИМ'}).json()
+    assert [entry['text'] for entry in data['items']] == [revised]
+    with Session() as db:
+        r, p = db.get(Review, 'first'), db.get(Product, 'p')
+        rules = matching_owner_rules(db, p)
+        facts = services.review_verified_facts(db, r, p, rules)
+        assert edited_candidate(db, r, p, rules, facts, lambda value: {'passed': True}) == revised
+        assert load_template(db, r, p, rules, facts, lambda value: {'passed': True}, exact_answer=revised) is None
+        assert edited_candidate(db, r, p, rules + ['Новое правило'], facts, lambda value: {'passed': True}) is None
+        assert db.get(Draft, 'saved').text == old
+        remember(db, 'independently-verified', 'exact', revised, {}, source=r.id, marketplace='wb')
+        db.commit()
+    result = client.get('/review-library/templates').json()
+    assert result['total'] == 1
+    assert result['items'][0]['id'] == text_id(old)
+
+
 def test_successful_separate_recheck_is_learned_and_reused_after_new_session(client,monkeypatch):
     from app.integrations import ollama
     def no_model(*a,**k): raise AssertionError('Audited learned praise must not call model')
