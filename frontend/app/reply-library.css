@@ -15,6 +15,7 @@
 .template-intro h2 { margin:0 0 7px; }
 .template-intro p { margin:0; color:#534965; }
 .template-count { background:#fff; border:1px solid #e5d9f6; border-radius:999px; padding:7px 13px; white-space:nowrap; color:#4f327b; font-size:.82rem; }
+.template-intro-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .saved-templates .library-template-filters { margin:0; }
 .saved-templates .library-template-filters {
   grid-template-columns:minmax(180px,1fr) repeat(3,minmax(120px,.65fr)) auto;
@@ -37,11 +38,16 @@
 .template-editor { margin-top:14px; }
 .template-editor label { margin:0 0 12px; }
 .template-editor textarea { display:block; width:100%; margin-top:6px; line-height:1.6; }
+.template-create h3 { margin:0 0 16px; }
+.template-create-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.template-create label { display:grid; gap:6px; margin-bottom:14px; }
+.template-create :is(textarea,select) { width:100%; }
 @media(max-width:1120px){
   .saved-templates .library-template-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media(max-width:600px){
   .saved-templates .library-template-filters { grid-template-columns:1fr; }
+  .template-create-fields { grid-template-columns:1fr; gap:0; }
   .template-intro { align-items:flex-start; flex-direction:column; padding:17px; }
   .template-card { padding:15px; }
   .template-card-head { align-items:flex-start; }

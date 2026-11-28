@@ -5,7 +5,7 @@ import hashlib
 import re
 import time
 import unicodedata
-from sqlalchemy import select, delete, func, case, and_
+from sqlalchemy import select, delete, func, case, and_, or_
 from sqlalchemy.orm import load_only
 from .db import VerifiedReplyText,VerifiedReplyContext,Setting,Review,Product,IS_SQLITE,setting
 
@@ -49,6 +49,16 @@ def _template_aliases(edits):
 def _brand_options(brands):
     unique = {brand.casefold(): brand for brand in sorted(brands, reverse=True)}
     return sorted(unique.values(), key=str.casefold)
+
+
+def template_creation_options(db):
+    from .reply_policy import COMPLAINT_LABELS
+
+    brands = db.scalars(select(Product.brand).where(Product.brand != '').distinct())
+    categories = {'Оценка без текста', 'Вопрос в отзыве', 'Первые впечатления', 'Положительный отзыв',
+                  'Негативный отзыв', 'Общий отзыв', *(label.capitalize() for label in COMPLAINT_LABELS.values())}
+    return {'brands': _brand_options({brand.strip() for brand in brands if brand.strip()}),
+            'categories': sorted(categories, key=str.casefold)}
 
 
 def _template_facets(db, aliases, market, brand, category):
@@ -95,6 +105,19 @@ def saved_review_templates(db, market='', search='', offset=0, limit=20, *, bran
     marketplace = _review_market(proof)
     aliases = _template_aliases(edits)
     counts, filters, matching = _template_facets(db, aliases, market, brand.strip().casefold(), category.strip())
+    manual = {key: item for key, item in edits.items() if item.get('manual')}
+    if manual:
+        extra_brands, extra_categories = set(), set()
+        for key, item in manual.items():
+            counts[key] = {'brands': {item['brand']}, 'categories': {item['category']}}
+            extra_brands.add(item['brand'])
+            extra_categories.add(item['category'])
+            matching.discard(key)
+            if ((not brand.strip() or brand.strip().casefold() == item['brand'].casefold())
+                    and (not category.strip() or category.strip() == item['category'])):
+                matching.add(key)
+        filters = {'brands': _brand_options(set(filters['brands']) | extra_brands),
+                   'categories': sorted(set(filters['categories']) | extra_categories, key=str.casefold)}
     template = case(aliases, value=proof.template_id, else_=proof.template_id) if aliases else proof.template_id
     grouped = select(template.label('template_id'), func.count().label('contexts'), func.max(proof.verified_at).label('verified_at'),
         *(func.max(case((marketplace == value, 1), else_=0)).label(value) for value in REVIEW_MARKETS)
@@ -102,10 +125,14 @@ def saved_review_templates(db, market='', search='', offset=0, limit=20, *, bran
     ).where(marketplace.in_(REVIEW_MARKETS)).group_by(template).subquery()
     text = (case({key: edit['text'] for key, edit in edits.items()},
                  value=VerifiedReplyText.id, else_=VerifiedReplyText.text) if edits else VerifiedReplyText.text)
+    manual_id = VerifiedReplyText.id.in_(manual)
+    sort_time = (case({key: item['created_at'] for key, item in manual.items()},
+                      value=VerifiedReplyText.id, else_=grouped.c.verified_at) if manual else grouped.c.verified_at)
     query = select(VerifiedReplyText.id, text.label('text'), grouped.c.contexts, grouped.c.verified_at,
-        *(grouped.c[value] for value in REVIEW_MARKETS)).join(grouped, grouped.c.template_id == VerifiedReplyText.id)
+        *(grouped.c[value] for value in REVIEW_MARKETS)).outerjoin(grouped, grouped.c.template_id == VerifiedReplyText.id
+        ).where(or_(grouped.c.template_id.is_not(None), manual_id))
     if market:
-        query = query.where(grouped.c[market] == 1)
+        query = query.where(or_(grouped.c[market] == 1, manual_id))
     if brand.strip() or category.strip():
         query = query.where(VerifiedReplyText.id.in_(matching))
     if search.strip():
@@ -114,11 +141,12 @@ def saved_review_templates(db, market='', search='', offset=0, limit=20, *, bran
         else:
             query = query.where(func.lower(text).contains(search.strip().lower(), autoescape=True))
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    rows = db.execute(query.order_by(grouped.c.verified_at.desc(), VerifiedReplyText.id).offset(offset).limit(limit)).mappings().all()
+    rows = db.execute(query.order_by(sort_time.desc(), VerifiedReplyText.id).offset(offset).limit(limit)).mappings().all()
     return {'total': total, 'filters': filters, 'items': [
-        {'id': row['id'], 'text': mask_vin(row['text']), 'contexts': row['contexts'],
-         'marketplaces': [value for value in REVIEW_MARKETS if row[value]],
-         'verified_at': _iso(row['verified_at']), 'revision': edits.get(row['id'], {}).get('revision', 0),
+        {'id': row['id'], 'text': mask_vin(row['text']), 'contexts': row['contexts'] or 0,
+         'marketplaces': [value for value in REVIEW_MARKETS if row[value] or row['id'] in manual],
+         'verified_at': _iso(row['verified_at']) if row['verified_at'] is not None else None,
+         'revision': edits.get(row['id'], {}).get('revision', 0), 'manual': row['id'] in manual,
          **{key: sorted(counts.get(row['id'], {}).get(key, ())) for key in ('categories', 'products', 'ratings')},
          'brands': _brand_options(counts.get(row['id'], {}).get('brands', ()))}
         for row in rows
@@ -140,23 +168,52 @@ class TemplateConflict(ValueError):
     pass
 
 
-def edit_template(db, template_id, answer, revision):
+def _validated_template_text(answer):
     from .reply_policy import has_reply_body
     from .safety import mask_vin, validate_reply
 
     answer = validate_reply(answer.strip())
     if answer != mask_vin(answer) or not has_reply_body(answer):
         raise ValueError('Введите текст ответа без VIN, FRAME и персональных данных.')
+    return answer
+
+
+def _lock_edits(db):
     db.execute(insert()(Setting).values(key=EDITS_KEY, value={}).on_conflict_do_nothing(index_elements=['key']))
-    row = db.scalar(select(Setting).where(Setting.key == EDITS_KEY).with_for_update()
-                    .execution_options(populate_existing=True))
+    return db.scalar(select(Setting).where(Setting.key == EDITS_KEY).with_for_update()
+                     .execution_options(populate_existing=True))
+
+
+def create_template(db, answer, brand, category):
+    answer = _validated_template_text(answer)
+    options = template_creation_options(db)
+    brands = {item.casefold(): item for item in options['brands']}
+    brand = brands.get(brand.strip().casefold())
+    category = category.strip()
+    if not brand or category not in options['categories']:
+        raise ValueError('Выберите бренд из каталога и категорию отзыва.')
+    row = _lock_edits(db)
+    edits = row.value or {}
+    template_id = text_id(answer)
+    if template_id in _template_aliases(edits) or not db.scalar(
+            insert()(VerifiedReplyText).values(id=template_id, text=answer)
+            .on_conflict_do_nothing(index_elements=['id']).returning(VerifiedReplyText.id)):
+        raise TemplateConflict('Шаблон с таким текстом уже есть в библиотеке.')
+    row.value = {**edits, template_id: {'text': answer, 'revision': 0, 'manual': True,
+                                       'brand': brand, 'category': category, 'created_at': time.time()}}
+    return {'id': template_id, 'text': answer}
+
+
+def edit_template(db, template_id, answer, revision):
+    answer = _validated_template_text(answer)
+    row = _lock_edits(db)
     edits = row.value or {}
     proof = VerifiedReplyContext
     exists = db.scalar(select(proof.id).outerjoin(Review, Review.id == proof.source_review_id)
                        .where(proof.template_id == template_id, _review_market(proof).in_(REVIEW_MARKETS)).limit(1))
     original = db.get(VerifiedReplyText, template_id)
     aliases = _template_aliases(edits)
-    if not exists or not original or template_id in aliases:
+    if (not exists and not edits.get(template_id, {}).get('manual')) or not original or template_id in aliases:
         raise LookupError('Шаблон не найден. Обновите список.')
     current = edits.get(template_id, {'revision': 0, 'text': original.text})
     if current['revision'] != revision:
@@ -168,7 +225,8 @@ def edit_template(db, template_id, answer, revision):
             target in aliases or db.get(VerifiedReplyText, target)):
         raise TemplateConflict('Шаблон с таким текстом уже есть в библиотеке.')
     previous_ids = set(current.get('aliases', ())) | {text_id(current['text'])}
-    updated = {'text': answer, 'revision': revision + 1, 'aliases': sorted(previous_ids - {template_id, target})}
+    updated = {**current, 'text': answer, 'revision': revision + 1,
+               'aliases': sorted(previous_ids - {template_id, target})}
     row.value = {**edits, template_id: updated}
     return updated
 

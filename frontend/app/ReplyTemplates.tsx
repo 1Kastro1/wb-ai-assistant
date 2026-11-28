@@ -6,14 +6,61 @@ import {api} from './client';
 const markets: Record<string,string> = {wb:'Wildberries',ozon:'Ozon',yandex:'Яндекс Маркет'};
 const pageSize = 20;
 type Template = {
- id:string; text:string; marketplaces:string[]; verified_at:string;
- revision:number; categories:string[]; products:string[]; ratings:number[]; brands?:string[];
+ id:string; text:string; marketplaces:string[]; verified_at:string|null;
+ revision:number; categories:string[]; products:string[]; ratings:number[]; brands?:string[]; manual?:boolean;
 };
-type TemplatePage = {items:Template[];total:number;filters?:{brands:string[];categories:string[]}};
+type Options = {brands:string[];categories:string[]};
+type TemplatePage = {items:Template[];total:number;filters?:Options};
+
+function NewTemplate({onCancel,onSaved}:{onCancel:()=>void;onSaved:()=>void}){
+ const [options,setOptions]=useState<Options|null>(null);
+ const [brand,setBrand]=useState(''),[category,setCategory]=useState(''),[text,setText]=useState('');
+ const [saving,setSaving]=useState(false),[error,setError]=useState('');
+ const [attempt,setAttempt]=useState(0);
+ useEffect(()=>{
+  let active=true;
+  api('/review-library/template-options')
+   .then(value=>{if(active)setOptions(value)})
+   .catch(()=>{if(active)setError('Не удалось загрузить бренды и категории.')});
+  return()=>{active=false};
+ },[attempt]);
+ async function save(){
+  if(!brand||!category||!text.trim()||saving)return;
+  setSaving(true);setError('');
+  try{await api('/review-library/templates','POST',{brand,category,text});onSaved()}
+  catch(error){setError(error instanceof Error?error.message:'Не удалось добавить шаблон.')}
+  finally{setSaving(false)}
+ }
+ return <form className="template-card template-create" onSubmit={event=>{event.preventDefault();void save()}}>
+  <h3>Новый шаблон</h3>
+  <div className="template-create-fields">
+   <label>Бренд нового шаблона<select autoFocus required disabled={saving||!options} value={brand} onChange={event=>setBrand(event.target.value)}>
+    <option value="">{options?'Выберите бренд':'Загружаем бренды…'}</option>
+    {options?.brands.map(value=><option key={value}>{value}</option>)}
+   </select></label>
+   <label>Категория нового шаблона<select required disabled={saving||!options} value={category} onChange={event=>setCategory(event.target.value)}>
+    <option value="">Выберите категорию отзыва</option>
+    {options?.categories.map(value=><option key={value}>{value}</option>)}
+   </select></label>
+  </div>
+  {options?.brands.length===0&&<p className="muted">В каталоге товаров пока нет брендов.</p>}
+  <label>Текст нового шаблона<textarea rows={5} maxLength={5000} required value={text} disabled={saving} onChange={event=>setText(event.target.value)}/></label>
+  <p className="muted">Подходит для выбранных бренда и категории. Перед выгрузкой ответ пройдёт проверку по правилам.</p>
+  {error&&<p role="alert" className="save-error">{error} {!options&&<button type="button" onClick={()=>{setError('');setAttempt(value=>value+1)}}>Повторить</button>}</p>}
+  <div className="template-footer">
+   <small className="muted">{text.length.toLocaleString('ru-RU')} / 5 000</small>
+   <div className="button-row">
+    <button type="button" disabled={saving} onClick={onCancel}>Отмена</button>
+    <button className="primary" type="submit" disabled={saving||!brand||!category||!text.trim()}>{saving?'Добавляем…':'Добавить шаблон'}</button>
+   </div>
+  </div>
+ </form>
+}
 
 export default function ReplyTemplates(){
  const [input,setInput]=useState(''),[search,setSearch]=useState(''),[market,setMarket]=useState('');
  const [brand,setBrand]=useState(''),[category,setCategory]=useState('');
+ const [creating,setCreating]=useState(false);
  const [offset,setOffset]=useState(0),[result,setResult]=useState<TemplatePage|null>(null);
  const [error,setError]=useState(''),[loading,setLoading]=useState(true),[feedback,setFeedback]=useState('');
  const [reload,setReload]=useState(0);
@@ -30,6 +77,7 @@ export default function ReplyTemplates(){
  },[market,brand,category,search,offset,reload]);
  const total=result?.total??0;
  const filtered=Boolean(input||search||market||brand||category);
+ function clearFilters(){setInput('');setSearch('');setMarket('');setBrand('');setCategory('');setOffset(0)}
  async function saveTemplate(){
   if(!editor||!editor.text.trim()||saving)return;
   setSaving(true);setSaveError('');setFeedback('');
@@ -47,8 +95,12 @@ export default function ReplyTemplates(){
     <h2>Шаблоны ответов</h2>
     <p>Готовые формулировки и ситуации, для которых они были сохранены.</p>
    </div>
-   {!loading&&!error&&<span className="template-count">{total.toLocaleString('ru-RU')} в списке</span>}
+   <div className="template-intro-actions">
+    {!loading&&!error&&<span className="template-count">{total.toLocaleString('ru-RU')} в списке</span>}
+    <button className="primary" type="button" disabled={creating||editor!==null} onClick={()=>{setFeedback('');setCreating(true)}}>Новый шаблон</button>
+   </div>
   </div>
+  {creating&&<NewTemplate onCancel={()=>setCreating(false)} onSaved={()=>{setCreating(false);clearFilters();setFeedback('Шаблон добавлен.');setReload(value=>value+1)}}/>}
   <form className="card library-template-filters" onSubmit={event=>{event.preventDefault();setFeedback('');setSearch(input.trim());setOffset(0);setReload(value=>value+1)}}>
    <label>Текст ответа<input type="search" disabled={editor!==null} value={input} maxLength={120} onChange={event=>setInput(event.target.value)} placeholder="Найти фразу в шаблоне"/></label>
    <label>Маркетплейс<select disabled={editor!==null} value={market} onChange={event=>{setFeedback('');setMarket(event.target.value);setOffset(0)}}><option value="">Все площадки</option>{Object.entries(markets).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select></label>
@@ -56,7 +108,7 @@ export default function ReplyTemplates(){
    <label>Категория отзыва<select disabled={editor!==null} value={category} onChange={event=>{setFeedback('');setCategory(event.target.value);setOffset(0)}}><option value="">Все категории</option>{result?.filters?.categories.map(value=><option key={value}>{value}</option>)}</select></label>
    <div className="template-filter-actions">
     <button type="submit" disabled={editor!==null}>Найти</button>
-    {filtered&&<button type="button" disabled={editor!==null} onClick={()=>{setInput('');setSearch('');setMarket('');setBrand('');setCategory('');setOffset(0);setFeedback('')}}>Сбросить</button>}
+    {filtered&&<button type="button" disabled={editor!==null} onClick={()=>{clearFilters();setFeedback('')}}>Сбросить</button>}
    </div>
   </form>
   <p role="status" className="template-status">{loading?'Загружаем сохранённые шаблоны…':feedback}</p>
@@ -90,10 +142,10 @@ export default function ReplyTemplates(){
    </form>:<>
     <p className="library-answer template-text">{item.text}</p>
     <div className="template-footer">
-     <small className="muted">{item.revision>0?'Изменён владельцем · проверяется при использовании':`Последняя проверка ${new Date(item.verified_at).toLocaleDateString('ru-RU')}`}</small>
+     <small className="muted">{item.manual?'Добавлен вручную · проверяется при использовании':item.revision>0?'Изменён владельцем · проверяется при использовании':item.verified_at?`Последняя проверка ${new Date(item.verified_at).toLocaleDateString('ru-RU')}`:''}</small>
      <div className="button-row">
       <button type="button" onClick={async()=>{try{await navigator.clipboard.writeText(item.text);setFeedback('Шаблон скопирован.')}catch{setFeedback('Не удалось скопировать. Текст можно выделить вручную.')}}}>Копировать</button>
-      <button className="template-edit-button" type="button" disabled={editor!==null}
+      <button className="template-edit-button" type="button" disabled={editor!==null||creating}
        onClick={()=>{setEditor({id:item.id,text:item.text,revision:item.revision});setSaveError('')}}>Редактировать</button>
      </div>
     </div>

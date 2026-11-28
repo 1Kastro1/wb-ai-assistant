@@ -3315,6 +3315,31 @@ class ReviewTemplateEdit(Payload):
     revision: int = Field(ge=0)
 
 
+class ReviewTemplateCreate(Payload):
+    text: str = Field(min_length=1, max_length=5000)
+    brand: str = Field(min_length=1, max_length=160)
+    category: str = Field(min_length=1, max_length=160)
+
+
+@app.get('/review-library/template-options')
+def review_library_template_options(auth: OWNER, db: DB):
+    from .verified_reply_library import template_creation_options
+    return template_creation_options(db)
+
+
+@app.post('/review-library/templates', status_code=201)
+def review_library_template_create(body: ReviewTemplateCreate, auth: OWNER, db: DB):
+    from .verified_reply_library import create_template, TemplateConflict
+    try:
+        result = create_template(db, body.text, body.brand, body.category)
+    except TemplateConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    db.commit()
+    return result
+
+
 @app.patch('/review-library/templates/{template_id}')
 def review_library_template_edit(template_id: str, body: ReviewTemplateEdit, auth: OWNER, db: DB):
     from .verified_reply_library import edit_template, TemplateConflict

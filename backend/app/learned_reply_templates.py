@@ -103,10 +103,23 @@ def load_template(db, review, product, rules, facts, assess, *, previous='', exa
 def edited_candidate(db, review, product, rules, facts, assess, *, previous=''):
     from .db import VerifiedReplyContext, setting
     from .owner_reply_policy import local_issues
-    from .verified_reply_library import EDITS_KEY
+    from .verified_reply_library import EDITS_KEY, _review_categories
 
     edits = setting(db, EDITS_KEY, {})
     if not edits:
+        return None
+    if (review.marketplace in ('wb', 'ozon', 'yandex') and product
+            and not review.manual and not review.safety_critical and review.risk == 'NORMAL'):
+        brand = (product.brand or '').strip().casefold()
+        categories = _review_categories(review)
+        for item in sorted((item for item in edits.values() if item.get('manual')),
+                           key=lambda item: -item['created_at']):
+            if item['brand'].casefold() == brand and item['category'] in categories:
+                reply = item['text']
+                if not same_answer(reply, previous) and not local_issues(reply, rules, review) and assess(reply)['passed']:
+                    return reply
+    edited_ids = [key for key, item in edits.items() if not item.get('manual')]
+    if not edited_ids:
         return None
     for kind in ('exact', 'positive', 'equivalent'):
         key = context_key(review, product, rules, facts,
@@ -115,7 +128,7 @@ def edited_candidate(db, review, product, rules, facts, assess, *, previous=''):
             continue
         query = (select(VerifiedReplyContext.template_id)
                  .where(VerifiedReplyContext.context_key == key,
-                        VerifiedReplyContext.kind == kind, VerifiedReplyContext.template_id.in_(edits))
+                        VerifiedReplyContext.kind == kind, VerifiedReplyContext.template_id.in_(edited_ids))
                  .order_by(VerifiedReplyContext.verified_at.desc(), VerifiedReplyContext.id))
         for template_id in db.scalars(query):
             reply = edits[template_id]['text']
